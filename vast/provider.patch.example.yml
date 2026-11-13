@@ -1,0 +1,33 @@
+- id: llm-pi-ai
+  config:
+    providers:
+      strata-vast:
+        displayName: Strata on this Vast instance
+        apiKeyEnv: STRATA_GATEWAY_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:8088/v1
+        reasoning: medium
+        compat:
+          supportsDeveloperRole: false
+          maxTokensField: max_tokens
+        retryPolicy:
+          mode: normal
+          maxRetries: 1
+        models:
+          - id: strata
+            name: Qwen Flash Next 128K
+            contextWindow: 131072
+            maxTokens: 16384
+            input: [text]
+            reasoningEfforts:
+              off: none
+              low: low
+              medium: medium
+              high: high
+- id: agent-default-model
+  config:
+    provider: strata-vast
+    model: strata
+- insert:
+    - id: cloud-idle-lifecycle
+      name: file:///data/harness/app/vast/lifecycle.mjs

@@ -1,0 +1,8 @@
+{
+  "name":"harness-wake",
+  "main":"worker.mjs",
+  "compatibility_date":"2026-11-13",
+  "workers_dev":true,
+  "observability":{"enabled":false},
+  "vars":{"INSTANCE_ID":"12345678","HARNESS_URL":"https://harness.YOUR-TAILNET.ts.net/phone/"}
+}

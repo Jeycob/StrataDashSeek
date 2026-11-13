@@ -1,0 +1,15 @@
+node_modules/
+.wrangler/
+.dev.vars*
+.env
+secrets/
+root-secrets/
+state/
+*.log
+*token*
+*subscriptions*
+*vapid*
+*.key
+*.dpapi
+deployment-private.json
+cloudflare/wrangler.jsonc
