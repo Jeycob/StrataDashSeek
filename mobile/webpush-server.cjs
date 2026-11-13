@@ -70,10 +70,17 @@ function createPushServer(cfg,adapter=webpush){
     return json(res,404,{error:'Not found'});
    }
    if(!u.pathname.startsWith('/phone/'))return json(res,404,{error:'Not found'});
-   if(u.pathname==='/phone/health')return json(res,200,{ready:true,service:'harness-webpush'});
+   if(u.pathname==='/phone/health'){try{const host=await harnessRequest('/');const ready=host.status===200||host.status===401;return json(res,ready?200:503,{ready,service:'harness-webpush'});}catch{return json(res,503,{ready:false,service:'harness-webpush'});}}
+   if(u.pathname==='/phone/config.json'&&req.method==='GET')return json(res,200,{wakeUrl:cfg.wakeUrl});
+   if(u.pathname==='/phone/entry'&&req.method==='GET'){
+    const token=u.searchParams.get('token');if(!token||token.length>256)return json(res,401,{error:'Invalid entry'});
+    const response=await harnessRequest('/?token='+encodeURIComponent(token));const cookies=response.headers['set-cookie']||[];
+    if(response.status!==303||!cookies.length)return json(res,401,{error:'Invalid entry'});
+    res.writeHead(303,{'Location':'/phone/','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Set-Cookie':cookies.map(x=>/;\s*Secure(?:;|$)/i.test(x)?x:x+'; Secure')});return res.end();
+   }
    if(req.method==='GET'){
     if(u.pathname==='/phone/manifest.webmanifest')return json(res,200,{id:'/phone/',name:'Strata Harness',short_name:'Harness',start_url:'/phone/',scope:'/phone/',display:'standalone',background_color:'#f6f7fb',theme_color:'#17243b',icons:[{src:'/phone/icon.png',sizes:'256x256',type:'image/png'}]});
-    const staticFiles={'/phone/':['phone.html','text/html; charset=utf-8'],'/phone/index.html':['phone.html','text/html; charset=utf-8'],'/phone/app.js':['phone.js','text/javascript; charset=utf-8'],'/phone/sw.js':['phone-sw.js','text/javascript; charset=utf-8'],'/phone/icon.png':['phone-icon.png','image/png']};
+    const staticFiles={'/phone/':['phone.html','text/html; charset=utf-8'],'/phone/index.html':['phone.html','text/html; charset=utf-8'],'/phone/monitor.js':['monitor.js','text/javascript; charset=utf-8'],'/phone/boot.js':['phone-boot.js','text/javascript; charset=utf-8'],'/phone/app.js':['phone.js','text/javascript; charset=utf-8'],'/phone/sw.js':['phone-sw.js','text/javascript; charset=utf-8'],'/phone/icon.png':['phone-icon.png','image/png']};
     if(staticFiles[u.pathname]){const [file,type]=staticFiles[u.pathname];res.writeHead(200,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',...(file==='phone-sw.js'?{'Service-Worker-Allowed':'/phone/'}:{})});return fs.createReadStream(path.join(__dirname,file)).pipe(res);}
    }
    if(req.method==='POST'&&req.headers.origin!==origin)return json(res,403,{error:'Origin refused'});
@@ -90,7 +97,9 @@ function createPushServer(cfg,adapter=webpush){
      return json(res,200,{ok:true},{'Set-Cookie':cookies.map(x=>/;\s*Secure(?:;|$)/i.test(x)?x:x+'; Secure')});
     }finally{pairBusy=false;}
    }
-   if(!await authorized(req))return json(res,401,{error:'Spáruj tento web s počítačem.'});
+   if(!await authorized(req))return json(res,401,{error:'Tento prohlížeč ještě není propojený s Harness serverem.'});
+   if(u.pathname==='/phone/api/monitor'&&req.method==='GET')return json(res,200,readJson(cfg.telemetryFile||'/data/harness/state/telemetry.json',{ready:false}));
+   if(u.pathname==='/phone/api/wake-config'&&req.method==='GET')return json(res,200,{wakeUrl:cfg.wakeUrl,key:cfg.wakeKeyFile?fs.readFileSync(cfg.wakeKeyFile,'utf8').trim():null});
    if(u.pathname==='/phone/api/state'&&req.method==='GET')return json(res,200,{authorized:true,registered:!!store.installations[u.searchParams.get('installationId')]&&!store.installations[u.searchParams.get('installationId')].retiredAt,vapidPublicKey:keys.publicKey,watcherOnline:Date.now()-watcherAt<30000,...stats});
    const data=await body(req);const id=String(data.installationId||'');if(!/^[a-zA-Z0-9_-]{16,80}$/.test(id))return json(res,400,{error:'Invalid installation'});
    if(u.pathname==='/phone/api/subscribe'&&req.method==='POST'){

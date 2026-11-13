@@ -7,7 +7,8 @@ const ios=/iPhone|iPad|iPod/.test(navigator.userAgent);
 let registration=null,state=null;
 const supported='serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window;
 function note(text){byId('message').textContent=text;}
-async function api(route,data){const response=await fetch('/phone/api/'+route,{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const result=await response.json();if(!response.ok)throw Object.assign(Error(result.error||'Požadavek selhal.'),{status:response.status});return result;}
+async function api(route,data){const response=await fetch('/phone/api/'+route,{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(6000),headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const result=await response.json();if(!response.ok)throw Object.assign(Error(result.error||'Požadavek selhal.'),{status:response.status});return result;}
+let refreshing=false;
 function keyBytes(text){return Uint8Array.from(atob(text.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));}
 let harnessMenuObserver=null;
 function installNotificationMenu(){
@@ -28,6 +29,7 @@ function installNotificationMenu(){
   label.textContent='Oznámení na iPhonu';item.appendChild(label);
   item.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();byId('settings').hidden=false;byId('close-settings').focus();};
   const wrapper=template.parentElement.cloneNode(false);wrapper.removeAttribute('id');wrapper.appendChild(item);template.parentElement.after(wrapper);
+  const monitorWrapper=wrapper.cloneNode(true),monitorItem=monitorWrapper.querySelector('button');monitorItem.removeAttribute('data-harness-push-menu');monitorItem.dataset.harnessMonitorMenu='true';monitorItem.querySelector('span').textContent='Monitor serveru';monitorItem.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessMonitor();};wrapper.after(monitorWrapper);
  };
  harnessMenuObserver=new MutationObserver(addMenuItem);
  harnessMenuObserver.observe(doc.body,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-expanded']});
@@ -35,6 +37,7 @@ function installNotificationMenu(){
 }
 byId('harness').addEventListener('load',installNotificationMenu);
 async function refresh(){
+ if(!window.harnessBackendReady||refreshing||document.hidden)return;refreshing=true;
  try{
   state=await api('state?installationId='+encodeURIComponent(installationId));byId('pair').hidden=true;byId('harness').hidden=false;if(!byId('harness').getAttribute('src'))byId('harness').src='/';
   byId('status').textContent=(state.registered?'Oznámení zapnuta':'Oznámení vypnuta')+(state.watcherOnline?' · hlídání úloh běží':' · hlídání úloh se připojuje');
@@ -42,7 +45,7 @@ async function refresh(){
   byId('install-help').hidden=state.registered;
   document.body.classList.toggle('push-enabled',state.registered);
   byId('enable').disabled=!registration||!supported||(ios&&!standalone);byId('test').disabled=!state.registered;byId('disable').disabled=!state.registered;
- }catch(e){if(e.status===401){state=null;byId('pair').hidden=false;byId('harness').hidden=true;byId('setup-header').hidden=false;document.body.classList.remove('push-enabled');byId('settings').hidden=true;byId('status').textContent='Tento web je potřeba propojit s PC';}else byId('status').textContent='Připojení se obnovuje…';}
+ }catch(e){if(e.status===401){state=null;byId('pair').hidden=false;byId('harness').hidden=true;byId('setup-header').hidden=false;document.body.classList.remove('push-enabled');byId('settings').hidden=true;byId('status').textContent='Tento prohlížeč ještě není propojený s Harness serverem';}else byId('status').textContent='Připojení se obnovuje…';}finally{refreshing=false;}
 }
 byId('settings-button').onclick=()=>{byId('settings').hidden=!byId('settings').hidden;};
 byId('close-settings').onclick=()=>{byId('settings').hidden=true;};
@@ -57,6 +60,6 @@ byId('test').onclick=async()=>{try{const result=await api('test',{installationId
 byId('disable').onclick=async()=>{try{await api('disable',{installationId});await refresh();note('Oznámení vypnuta.');}catch(e){note(e.message);}};
 if(!supported)note('Tento prohlížeč nepodporuje Web Push. Na iPhonu otevři ikonu z plochy.');
 else if(ios&&!standalone)note('Povolení oznámení bude dostupné po otevření ikony z plochy.');
-if(supported)navigator.serviceWorker.register('/phone/sw.js',{scope:'/phone/'}).then(r=>{registration=r;return refresh();}).catch(()=>note('Registrace oznámení selhala. Obnov stránku.'));
+if(supported)navigator.serviceWorker.register('/phone/sw.js',{scope:'/phone/'}).then(r=>{registration=r;}).catch(()=>note('Registrace oznámení selhala. Obnov stránku.'));
 if(new URL(location.href).searchParams.get('settings')==='1')byId('settings').hidden=false;
-refresh();setInterval(refresh,15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+harnessPrepare().then(refresh);setInterval(refresh,15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)harnessPrepare().then(refresh);});

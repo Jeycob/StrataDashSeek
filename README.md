@@ -58,7 +58,19 @@ wrangler secret put WAKE_ACCESS_KEY --config cloudflare/wrangler.jsonc
 
 Use a scoped Vast key and at least 32 random bytes encoded as hex for `WAKE_ACCESS_KEY`. Keep both out of Git. The optional setup link is `https://YOUR-WORKER/#setup=YOUR_WAKE_KEY`; its fragment is cleared immediately and the key is exchanged in a same-origin POST. Treat any setup QR/link as a private credential. Normal use stores a signed 30-day cookie. Rotating `WAKE_ACCESS_KEY` invalidates existing wake cookies.
 
-The page polls Vast only while visible; checking status never starts the GPU. Waking is idempotent for an already-started instance. Opening the private Harness remains a user navigation so the page does not require browser private-network permissions.
+The page polls Vast only while visible; checking status never starts the GPU. Waking is idempotent for an already-started instance. After waking, the page probes the private server and opens it automatically. Tailscale must be connected.
+
+## Automatic clients and monitoring
+
+`desktop/open-harness.cjs` reads a private JSON configuration with `wakeUrl`, `wakeKeyFile`, `sshKeyFile`, `knownHostsFile` and `timeoutSeconds`. It wakes the fixed instance, waits for readiness and obtains the latest official native login URL over SSH. Keep this configuration and its keys outside the repository. The desktop wrapper should capture the returned URL and open it without logging it.
+
+For an already authenticated Home Screen app, configure `wakeUrl` and `wakeKeyFile` in the private push configuration. The key file must be owned by `harness`, mode 0600. After explicit owner consent, the authenticated client receives this limited wake key and stores it locally. The Worker permits bearer requests only from the configured private Harness origin. It never gives the client the Vast API token. First-use pairing still applies to new browsers or cleared credentials.
+
+The Service Worker caches only the static phone shell, including its startup script. On opening or returning to the app, it checks readiness and can wake an offline server before loading Harness. API data, authenticated history and login URLs are never cached. Use a same-origin `/phone/` notification target so notification clicks enter this offline-capable shell. Validate an actual cold launch after updating the installed app; do not interrupt active jobs to test it.
+
+**More → Monitor serveru** displays GPU, RAM, CPU, disk, Strata rates and recent request metrics. The root collector uses monotonic elapsed time to integrate sampled GPU watts into Wh. The UI also shows kWh (1000 Wh = 1 kWh), labels the measurement as a GPU-only estimate and displays its start time. It excludes CPU and whole-server consumption and resets when the collector restarts. It does not represent Vast rental charges. Reading metrics does not extend the idle lease.
+
+For Windows history migrations, `vast/session-migration.py` maps path separators and case correctly and encodes the header in its own Zstd frame. Verify imported sessions with the native persistence reader, not just JSON decoding. A log containing event types unsupported by the target Harness must remain backed up and requires a compatible runtime/plugin; do not silently discard unknown events.
 
 ## Sleep rules and maintenance
 

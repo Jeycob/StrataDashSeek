@@ -24,6 +24,7 @@ function portOpen(port){return new Promise(resolve=>{const q=http.get('http://12
  launch('push',R+'/node/bin/node',[R+'/app/mobile/webpush-server.cjs',R+'/push-config.json']);
  launch('proxy',R+'/node/bin/node',[R+'/app/mobile/https-proxy.cjs',R+'/config.json']);
  launch('push-watcher',R+'/venv/bin/python',[R+'/app/mobile/watch-harness-notifications.py','--session-root',R+'/home/.dsh/sessions','--key-file',R+'/secrets/webpush-internal.key']);
+ launch('telemetry',R+'/node/bin/node',[R+'/app/vast/telemetry.cjs'],true);
  launch('idle-guard',R+'/venv/bin/python',[R+'/app/vast/idle-guard.py'],true);
  const serving=setInterval(()=>{const p=cp.spawn('tailscale',['--socket='+R+'/tailscaled.sock','serve','--bg','http://127.0.0.1:3081'],{stdio:'ignore'});p.on('exit',code=>{if(code===0)clearInterval(serving)});},3000);serving.unref();
 })();

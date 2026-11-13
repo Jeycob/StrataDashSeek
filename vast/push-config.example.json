@@ -1,1 +1,11 @@
-{"publicHost":"harness.YOUR-TAILNET.ts.net","port":3091,"harnessPort":3090,"secretDir":"/data/harness/secrets","desktopLog":"/data/harness/logs/harness.log","notificationUrl":"https://harness-wake.YOUR-SUBDOMAIN.workers.dev/"}
+{
+  "publicHost": "harness.YOUR-TAILNET.ts.net",
+  "port": 3091,
+  "harnessPort": 3090,
+  "secretDir": "/data/harness/secrets",
+  "desktopLog": "/data/harness/logs/harness.log",
+  "notificationUrl": "/phone/",
+  "wakeUrl": "https://harness-wake.YOUR-SUBDOMAIN.workers.dev/",
+  "wakeKeyFile": "/data/harness/secrets/phone-wake.key",
+  "telemetryFile": "/data/harness/state/telemetry.json"
+}

@@ -1,6 +1,14 @@
 'use strict';
-self.addEventListener('install',()=>self.skipWaiting());
-self.addEventListener('activate',event=>event.waitUntil(self.clients.claim()));
+const SHELL_CACHE='harness-static-shell-v4';
+const SHELL_FILES=['/phone/','/phone/app.js','/phone/boot.js','/phone/monitor.js','/phone/config.json','/phone/icon.png'];
+self.addEventListener('install',event=>event.waitUntil((async()=>{const cache=await caches.open(SHELL_CACHE);await cache.addAll(SHELL_FILES);await self.skipWaiting();})()));
+self.addEventListener('activate',event=>event.waitUntil((async()=>{for(const key of await caches.keys())if(key.startsWith('harness-static-shell-')&&key!==SHELL_CACHE)await caches.delete(key);await self.clients.claim();})()));
+self.addEventListener('fetch',event=>{
+ const url=new URL(event.request.url);if(event.request.method!=='GET'||url.origin!==self.location.origin)return;
+ const pathname=url.pathname==='/phone/index.html'?'/phone/':url.pathname;
+ if(!SHELL_FILES.includes(pathname))return; // Never cache APIs, credentials, iframe content or chat history.
+ event.respondWith((async()=>{const cache=await caches.open(SHELL_CACHE),cached=await cache.match(pathname);if(cached){event.waitUntil(fetch(event.request).then(response=>{if(response.ok)return cache.put(pathname,response);}).catch(()=>{}));return cached;}return fetch(event.request);})());
+});
 function target(value){try{const u=new URL(value||'/phone/',self.location.origin);if(u.origin===self.location.origin||(u.protocol==='https:'&&(u.hostname.endsWith('.ts.net')||u.hostname.endsWith('.workers.dev'))))return u.href;}catch{}return self.location.origin+'/phone/';}
 self.addEventListener('push',event=>{
  let data={title:'Harness',body:'Úloha potřebuje pozornost.',url:'/phone/'};
