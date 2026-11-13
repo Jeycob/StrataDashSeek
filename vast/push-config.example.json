@@ -7,5 +7,6 @@
   "notificationUrl": "/phone/",
   "wakeUrl": "https://harness-wake.YOUR-SUBDOMAIN.workers.dev/",
   "wakeKeyFile": "/data/harness/secrets/phone-wake.key",
-  "telemetryFile": "/data/harness/state/telemetry.json"
+  "telemetryFile": "/data/harness/state/telemetry.json",
+  "tailscaleAutoLoginUsers": []
 }

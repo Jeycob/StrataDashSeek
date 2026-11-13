@@ -84,6 +84,17 @@ function createPushServer(cfg,adapter=webpush){
     if(staticFiles[u.pathname]){const [file,type]=staticFiles[u.pathname];res.writeHead(200,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',...(file==='phone-sw.js'?{'Service-Worker-Allowed':'/phone/'}:{})});return fs.createReadStream(path.join(__dirname,file)).pipe(res);}
    }
    if(req.method==='POST'&&req.headers.origin!==origin)return json(res,403,{error:'Origin refused'});
+   if(u.pathname==='/phone/api/tailscale-login'&&req.method==='POST'){
+    // This listener is loopback-only, reached through the private Serve bridge.
+    // Serve strips supplied identity headers and inserts the authenticated user's login.
+    const login=req.headers['tailscale-user-login'];
+    if(!Array.isArray(cfg.tailscaleAutoLoginUsers)||typeof login!=='string'||!cfg.tailscaleAutoLoginUsers.includes(login))return json(res,403,{error:'Tailscale identity not allowed'});
+    const log=fs.readFileSync(cfg.desktopLog,'utf8');const match=[...log.matchAll(/https:\/\/[^\s]+\?token=[^\s]+/g)].at(-1);
+    if(!match)throw Error('Entry unavailable');const entry=new URL(match[0]);if(entry.host!==cfg.publicHost)throw Error('Authority mismatch');
+    const response=await harnessRequest('/?token='+encodeURIComponent(entry.searchParams.get('token')));const cookies=response.headers['set-cookie']||[];
+    if(response.status!==303||!cookies.length)throw Error('Entry rejected');
+    return json(res,200,{ok:true},{'Set-Cookie':cookies.map(x=>/;\s*Secure(?:;|$)/i.test(x)?x:x+'; Secure')});
+   }
    if(u.pathname==='/phone/api/pair'&&req.method==='POST'){
     const data=await body(req);if(Date.now()-failWindow>60000){failures=0;failWindow=Date.now();}
     if(failures>=5)return json(res,429,{error:'Příliš mnoho pokusů. Počkej minutu.'});
