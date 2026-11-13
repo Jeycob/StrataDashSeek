@@ -78,6 +78,7 @@ Push subscriptions belong to a web origin. Copying keys keeps old installations 
 
 ```sh
 node --test cloudflare/worker.test.mjs vast/lifecycle.test.mjs
+node --test mobile/notifications.test.cjs
 /data/harness/venv/bin/python vast/test-idle-guard.py
 /data/harness/venv/bin/python /data/harness/app/vast/admin.py state
 ```

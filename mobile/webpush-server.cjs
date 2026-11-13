@@ -3,7 +3,9 @@
 // The only public routes are /phone/*. Internal controls remain loopback-only.
 const http=require('http'),fs=require('fs'),path=require('path'),crypto=require('crypto');
 const ROOT=path.resolve(__dirname,'../..');
-const webpush=require('/data/harness/runtime/node_modules/web-push');
+const webpushPath=process.env.HARNESS_WEB_PUSH_MODULE||[path.join(__dirname,'../runtime/node_modules/web-push'),path.join(__dirname,'../../runtime/node_modules/web-push')].find(p=>fs.existsSync(p));
+if(!webpushPath)throw Error('Install the pinned runtime dependencies first.');
+const webpush=require(webpushPath);
 function atomicJson(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const tmp=file+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
 function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'))}catch(e){if(e.code==='ENOENT')return fallback;throw e;}}
 function createPushServer(cfg,adapter=webpush){
