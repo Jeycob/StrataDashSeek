@@ -10,12 +10,12 @@
     "feat/container-workbench"
   ],
   "node": {
-    "startedAt": 1794678752697,
-    "finishedAt": 1794678766440,
+    "startedAt": 1794684401900,
+    "finishedAt": 1794684442985,
     "platform": "win32",
     "node": "v24.21.0",
     "source": {
-      "sha256": "e63c5478508d4f487eb753c193aa23cf4e61d8460d6f94677b4a46b813e638a1",
+      "sha256": "02565b32c67e1bf6f7758607d5ff68562749f3b7e17882c720a951f600ac8e33",
       "files": 192,
       "definition": "Sorted tracked JS/Python/config/UI paths and LF-normalized UTF-8 content; release evidence excluded."
     },
@@ -343,7 +343,7 @@
   "deployment": {
     "status": "partially-deployed",
     "liveReleaseVerified": false,
-    "reason": "Provider capacity recovered. Baseline and pending UI assets verified; container persistence and efficiency activation remain pending.",
+    "reason": "Baseline restored and isolated native efficiency integration passed. Production scheduler and billing await coordinated activation.",
     "wake": {
       "at": 1794678450185,
       "instanceId": 60637500,
@@ -357,10 +357,8 @@
       "available": false
     },
     "pending": [
-      "HomeAI owns current server maintenance; coordinate before any server changes.",
-      "Complete Docker persistence verification with HomeAI.",
-      "Run isolated Linux efficiency fixtures on ports 3197 and 18897 after explicit handoff.",
-      "Activate exactly one scheduler and separate billing collector only after fixture validation and coordinated maintenance.",
+      "HomeAI owns server maintenance; coordinate before any production changes.",
+      "Activate exactly one scheduler and separate billing collector only during coordinated maintenance with no running or queued tasks.",
       "Verify final production configuration before marking the entire release live."
     ],
     "postwake": {
@@ -370,7 +368,9 @@
       "baselineVerified": true,
       "pendingThreeAssetsDeployed": true,
       "efficiencyActivated": false,
-      "physicalApplePushTested": false
-    }
+      "physicalApplePushTested": false,
+      "dockerPersistenceReportedPassedByHomeAI": true
+    },
+    "efficiencyFixture": "efficiency-native.json"
   }
 }

@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "checks": {
+    "semantic-installer-is-idempotent-and-single-scheduler": true,
+    "turn-single-stream-and-expected-overlap": true,
+    "request-single-stream-and-expected-overlap": true,
+    "native-denied-write-preserves-source": true,
+    "native-focused-context-and-one-use-rewrite": true,
+    "native-log-compaction-preserves-error": true,
+    "native-cost-and-verified-acceptance-events": true,
+    "native-stable-tool-order": true
+  },
+  "results": [
+    {
+      "mode": "turn",
+      "secondTaskLatencyMs": 1688,
+      "pairedWallMs": 2246,
+      "maxActive": 1,
+      "overlap": false,
+      "calls": 3
+    },
+    {
+      "mode": "request",
+      "secondTaskLatencyMs": 159,
+      "pairedWallMs": 2256,
+      "maxActive": 1,
+      "overlap": true,
+      "calls": 13
+    }
+  ],
+  "realHarness": true,
+  "realModel": false,
+  "usedGPU": false,
+  "source": {
+    "sha256": "02565b32c67e1bf6f7758607d5ff68562749f3b7e17882c720a951f600ac8e33",
+    "files": 192,
+    "definition": "Sorted tracked JS/Python/config/UI paths and LF-normalized UTF-8 content; release evidence excluded."
+  },
+  "limitation": "Synthetic fake-provider integration, not a Qwen performance benchmark. Production scheduler and billing remain inactive."
+}

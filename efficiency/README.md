@@ -134,8 +134,12 @@ and another task's inference during a heavy tool with max one provider stream.
 Set `EFFICIENCY_SDK_ROOT` to the pinned runtime's `node_modules` and run
 `node --test efficiency/core.test.mjs efficiency/plugin.test.mjs efficiency/sdk.test.mjs`.
 
-The Linux native-Harness fixture and production activation remain uncompleted:
-after the coordinated stop test Vast reported that the original instance's GPU
-resources were unavailable. No replacement was rented and no production scheduler
-was changed. Run `efficiency/smoke.cjs` only after the other chats confirm ready,
-then coordinate one scheduler replacement and the separate billing collector.
+After provider capacity recovered, the isolated Linux native-Harness fixture
+passed all eight checks, including preserving the original file on a denied
+overwrite, focused context, log errors, acceptance events and stable tool order.
+The synthetic second task took1688ms with the whole-turn gate and159ms with the
+request gate; paired wall time was2246ms versus2256ms. This used a fake model,
+not GPU inference, and does not establish a Qwen throughput gain.
+Production scheduler replacement and the separate billing collector still need
+coordinated activation after checking running and queued work. See the sanitized
+release evidence in `deployments/release-20261114/`.
