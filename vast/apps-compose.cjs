@@ -4,6 +4,7 @@ const {LABEL}=require('./apps-engine.cjs');
 const id=/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
 function relative(value){return typeof value==='string'&&value.length<=300&&!path.isAbsolute(value)&&!value.split(/[\\/]/).includes('..')&&!value.includes('\0');}
 function parseCompose(source){if(typeof source!=='string'||Buffer.byteLength(source)>256*1024)throw Error('Compose file exceeds 256 KiB');const doc=YAML.parseDocument(source,{uniqueKeys:true,maxAliasCount:30});if(doc.errors.length)throw Error('Invalid Compose YAML: '+doc.errors[0].message);return doc.toJS({maxAliasCount:30});}
+function bindEnvironment(spec,values){for(const s of Object.values(spec.services))for(const[k,v]of Object.entries(s.environment||{})){const ref=String(v).match(/^\$\{HARNESS_SECRET:([A-Za-z_][A-Za-z0-9_.-]*)\}$/);if(ref){if(!(ref[1]in values))throw Error('Missing project runtime secret mapping: '+ref[1]);if(values[ref[1]].includes('\0'))throw Error('Runtime credential cannot contain NUL: '+ref[1]);s.environment[k]=values[ref[1]].split('$').join('$$');}}return spec;}
 function policy(compose,{projectId,releaseId,entryService,entryPort,hostPort,publishAddress='127.0.0.1',secretFiles={}}){
  if(!compose||typeof compose!=='object'||!compose.services||Array.isArray(compose.services)||Object.keys(compose.services).length>8||!Object.keys(compose.services).length)throw Error('Compose requires 1–8 services');
  for(const k of Object.keys(compose))if(!['name','version','services','volumes','networks','secrets'].includes(k)&&!k.startsWith('x-'))throw Error('Unsupported Compose option: '+k);
@@ -32,10 +33,10 @@ function policy(compose,{projectId,releaseId,entryService,entryPort,hostPort,pub
   if(!/^(?:[1-9]\d{0,3})[mM]$/.test(String(c.mem_limit))||parseInt(c.mem_limit)>2048||!Number.isFinite(Number(c.cpus))||Number(c.cpus)<.1||Number(c.cpus)>2)throw Error('Compose resource limits exceed the approved worker');
   memoryTotal+=parseInt(c.mem_limit);if(memoryTotal>1536)throw Error('Compose services exceed the 1536 MiB application memory budget');
   if(c.depends_on){const deps=Array.isArray(c.depends_on)?c.depends_on:Object.keys(c.depends_on);if(deps.some(n=>!compose.services[n]||n===name))throw Error('Invalid dependency');}
-  if((c.secrets||[]).some(v=>typeof v!=='string'||!out.secrets[v]))throw Error('Use declared project vault secrets');
+  if(c.secrets?.length)throw Error('Runtime Compose file secrets require a remote file transport; use environment values with ${HARNESS_SECRET:NAME}. Build secrets are supported.');
   out.services[name]=c;
  }
- if(JSON.stringify(out).replace(/\$\{HARNESS_SECRET:[A-Za-z_][A-Za-z0-9_.-]*\}/g,'').includes('${'))throw Error('Compose host interpolation is disabled; use explicit configuration and vault references');
+ if(/\$(?:\{|[A-Za-z_])/.test(JSON.stringify(out).replace(/\$\{HARNESS_SECRET:[A-Za-z_][A-Za-z0-9_.-]*\}/g,'').replace(/\$\$/g,'')))throw Error('Compose host interpolation is disabled; use explicit configuration and vault references, or $$ for container variables');
  return out;
 }
-module.exports={parseCompose,policy,relative};
+module.exports={parseCompose,policy,relative,bindEnvironment};

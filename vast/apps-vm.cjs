@@ -3,13 +3,29 @@ const fs = require('node:fs'), path = require('node:path'), cp = require('node:c
 const {LABEL} = require('./apps-engine.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function atomic(file, value) { const tmp=file+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600}); fs.renameSync(tmp,file); }
+function controlFirewall(){return `
+iptables -w -N HARNESS_CONTROL_V1 2>/dev/null || iptables -w -S HARNESS_CONTROL_V1 >/dev/null
+firewall_rule() { iptables -w -C "$@" 2>/dev/null || iptables -w -A "$@"; }
+firewall_rule HARNESS_CONTROL_V1 -m conntrack --ctstate ESTABLISHED,RELATED --ctdir REPLY -j RETURN
+firewall_rule HARNESS_CONTROL_V1 -d 10.0.2.3/32 -p udp --dport 53 -j RETURN
+firewall_rule HARNESS_CONTROL_V1 -d 10.0.2.3/32 -p tcp --dport 53 -j RETURN
+firewall_rule HARNESS_CONTROL_V1 -d 10.0.2.2/32 -p udp --dport 67 -j RETURN
+firewall_rule HARNESS_CONTROL_V1 -d 10.0.2.0/24 -j REJECT
+iptables -w -C OUTPUT -j HARNESS_CONTROL_V1 2>/dev/null || iptables -w -I OUTPUT 1 -j HARNESS_CONTROL_V1
+iptables -w -C DOCKER-USER -j HARNESS_CONTROL_V1 2>/dev/null || iptables -w -I DOCKER-USER 1 -j HARNESS_CONTROL_V1
+iptables -w -C INPUT ! -i eth0 -p tcp --dport 2375 -j REJECT 2>/dev/null || iptables -w -I INPUT 1 ! -i eth0 -p tcp --dport 2375 -j REJECT
+for scope in all default; do
+ if test -e /proc/sys/net/ipv6/conf/$scope/disable_ipv6; then echo 1 > /proc/sys/net/ipv6/conf/$scope/disable_ipv6; fi
+done
+`;}
 
 function bootstrap(manifest, initialize, nonce, repairCache=false) {
  if (!/^[a-f0-9]{32}$/.test(manifest.volumeId) || !/^[a-f0-9]{16}$/.test(nonce)) throw Error('Invalid bootstrap identity');
  return `#!/bin/sh
 set -eu
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-if command -v docker >/dev/null && docker info >/dev/null 2>&1; then echo HARNESS_READY_${nonce}; exit 0; fi
+isolate_control_plane() { ${controlFirewall()} }
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then isolate_control_plane; echo HARNESS_READY_${nonce}; exit 0; fi
 ip link set eth0 up
 udhcpc -i eth0 -q -n
 printf '%s\\n' 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' 'https://dl-cdn.alpinelinux.org/alpine/v3.24/community' > /etc/apk/repositories
@@ -41,7 +57,7 @@ if ! pidof dockerd >/dev/null; then
  dockerd --storage-driver=vfs --data-root=/var/lib/harness/docker --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --tls=false --label=io.stratadashseek.worker=${manifest.volumeId} > /tmp/docker.log 2>&1 &
 fi
 for n in $(seq 1 90); do
- if docker info >/dev/null 2>&1; then sync; echo HARNESS_READY_${nonce}; exit 0; fi
+ if docker info >/dev/null 2>&1; then isolate_control_plane; sync; echo HARNESS_READY_${nonce}; exit 0; fi
  sleep 1
 done
 tail -n 30 /tmp/docker.log
@@ -62,7 +78,7 @@ class DockerVM {
  }
  save(){atomic(this.stateFile,this.saved);}
  pid(){try{const pid=Number(fs.readFileSync(path.join(this.root,'qemu.pid'),'utf8')); const args=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0');return args.includes('stratadashseek-docker') && args.includes('file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback')?pid:null;}catch{return null;}}
- status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,initialized:!!this.saved.initialized};}
+ status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
  touch(){this.lastUsed=Date.now();}
  async ensure(){
   this.touch();const waitUntil=Date.now()+90000;while(this.stopping&&Date.now()<waitUntil)await pause(250);if(this.stopping)throw Error('Docker is still saving its state; retry shortly');
@@ -88,8 +104,9 @@ class DockerVM {
   socket.write('\n');
  }
  async start(){
-  if(this.phase==='ready' && this.pid()){await this.engine.available();return;}
+  if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1){await this.engine.available();return;}
   this.phase='starting';this.error=null;this.scriptSent=false;this.nonce=crypto.randomBytes(8).toString('hex');
+  if(this.serial&&!this.serial.destroyed)this.serial.write('\n');
   if(!this.pid()){
    for(const name of ['serial.sock','qmp.sock','qemu.pid'])try{fs.unlinkSync(path.join(this.root,name));}catch(e){if(e.code!=='ENOENT')throw e;}
    const stat=fs.statfsSync(this.root);if(stat.bavail*stat.bsize<2*1024**3)throw Error('Less than 2 GiB host reserve; worker not started');
@@ -107,10 +124,11 @@ class DockerVM {
    while(Date.now()<deadline){
     const bootExit=this.buffer.match(new RegExp('HARNESS_BOOT_EXIT_'+this.nonce+'=(\\d+)'));if(bootExit&&Number(bootExit[1])!==0)throw Error('Guest setup failed with exit '+bootExit[1]+'; inspect the worker console');
     if(!this.serial||this.serial.destroyed)try{await this.connectSerial();}catch{}
+    if(!this.scriptSent||!this.buffer.includes('HARNESS_READY_'+this.nonce)||!bootExit){await pause(250);continue;}
     try{
      const info=await this.engine.json('GET','/info',{timeout:2000});
      if(!info.Labels?.includes('io.stratadashseek.worker='+this.manifest.volumeId))throw Error('Unexpected Docker worker identity');
-     this.phase='restoring';this.saved.initialized=true;this.save();
+     this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.save();
      for(const id of this.saved.resumeIds||[]){await this.engine.owned(id);await this.engine.request('POST','/containers/'+id+'/start');}
      this.phase='ready';this.touch();await this.diskFree();this.save();return;
     }catch(e){if(this.phase!=='starting')throw e;}
@@ -140,4 +158,4 @@ class DockerVM {
   }catch(e){this.phase='error';this.error=e.message;throw e;}finally{this.stopping=false;}
  }
 }
-module.exports={DockerVM,bootstrap};
+module.exports={DockerVM,bootstrap,controlFirewall};

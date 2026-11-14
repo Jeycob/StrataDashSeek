@@ -2,7 +2,7 @@
 const fs=require('node:fs/promises'),path=require('node:path'),crypto=require('node:crypto'),cp=require('node:child_process'),net=require('node:net');
 const {InfisicalVault,binding,NAME}=require('./apps-vault.cjs');
 const {temporarySecrets}=require('./apps-command.cjs');
-function privateAddress(value){if(typeof value!=='string')return false;const parts=value.split('.').map(Number);return parts.length===4&&parts[0]===100&&parts[1]>=64&&parts[1]<=127&&parts.every(v=>Number.isInteger(v)&&v>=0&&v<=255);}
+function privateAddress(value){if(typeof value!=='string')return false;const parts=value.split('.').map(Number);return parts.length===4&&parts.map(String).join('.')===value&&parts[0]===100&&parts[1]>=64&&parts[1]<=127&&parts.every(v=>Number.isInteger(v)&&v>=0&&v<=255);}
 function validate(data){if(!/^[a-zA-Z0-9_-]{1,40}$/.test(data.id)||typeof data.name!=='string'||!data.name.trim()||data.name.length>80||!privateAddress(data.host)||!/^[_a-zA-Z][_a-zA-Z0-9-]{0,40}$/.test(data.user)||!Number.isInteger(data.port)||data.port<1||data.port>65535||!/^ssh-(?:ed25519|rsa) [A-Za-z0-9+/=]{40,2000}$/.test(data.hostKey)||!NAME.test(data.keySecret))throw Error('Remote target requires a Tailscale IP, SSH user, pinned public host key and vault key reference');return{id:data.id,name:data.name.trim(),host:data.host,user:data.user,port:data.port,hostKey:data.hostKey,keySecret:data.keySecret,scope:binding(data.scope)};}
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 class RemoteTargets{

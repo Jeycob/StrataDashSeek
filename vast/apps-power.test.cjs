@@ -2,6 +2,13 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),http=require('node:http');
 const {AppsManager}=require('./apps-manager.cjs');
 const {DockerVM,bootstrap}=require('./apps-vm.cjs');
+test('an available Docker API cannot restore containers before fresh bootstrap and isolation proof',async()=>{
+ const calls=[],volumeId='a'.repeat(32),vm={phase:'recovering',saved:{initialized:true,resumeIds:['b'.repeat(64)]},manifest:{volumeId},buffer:'',serial:{destroyed:false,write(){}},pid:()=>123,save(){},touch(){},diskFree:async()=>1024,engine:{json:async()=>{calls.push('info');return{Labels:['io.stratadashseek.worker='+volumeId]};},owned:async()=>calls.push('owned'),request:async()=>calls.push('start')}};
+ const pending=DockerVM.prototype.start.call(vm);await new Promise(r=>setTimeout(r,40));assert.deepEqual(calls,[]);assert.equal(vm.phase,'starting');vm.scriptSent=true;vm.buffer='HARNESS_READY_'+vm.nonce+'\nHARNESS_BOOT_EXIT_'+vm.nonce+'=0\n';await pending;assert.deepEqual(calls,['info','owned','start']);assert.equal(vm.phase,'ready');assert.equal(vm.saved.controlIsolationVersion,1);
+});
+test('failed guest isolation never becomes ready even when the Docker API is reachable',async()=>{
+ let contacted=false;const vm={phase:'recovering',saved:{initialized:true},manifest:{volumeId:'a'.repeat(32)},buffer:'',serial:{destroyed:false,write(){}},pid:()=>123,engine:{json:async()=>{contacted=true;return{};}}};const pending=DockerVM.prototype.start.call(vm);await new Promise(r=>setTimeout(r,40));vm.scriptSent=true;vm.buffer='HARNESS_BOOT_EXIT_'+vm.nonce+'=1\n';await assert.rejects(pending,/Guest setup failed/);assert.equal(contacted,false);assert.equal(vm.phase,'error');
+});
 const {createPreview}=require('./apps-preview.cjs');
 const id='a'.repeat(64);
 async function fixture(t){

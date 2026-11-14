@@ -6,7 +6,7 @@ const {StringDecoder}=require('node:string_decoder');
 const {DockerVM}=require('./apps-vm.cjs');
 const {redact}=require('./apps-command.cjs');
 function atomic(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const tmp=file+'.'+process.pid+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
-function cleanContainer(c){return{id:c.Id,name:(c.Names?.[0]||'').replace(/^\//,''),projectId:c.Labels?.[LABEL+'.project'],state:c.State,status:c.Status,image:c.Image,createdAt:c.Created*1000,ports:(c.Ports||[]).filter(p=>p.PublicPort).map(p=>({private:p.PrivatePort,public:p.PublicPort}))};}
+function cleanContainer(c){return{id:c.Id,name:(c.Names?.[0]||'').replace(/^\//,''),projectId:c.Labels?.[LABEL+'.project'],service:c.Labels?.['com.docker.compose.service']||null,releaseId:c.Labels?.[LABEL+'.release']||null,state:c.State,status:c.Status,image:c.Image,createdAt:c.Created*1000,ports:(c.Ports||[]).filter(p=>p.PublicPort).map(p=>({private:p.PrivatePort,public:p.PublicPort}))};}
 class AppsManager {
  constructor(cfg={},engine,worker){
   this.cfg={enabled:false,workspaceRoot:'/data/harness/workspaces',stateDir:'/data/harness/state/applications',applicationHost:'127.0.0.1',checkHost:'127.0.0.1',publishAddress:'127.0.0.1',firstPort:18080,portCount:8,minFreeBytes:2*1024**3,...cfg};

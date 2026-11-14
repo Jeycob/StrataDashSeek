@@ -1,6 +1,6 @@
 'use strict';
 const cp=require('node:child_process'),fs=require('node:fs/promises'),path=require('node:path'),crypto=require('node:crypto');
-function redact(text,values=[]){let out=String(text);for(const v of values.filter(Boolean).sort((a,b)=>b.length-a.length)){for(const form of new Set([v,Buffer.from(v).toString('base64'),encodeURIComponent(v)]))out=out.split(form).join('[REDACTED]');}return out;}
+function redact(text,values=[]){let out=String(text);const forms=new Set();for(const v of values.filter(Boolean))for(const raw of[v,v.split('$').join('$$')])for(const form of[raw,Buffer.from(raw).toString('base64'),encodeURIComponent(raw),JSON.stringify(raw).slice(1,-1)])forms.add(form);for(const form of[...forms].sort((a,b)=>b.length-a.length))out=out.split(form).join('[REDACTED]');return out;}
 function run(program,args,{cwd,env={},input,timeout=600000,maxBytes=8*1024*1024,values=[],onOutput}={}){
  return new Promise((resolve,reject)=>{const child=cp.spawn(program,args,{cwd,env:{PATH:process.env.PATH,LANG:'C.UTF-8',...env},stdio:['pipe','pipe','pipe'],windowsHide:true});let out='',err='',bytes=0,ended=false;const fail=e=>{if(ended)return;ended=true;child.kill('SIGTERM');setTimeout(()=>child.kill('SIGKILL'),2000).unref();reject(e);};const timer=setTimeout(()=>fail(Error('Command timed out')),timeout);timer.unref();
   child.on('error',fail);for(const [stream,kind]of [[child.stdout,'out'],[child.stderr,'err']])stream.on('data',c=>{bytes+=c.length;if(bytes>maxBytes)return fail(Error('Command output limit exceeded'));if(kind==='out')out+=c;else err+=c;});
