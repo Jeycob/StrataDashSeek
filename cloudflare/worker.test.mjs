@@ -41,7 +41,7 @@ test('only the configured private Harness origin may use its provisioned wake ke
  const originPrivate=new URL(env.HARNESS_URL).origin;const original=globalThis.fetch;globalThis.fetch=async()=>Response.json({instances:{actual_status:'running',intended_status:'running',ssh_host:'ssh1.vast.ai',ssh_port:1234}});
  try{
   const preflight=await worker.fetch(new Request(origin+'/api/wake',{method:'OPTIONS',headers:{Origin:originPrivate}}),env);assert.equal(preflight.status,204);assert.equal(preflight.headers.get('access-control-allow-origin'),originPrivate);
-  const allowed=await worker.fetch(new Request(origin+'/api/wake',{method:'POST',headers:{Origin:originPrivate,Authorization:'Bearer '+env.WAKE_ACCESS_KEY},body:'{}'}),env);assert.equal(allowed.status,200);assert.equal(allowed.headers.get('access-control-allow-origin'),originPrivate);
+  const allowed=await worker.fetch(new Request(origin+'/api/wake',{method:'POST',headers:{Origin:originPrivate,Authorization:'Bearer '+env.WAKE_ACCESS_KEY},body:'{}'}),env);assert.equal(allowed.status,200);assert.equal(allowed.headers.get('access-control-allow-origin'),originPrivate);assert.match(allowed.headers.get('access-control-expose-headers'),/Retry-After/);assert.match(preflight.headers.get('access-control-allow-headers'),/If-None-Match/);
   const bad=await worker.fetch(new Request(origin+'/api/wake',{method:'POST',headers:{Origin:'https://evil.example',Authorization:'Bearer '+env.WAKE_ACCESS_KEY},body:'{}'}),env);assert.equal(bad.status,403);
  }finally{globalThis.fetch=original;}
 });
