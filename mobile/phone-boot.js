@@ -15,15 +15,17 @@ async function prepareBackend(){
  tell(t('waking'));
  try{
   const {wakeUrl}=await config();const origin=new URL(wakeUrl).origin;
-  const response=await fetch(origin+'/api/wake',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(15000)});
-  if(!response.ok)throw Error(t('wakeFailed'));
-  const deadline=Date.now()+240000;let attempt=0;
+  if(document.hidden)return;
+  const wakeRequest=()=>fetch(origin+'/api/wake',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(15000)});
+  let response=await wakeRequest();if(!response.ok)throw Error(t('wakeFailed'));let wake=await response.json(),lastWake=Date.now();
+  const deadline=Date.now()+360000;let attempt=0;
   while(Date.now()<deadline){
-   tell(t('connecting'));
+   if(document.hidden)return; // A hidden client must not wake a newly free GPU.
+   if(wake.queued&&Date.now()-lastWake>=15000){response=await wakeRequest();if(!response.ok)throw Error(t('wakeFailed'));wake=await response.json();lastWake=Date.now();}tell(t(wake.queued?'capacityWait':'connecting'));
    try{const r=await fetch('/phone/health',{signal:AbortSignal.timeout(4000),cache:'no-store'});if(r.ok&&(await r.json()).ready){window.harnessBackendReady=true;await provision();return;}}catch{}
    await new Promise(resolve=>setTimeout(resolve,Math.min(5000,800*Math.pow(1.35,attempt++))+Math.random()*250));
   }
-  throw Error(t('connectTimeout'));
+  throw Error(t(wake.queued?'capacityTimeout':'connectTimeout'));
  }catch(e){tell(e.message);}
 };
 let preparing=null;window.harnessPrepare=()=>preparing||(preparing=prepareBackend().finally(()=>{preparing=null;}));

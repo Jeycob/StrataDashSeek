@@ -138,7 +138,7 @@ Trash and enforced repair/stage limits. Open More → Projects and files or
 Ctrl+Alt+P. The custom panel/shell support EN/CZ. Browser and optional .NET
 runtimes are prepared once and checked locally at startup.
 
-Recorded validation: 13 real native integration checks, 116 Node regressions,
+Recorded validation: 13 real native integration checks, 119 Linux Node regressions plus six additional capacity/wake/maintenance regressions,
 32 Python regressions, real Chromium screenshots/console/WebGL and a .NET
 compile/run. Six real model probes verified Off versus Low/Medium wire settings
 and actual reasoning blocks; all six small code-analysis answers were correct.
@@ -146,3 +146,5 @@ Cache warmth differed, so these are functional probes rather than a model
 quality ranking. See deployments/workspace-20261114/ for sanitized evidence.
 
 Whole-stack installation simplification is [design only](docs/installation-design.md).
+
+Real cold-cycle result: automatic stop succeeded, but the original GPU was unavailable on resume. The Worker now reports HTTP202 capacity queue instead of false success and retries only the same instance. See docs/workspace-runtime.md and deployment status for pending server-side bootstrap updates.

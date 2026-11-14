@@ -1,0 +1,34 @@
+{
+  "startedAt": 1794674714755,
+  "instanceId": 60637500,
+  "events": [
+    {
+      "at": 1794674714755,
+      "kind": "watching-automatic-stop"
+    },
+    {
+      "at": 1794674715398,
+      "kind": "instance-status",
+      "status": "running",
+      "intended": "running"
+    },
+    {
+      "at": 1794674913959,
+      "kind": "instance-status",
+      "status": "stopped",
+      "intended": "stopped"
+    },
+    {
+      "at": 1794674913963,
+      "kind": "automatic-stop-observed"
+    },
+    {
+      "at": 1794674914674,
+      "kind": "normal-worker-wake-requested"
+    }
+  ],
+  "stoppedAt": 1794674913963,
+  "wakeRequestedAt": 1794674913965,
+  "passed": false,
+  "error": "Wake readiness timeout"
+}

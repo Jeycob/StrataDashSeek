@@ -88,6 +88,23 @@ coordinates VM shutdown with the existing idle guard; there is no second
 independent stop controller in this feature. Native active runs, jobs, unknown
 model state and app work continue to protect the instance from shutdown.
 
+The final real stop/wake check exposed a provider limitation: Vast can return
+HTTP 200 with `success:false` and unavailable resources for the original GPU.
+The Worker now distinguishes an accepted start from a capacity queue, returns
+202 with `CAPACITY_UNAVAILABLE`, and the foreground client retries the same
+instance at most every 15 seconds for six minutes. Concurrent requests share
+one in-flight provider operation. A hidden phone does not keep retrying wakes.
+No replacement instance is silently rented. This cannot guarantee capacity:
+Vast binds a stopped instance to its original GPU and may assign that GPU to
+another job. See the [official troubleshooting
+explanation](https://github.com/vast-ai/docs/blob/main/guides/reference/troubleshooting.mdx).
+
+For predictable availability, a future design should keep the Harness and its
+project data on a small persistent CPU host and wake only GPU inference, or
+use capacity reservation. A shared host volume can make another GPU on the
+same machine usable, but moving current data and changing rental/storage costs
+requires a separate reviewed migration. It is not performed by this feature.
+
 The new panel and custom shell use a shared EN/CZ dictionary. User messages,
 source files and application logs are never machine-translated. Upstream
 Harness labels retain their vendor language where no localization hook exists.

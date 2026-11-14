@@ -1,0 +1,18 @@
+{
+  "startedAt": 1794675284986,
+  "instanceId": 60637500,
+  "events": [
+    {
+      "at": 1794675286132,
+      "kind": "capacity-unavailable",
+      "http": 202
+    },
+    {
+      "at": 1794675889589,
+      "kind": "bounded-check-ended",
+      "error": "Original host capacity remained unavailable during bounded check"
+    }
+  ],
+  "passed": false,
+  "error": "Original host capacity remained unavailable during bounded check"
+}

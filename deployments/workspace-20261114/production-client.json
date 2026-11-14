@@ -1,0 +1,16 @@
+{
+  "at": 1794673953207,
+  "passed": true,
+  "results": [
+    {
+      "width": 1440,
+      "passed": true,
+      "errors": []
+    },
+    {
+      "width": 390,
+      "passed": true,
+      "errors": []
+    }
+  ]
+}
