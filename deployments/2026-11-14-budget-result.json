@@ -1,10 +1,10 @@
 {
-  "at": "2026-11-14T12:21:31.262Z",
+  "at": "2026-11-14T13:46:43.509Z",
   "status": "deployed and cold-cycle verified",
   "instanceId": 60637500,
   "previousInstanceId": 60529418,
-  "previousInstanceDeleted": false,
-  "previousInstanceDiskMonthlyUSD": 10.24,
+  "previousInstanceDeleted": true,
+  "previousInstanceDiskMonthlyUSD": 0,
   "budgetMonthlyCZK": 2000,
   "gpu": "RTX A4000 16 GB",
   "cpu": "AMD EPYC 7713",

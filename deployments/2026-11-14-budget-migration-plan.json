@@ -34,5 +34,5 @@
   },
   "promotion": "Require loaded identical model, preserved private state and successful task checks before moving clients.",
   "idle": "Fix detached preview processes preventing safe idle; live agent turns and actual builds must continue to block sleep.",
-  "sourceRetired": false
+  "sourceRetired": true
 }
