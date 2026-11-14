@@ -1,0 +1,44 @@
+{
+  "date": "2026-11-14",
+  "productionInstanceId": 60529418,
+  "nodeTestsPassed": 42,
+  "idleGuardTestsPassed": 10,
+  "sessionMigrationTestsPassed": 3,
+  "monitor": {
+    "cache": "v8",
+    "cpuScope": "container",
+    "diskScope": "container",
+    "monitorSHA256": "235f11fd80f3f886f5aec4880c76a26cfe72fbde65c03b979fe9105fdcd827f3",
+    "serviceWorkerSHA256": "14e412a248e0456730f37b52000604e38d30500561f997b3983d8f0a3ce494ab",
+    "deployedWithoutHarnessOrModelRestart": true
+  },
+  "productionGuardLastObserved": {
+    "reason": "agent turn active",
+    "idleSeconds": 0,
+    "idleTimeoutSeconds": 300
+  },
+  "cloudflare": {
+    "version": "4e4b972b-97c4-469f-9e3a-01d3754038cb",
+    "benchmarkCronRemovedAfterCleanup": true
+  },
+  "hardwareTrial": {
+    "summary": "HW-POC-20261114/summary.json",
+    "gpu": "RTX PRO 4500 32 GB",
+    "csvMedianSeconds": 110.539,
+    "relativeToOne4060Reference": 3.0201467355,
+    "allInCostEstimatedUSD": 0.4030472015,
+    "deleted": true,
+    "productionNotStopped": true
+  },
+  "limitations": [
+    "No production stop/restart or idle cycle was run while user tasks were active.",
+    "No new physical iPhone push or visual monitor check in this follow-up.",
+    "Hardware costs are estimates; billing API denied access."
+  ],
+  "publicSecretAudit": {
+    "trackedFiles": 120,
+    "secretValuesChecked": 8,
+    "gitHistoryChecked": true,
+    "leaksFound": []
+  }
+}
