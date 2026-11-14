@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {verifyBrowser} from './browser.mjs';
+import {verifyProject} from './core.mjs';
 
 function shop(bug) {
   return `<!doctype html><html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
@@ -33,4 +34,12 @@ test('real Chromium distinguishes working shop from four known UI regressions', 
     assert.equal(r.screenshots.length,2);
     for(const shot of r.screenshots) {const png=await fs.readFile(path.join(root,shot.path));assert.equal(png.subarray(0,8).toString('hex'),'89504e470d0a1a0a');assert.equal(png.readUInt32BE(16),shot.width);assert.equal(png.readUInt32BE(20),shot.height);}
   }
+  // Also exercise the actual CLI driver's nonce, artifact and source-hash path.
+  const plan=JSON.parse(await fs.readFile(path.join(root,'plan.json'),'utf8'));
+  plan.flows[0].steps[0].path='/?bug=fixed';
+  await fs.writeFile(path.join(root,'plan.json'),JSON.stringify(plan));
+  await fs.writeFile(path.join(root,'.harness-quality.json'),JSON.stringify({version:1,sources:['plan.json'],requiredKinds:['browser'],checks:[{id:'ui',kind:'browser',plan:'plan.json',timeoutMs:20000}]}));
+  const result=await verifyProject({workspace:root,env:{...process.env,HARNESS_QUALITY_ALLOWED_PORTS:String(server.address().port)}});
+  assert.equal(result.complete,true,JSON.stringify(result));assert.equal(result.stale,false);
+  assert.equal(result.results[0].artifactPaths.filter(p=>p.endsWith('.png')).length,2);
 });

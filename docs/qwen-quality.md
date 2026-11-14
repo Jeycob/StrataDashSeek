@@ -1,6 +1,8 @@
 # Verified quality for local Qwen runs
 
-Status: implementation in progress on `feat/qwen-quality-gates`.
+Status: implemented and tested on A4000 on `feat/qwen-quality-gates`.
+Plugin files are staged additively; shared profile activation follows the separate
+workspace runtime's isolated native integration fixture.
 
 The observed bottleneck was completion and verification, not just decode speed.
 A faster decoder still produced long repair loops and a nominally complete web
@@ -47,12 +49,47 @@ its workspace-write policy remain responsible for command confinement.
 
 ## Validation before rollout
 
-- Negative fixtures: failed build, masked status, zero tests, stale result,
-  source changes during checks, missing browser, missing images, invalid prices,
-  anonymous outbox, and cross-customer idempotency replay.
+- Negative fixtures implemented: nonzero process despite printed success,
+  shell masking, zero tests, stale result, source changes during checks,
+  unavailable browser, missing images, invalid prices, overflow and console errors.
+- Shop-specific anonymous outbox and cross-customer idempotency acceptance tests
+  remain project requirements; this generic verifier does not invent coverage.
 - Positive fixture: real build/tests plus real Chromium on desktop and mobile.
 - Verify plugin cancellation and manager event payloads without GPU inference.
 - Install additively only after coordination; preserve profile edits and active
   conversations. Never restart or change model parameters for this rollout.
 - Any claimed model speed/quality improvement requires a controlled paired
   task; regression detection results are not a claimed model success rate.
+
+## Measured validation
+
+On the existing A4000 host, Node v24.21.0 and prepared Playwright 1.65.1:
+`node --test quality/core.test.mjs quality/browser.test.mjs` passed 18/18 tests,
+0 skipped, 0 failed, in 5.02 seconds. No GPU/model inference was requested.
+The browser regression fixture produced and checked 10 actual desktop/mobile
+PNGs across five shop variants. A further end-to-end core-driver check produced
+two more PNGs and checked structured run nonce, source fingerprint and artifacts.
+The test cleans its temporary fixture and evidence after assertions.
+
+The positive shop passed; NaN prices, missing product images, horizontal overflow
+and console errors were each rejected independently on both viewports. Unit tests
+also cover process timeout/cancellation, concurrent verification locks, bounded
+logs, partial vs complete stages, malformed output, native confinement arguments,
+single manager reporting and rejection of a changed authoritative source hash.
+Mocked manager tests do not establish live Harness registration; that is owned by
+the joint native fixture before profile activation.
+
+## Recommended order for Qwen IQ3_S / A4000
+
+1. Establish build, business acceptance and browser checks before broad styling.
+   Include the negative ownership/idempotency cases from `quality/README.md`.
+2. Implement one usable vertical slice, verify it, then expand. Return a compact
+   diagnosis and exact evidence path to reduce repeated full-file rewrites.
+3. Use the shared repair budget and best checkpoint; avoid parallel continuation
+   guards that each spend another token budget on the same failed stage.
+4. Compare reasoning presets with an identical task and fixed tools/runtime in
+   the workspace-runtime workstream. Score functional acceptance, visual defects,
+   time to an accepted solution and total billed cost, including failed attempts.
+5. Only then tune inference settings. The earlier faster decode rate did not
+   establish faster delivery of a correct shop. This change deliberately makes
+   no claim of a measured token-speed or model-success-rate improvement.

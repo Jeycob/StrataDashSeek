@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {verifyProject, runProgram, validateContract, confined, parseTestCounts} from './core.mjs';
-import {validatePlan, resolveBaseURL} from './browser.mjs';
+import {validatePlan, resolveBaseURL, verifyBrowser} from './browser.mjs';
 import {executeVerification} from './plugin.mjs';
 
 const command = code => [process.execPath, '-e', code];
@@ -99,4 +99,18 @@ test('plugin invalidates changed source and nonzero native exits',async()=>{
 test('plugin refuses unmanaged projects without executing commands',async()=>{
   const f=pluginContext();f.ctx.waterfall=async()=>undefined;
   assert.equal((await executeVerification(f.ctx,{},f.execution)).code,'NO_MANAGED_PROJECT');assert.equal(f.specs.length,0);
+});
+test('manager rejection is returned as failed evidence, never a pass',async()=>{
+  const f=pluginContext();f.ctx.serial=async()=>{throw Object.assign(Error('Source changed before acceptance'),{code:'STALE_VERIFICATION'});};
+  const r=await executeVerification(f.ctx,{},f.execution);assert.equal(r.complete,false);assert.equal(r.passed,false);assert.equal(r.code,'STALE_VERIFICATION');
+});
+test('malformed native runner output cannot earn a manager pass',async()=>{
+  const f=pluginContext();f.ctx.shell.execute=async()=>({result:async()=>({exitCode:0,stdout:{text:'not JSON'}})});
+  const r=await executeVerification(f.ctx,{},f.execution);assert.equal(r.passed,false);assert.equal(f.events[0].value.exitCode,1);
+});
+test('unavailable Chromium produces failure with no invented screenshots',async t=>{
+  const workspace=await project(t,[passing]);
+  await fs.writeFile(path.join(workspace,'plan.json'),JSON.stringify({version:1,baseURL:'http://127.0.0.1:4000',viewports:[{name:'mobile',width:390,height:844}],flows:[{name:'shop',steps:[{action:'goto',path:'/'},{action:'checkpoint',name:'catalog'}]}]}));
+  const r=await verifyBrowser({workspace,planPath:'plan.json',outputPath:'.harness/quality/browser.json',runId:'missing',env:{},chromium:{launch:async()=>{throw Error('Chromium absent');}}});
+  assert.equal(r.passed,0);assert.equal(r.failed,1);assert.deepEqual(r.screenshots,[]);
 });

@@ -143,7 +143,7 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
           if (check.kind === 'browser' && (data.engine !== 'chromium' || !data.screenshots?.length)) throw new QualityError('BROWSER_EVIDENCE_MISSING', 'A real Chromium run and screenshots are required.');
           for (const artifact of data.screenshots ?? []) { await confined(root, artifact.path); artifacts.push(artifact.path); }
           artifacts.push(resultFile);
-          for (const failed of data.results?.filter(r => !r.passed) ?? []) diagnostics.push(String(failed.code ?? failed.name ?? 'ASSERTION_FAILED').slice(0,300));
+          for (const failed of data.results?.filter(r => !r.passed) ?? []) diagnostics.push([failed.code ?? failed.name ?? 'ASSERTION_FAILED', failed.detail].filter(Boolean).join(': ').slice(0,500));
         } else if (check.kind === 'test' || check.kind === 'acceptance') {
           measured = parseTestCounts(result.stdout + '\n' + result.stderr) ?? { passed: 0, failed: 1 };
         } else measured = { passed: result.exitCode === 0 ? 1 : 0, failed: result.exitCode === 0 ? 0 : 1 };

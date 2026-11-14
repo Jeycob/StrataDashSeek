@@ -37,14 +37,17 @@ export async function executeVerification(ctx, args, execution, config = {}) {
   if (stale) { report.passed = false; report.complete = false; report.stale = true; report.code = 'STALE_SOURCE'; }
   if (result?.exitCode !== 0 || result?.timedOut) { report.passed = false; report.complete = false; }
   const failed = report.checks.filter(c => !c.passed).flatMap(c => c.diagnostics ?? []);
-  await ctx.serial('workspace-runtime/verification', {
+  try { await ctx.serial('workspace-runtime/verification', {
     sessionId, kind, exitCode: report.passed ? 0 : 1,
     diagnostics: [report.code, report.error, ...failed].filter(Boolean).slice(0,12).join('; ').slice(0,1500),
     sourceHash: review.sourceHash,
     checksPassed: report.checks.reduce((n,c) => n + (c.checksPassed ?? 0), 0),
     checksTotal: Math.max(1, report.checks.reduce((n,c) => n + (c.checksTotal ?? 1), 0)),
     artifactPaths: report.checks.flatMap(c => c.artifactPaths ?? []).slice(0,32), signal: execution.signal,
-  });
+  }); } catch (e) {
+    if (execution.signal.aborted) throw e;
+    return { ...report, passed: false, complete: false, sourceHash: review.sourceHash, code: e.code ?? 'VERIFICATION_NOT_ACCEPTED', error: e.message };
+  }
   return { ...report, sourceHash: review.sourceHash };
 }
 
