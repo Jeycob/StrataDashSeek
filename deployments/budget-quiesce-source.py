@@ -32,7 +32,8 @@ try:
         if not p.name.isdigit() or p.stat().st_uid!=uid or int(p.name) in services:continue
         a=args(int(p.name));text=' '.join(a)
         if not a:continue
-        if ('/vite/bin/vite.js' in text or '/@esbuild/' in text or 'apps/api/src/server.js' in a or (a[0]=='bash' and '/vite/bin/vite.js' in text)):
+        papirna_preview = a == [str(r/'node/bin/node'),'src/index.js'] and subprocess.run(['runuser','-u','harness','--','readlink',str(p/'cwd')],capture_output=True,text=True).stdout.strip() == str(r/'home/HomeAI/server')
+        if (papirna_preview or '/vite/bin/vite.js' in text or '/@esbuild/' in text or 'apps/api/src/server.js' in a or (a[0]=='bash' and '/vite/bin/vite.js' in text)):
             previews.append(int(p.name))
         else:raise RuntimeError('Unknown workspace process remains: '+p.name)
 except:
