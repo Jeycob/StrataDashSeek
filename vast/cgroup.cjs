@@ -1,0 +1,13 @@
+'use strict';
+function readCpuStats(read,parallelism){
+ try{const [q,p]=read('/sys/fs/cgroup/cpu.max').trim().split(/\s+/),match=read('/sys/fs/cgroup/cpu.stat').match(/^usage_usec\s+(\d+)/m);const cores=q==='max'?parallelism:Math.min(parallelism,Number(q)/Number(p));if(!match||!(cores>0))throw Error('Invalid CPU counters');return {version:2,usage:Number(match[1]),cores};}catch{}
+ const q=Number(read('/sys/fs/cgroup/cpu/cpu.cfs_quota_us')),p=Number(read('/sys/fs/cgroup/cpu/cpu.cfs_period_us')),usage=Number(read('/sys/fs/cgroup/cpuacct/cpuacct.usage'))/1000,cores=q<0?parallelism:Math.min(parallelism,q/p);if(!Number.isFinite(usage)||!(cores>0))throw Error('Invalid CPU counters');return {version:1,usage,cores};
+}
+function readMemoryStats(read,host){
+ for(const version of [2,1])try{const base=version===2?'/sys/fs/cgroup/':'/sys/fs/cgroup/memory/',limit=Number(read(base+(version===2?'memory.max':'memory.limit_in_bytes'))),used=Number(read(base+(version===2?'memory.current':'memory.usage_in_bytes')));if(!(limit>0)||limit>=host.total||!Number.isFinite(used))continue;const stats=Object.fromEntries(read(base+'memory.stat').trim().split('\n').map(l=>{const [k,v]=l.trim().split(/\s+/);return [k,Number(v)]}));return {total:limit,used,available:Math.max(0,limit-used),fileCache:version===2?stats.file:stats.total_cache??stats.cache,anonymous:version===2?stats.anon:stats.total_rss??stats.rss,scope:'container',cgroupVersion:version};}catch{}
+ return {...host,scope:'host'};
+}
+function parseIoStat(text){let read=0,write=0,devices=0;for(const line of text.trim().split('\n')){if(!/^\d+:\d+\s/.test(line))continue;const fields=Object.fromEntries(line.trim().split(/\s+/).slice(1).map(x=>x.split('='))),r=Number(fields.rbytes),w=Number(fields.wbytes);if(!Number.isFinite(r)||!Number.isFinite(w))continue;read+=r;write+=w;devices++;}return devices?{read,write,devices}:null;}
+function parseIoV1(text){let read=0,write=0;const devices=new Set();for(const line of text.trim().split('\n')){const m=line.match(/^(\d+:\d+)\s+(Read|Write)\s+(\d+)$/);if(!m)continue;devices.add(m[1]);if(m[2]==='Read')read+=Number(m[3]);else write+=Number(m[3]);}return devices.size?{read,write,devices:devices.size}:null;}
+function readIoStats(read){try{const s=parseIoStat(read('/sys/fs/cgroup/io.stat'));if(s)return {...s,version:2};}catch{}for(const file of ['blkio.throttle.io_service_bytes_recursive','blkio.throttle.io_service_bytes','blkio.io_service_bytes_recursive'])try{const s=parseIoV1(read('/sys/fs/cgroup/blkio/'+file));if(s)return {...s,version:1};}catch{}return null;}
+module.exports={readCpuStats,readMemoryStats,readIoStats,parseIoStat,parseIoV1};
