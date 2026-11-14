@@ -1,0 +1,42 @@
+TAP version 13
+# Subtest: Node scaffolding uses lockfile, actual build/test scripts and never overwrites source
+ok 1 - Node scaffolding uses lockfile, actual build/test scripts and never overwrites source
+  ---
+  duration_ms: 31.2404
+  type: 'test'
+  ...
+# Subtest: Python entrypoint and .NET assembly detection produce executable containers
+ok 2 - Python entrypoint and .NET assembly detection produce executable containers
+  ---
+  duration_ms: 14.9906
+  type: 'test'
+  ...
+# Subtest: ambiguous projects and escaped paths are refused before writing
+ok 3 - ambiguous projects and escaped paths are refused before writing
+  ---
+  duration_ms: 10.7142
+  type: 'test'
+  ...
+# Subtest: Vite frontend without a start script gets production static hosting and SPA fallback
+ok 4 - Vite frontend without a start script gets production static hosting and SPA fallback
+  ---
+  duration_ms: 6.5355
+  type: 'test'
+  ...
+# Subtest: FastAPI with uvicorn gets a listening web entrypoint
+ok 5 - FastAPI with uvicorn gets a listening web entrypoint
+  ---
+  duration_ms: 12.502
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 219.8492
+
+[stderr]

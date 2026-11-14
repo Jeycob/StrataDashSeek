@@ -1,0 +1,48 @@
+TAP version 13
+# Subtest: Compose and push bind to the explicit installed runtime without global module paths
+ok 1 - Compose and push bind to the explicit installed runtime without global module paths
+  ---
+  duration_ms: 148.6382
+  type: 'test'
+  ...
+# Subtest: a configured missing runtime fails instead of silently using project dependencies
+ok 2 - a configured missing runtime fails instead of silently using project dependencies
+  ---
+  duration_ms: 99.6826
+  type: 'test'
+  ...
+# Subtest: real linked entry executes once while importing it has no main side effect
+ok 3 - real linked entry executes once while importing it has no main side effect
+  ---
+  duration_ms: 209.827
+  type: 'test'
+  ...
+# Subtest: the actual verification CLI runs through a linked application directory
+ok 4 - the actual verification CLI runs through a linked application directory
+  ---
+  duration_ms: 106.4442
+  type: 'test'
+  ...
+# Subtest: push defaults retain existing persistent identity outside the release tree
+ok 5 - push defaults retain existing persistent identity outside the release tree
+  ---
+  duration_ms: 133.7853
+  type: 'test'
+  ...
+# Subtest: service data root follows the installed runtime when no explicit root is configured
+ok 6 - service data root follows the installed runtime when no explicit root is configured
+  ---
+  duration_ms: 118.9239
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 6
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 971.8071
+
+[stderr]

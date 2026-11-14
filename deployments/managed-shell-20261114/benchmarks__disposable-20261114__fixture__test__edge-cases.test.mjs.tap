@@ -1,0 +1,86 @@
+TAP version 13
+# Subtest: trailing empty sixth column at EOF is rejected
+not ok 1 - trailing empty sixth column at EOF is rejected
+  ---
+  duration_ms: 1.5122
+  type: 'test'
+  location: 'C:\\Users\\jkremer\\Documents\\Codex\\2026-11-13\\n\\work\\managed-shell-compatibility\\benchmarks\\disposable-20261114\\fixture\\test\\edge-cases.test.mjs:5:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected exception (TypeError).'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    TestContext.<anonymous> (file:///C:/Users/jkremer/Documents/Codex/2026-11-13/n/work/managed-shell-compatibility/benchmarks/disposable-20261114/fixture/test/edge-cases.test.mjs:6:9)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.start (node:internal/test_runner/test:1262:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+  ...
+# Subtest: trailing empty sixth header field at EOF is rejected
+not ok 2 - trailing empty sixth header field at EOF is rejected
+  ---
+  duration_ms: 0.1759
+  type: 'test'
+  location: 'C:\\Users\\jkremer\\Documents\\Codex\\2026-11-13\\n\\work\\managed-shell-compatibility\\benchmarks\\disposable-20261114\\fixture\\test\\edge-cases.test.mjs:8:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected exception (TypeError).'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    TestContext.<anonymous> (file:///C:/Users/jkremer/Documents/Codex/2026-11-13/n/work/managed-shell-compatibility/benchmarks/disposable-20261114/fixture/test/edge-cases.test.mjs:9:9)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+  ...
+# Subtest: category subtotal overflow cannot silently round cents
+not ok 3 - category subtotal overflow cannot silently round cents
+  ---
+  duration_ms: 0.7552
+  type: 'test'
+  location: 'C:\\Users\\jkremer\\Documents\\Codex\\2026-11-13\\n\\work\\managed-shell-compatibility\\benchmarks\\disposable-20261114\\fixture\\test\\edge-cases.test.mjs:11:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected exception (TypeError).'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    TestContext.<anonymous> (file:///C:/Users/jkremer/Documents/Codex/2026-11-13/n/work/managed-shell-compatibility/benchmarks/disposable-20261114/fixture/test/edge-cases.test.mjs:12:9)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+# Subtest: month subtotal overflow cannot hide behind another month refund
+not ok 4 - month subtotal overflow cannot hide behind another month refund
+  ---
+  duration_ms: 0.1998
+  type: 'test'
+  location: 'C:\\Users\\jkremer\\Documents\\Codex\\2026-11-13\\n\\work\\managed-shell-compatibility\\benchmarks\\disposable-20261114\\fixture\\test\\edge-cases.test.mjs:17:1'
+  failureType: 'testCodeFailure'
+  error: 'Missing expected exception (TypeError).'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  stack: |-
+    TestContext.<anonymous> (file:///C:/Users/jkremer/Documents/Codex/2026-11-13/n/work/managed-shell-compatibility/benchmarks/disposable-20261114/fixture/test/edge-cases.test.mjs:18:9)
+    Test.runInAsyncScope (node:async_hooks:227:14)
+    Test.run (node:internal/test_runner/test:1402:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+    Test.postRun (node:internal/test_runner/test:1542:19)
+    Test.run (node:internal/test_runner/test:1467:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 0
+# fail 4
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 112.0676
+
+[stderr]

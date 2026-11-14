@@ -1,0 +1,96 @@
+TAP version 13
+# Subtest: empty data
+ok 1 - empty data
+  ---
+  duration_ms: 1.6518
+  type: 'test'
+  ...
+# Subtest: empty input, BOM only and blank lines produce an empty report
+ok 2 - empty input, BOM only and blank lines produce an empty report
+  ---
+  duration_ms: 0.2471
+  type: 'test'
+  ...
+# Subtest: quoted fields, escaped quotes, embedded newlines, CRLF, BOM, duplicates and pending rows
+ok 3 - quoted fields, escaped quotes, embedded newlines, CRLF, BOM, duplicates and pending rows
+  ---
+  duration_ms: 0.5762
+  type: 'test'
+  ...
+# Subtest: duplicate ids count once, conflicting duplicates throw
+ok 4 - duplicate ids count once, conflicting duplicates throw
+  ---
+  duration_ms: 0.4749
+  type: 'test'
+  ...
+# Subtest: pending rows are validated but never create buckets
+ok 5 - pending rows are validated but never create buckets
+  ---
+  duration_ms: 0.1827
+  type: 'test'
+  ...
+# Subtest: integer cents avoid binary float drift
+ok 6 - integer cents avoid binary float drift
+  ---
+  duration_ms: 0.4229
+  type: 'test'
+  ...
+# Subtest: amounts must be signed decimals with exactly two fractional digits
+ok 7 - amounts must be signed decimals with exactly two fractional digits
+  ---
+  duration_ms: 0.6611
+  type: 'test'
+  ...
+# Subtest: dates must be real calendar dates
+ok 8 - dates must be real calendar dates
+  ---
+  duration_ms: 0.8316
+  type: 'test'
+  ...
+# Subtest: status must be posted or pending
+ok 9 - status must be posted or pending
+  ---
+  duration_ms: 0.2081
+  type: 'test'
+  ...
+# Subtest: ids and categories must be non-empty; categories are trimmed and NFC-normalized
+ok 10 - ids and categories must be non-empty; categories are trimmed and NFC-normalized
+  ---
+  duration_ms: 0.3991
+  type: 'test'
+  ...
+# Subtest: column counts and headers are strict
+ok 11 - column counts and headers are strict
+  ---
+  duration_ms: 0.2239
+  type: 'test'
+  ...
+# Subtest: malformed quoting is rejected
+ok 12 - malformed quoting is rejected
+  ---
+  duration_ms: 0.1633
+  type: 'test'
+  ...
+# Subtest: buckets sort by month and by JS code-unit string order
+ok 13 - buckets sort by month and by JS code-unit string order
+  ---
+  duration_ms: 0.1404
+  type: 'test'
+  ...
+# Subtest: non-string input is a TypeError
+ok 14 - non-string input is a TypeError
+  ---
+  duration_ms: 0.1452
+  type: 'test'
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 14
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 126.4696
+
+[stderr]

@@ -1,0 +1,84 @@
+TAP version 13
+# Subtest: vault setup protects the idle clock and excludes concurrent application work
+ok 1 - vault setup protects the idle clock and excludes concurrent application work
+  ---
+  duration_ms: 60.6303
+  type: 'test'
+  ...
+# Subtest: file downloads hold sleep without starting Docker and release the lease once
+ok 2 - file downloads hold sleep without starting Docker and release the lease once
+  ---
+  duration_ms: 21.4477
+  type: 'test'
+  ...
+# Subtest: failed browser gate never replaces or stops the previous deployment
+ok 3 - failed browser gate never replaces or stops the previous deployment
+  ---
+  duration_ms: 77.4985
+  type: 'test'
+  ...
+# Subtest: successful pipeline records browser evidence and rejects source changes before promotion
+ok 4 - successful pipeline records browser evidence and rejects source changes before promotion
+  ---
+  duration_ms: 114.4718
+  type: 'test'
+  ...
+# Subtest: rollback verifies the retained image and source while leaving editable work untouched
+ok 5 - rollback verifies the retained image and source while leaving editable work untouched
+  ---
+  duration_ms: 168.0177
+  type: 'test'
+  ...
+# Subtest: failed Compose candidate restores the old stack without deleting persistent volumes
+ok 6 - failed Compose candidate restores the old stack without deleting persistent volumes
+  ---
+  duration_ms: 63.4252
+  type: 'test'
+  ...
+# Subtest: failed Compose partial-stop restores the old stack without deleting persistent volumes
+ok 7 - failed Compose partial-stop restores the old stack without deleting persistent volumes
+  ---
+  duration_ms: 57.2716
+  type: 'test'
+  ...
+# Subtest: vault configuration authenticates, keeps identity private and never exposes the client secret
+ok 8 - vault configuration authenticates, keeps identity private and never exposes the client secret
+  ---
+  duration_ms: 10.1317
+  type: 'test'
+  ...
+# Subtest: secret output is redacted and temporary secret files are removed even on failure
+ok 9 - secret output is redacted and temporary secret files are removed even on failure
+  ---
+  duration_ms: 10.0028
+  type: 'test'
+  ...
+# Subtest: Compose accepts a web backend database stack with persistent managed volume
+ok 10 - Compose accepts a web backend database stack with persistent managed volume
+  ---
+  duration_ms: 1.7201
+  type: 'test'
+  ...
+# Subtest: Compose rejects privileged containers, host mounts, inherited variables and plaintext passwords
+ok 11 - Compose rejects privileged containers, host mounts, inherited variables and plaintext passwords
+  ---
+  duration_ms: 0.4676
+  type: 'test'
+  ...
+# Subtest: real export archive includes sources and evidence, excludes env values and streams every byte behind authentication
+ok 12 - real export archive includes sources and evidence, excludes env values and streams every byte behind authentication
+  ---
+  duration_ms: 244.1691
+  type: 'test'
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 12
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1082.8099
+
+[stderr]

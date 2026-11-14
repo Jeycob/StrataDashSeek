@@ -1,0 +1,120 @@
+TAP version 13
+# Subtest: focused changes pass while broad rewrites after a milestone are recognizable
+ok 1 - focused changes pass while broad rewrites after a milestone are recognizable
+  ---
+  duration_ms: 1.554
+  type: 'test'
+  ...
+# Subtest: complete command logs are archived once and compact diagnostics retain failures
+ok 2 - complete command logs are archived once and compact diagnostics retain failures
+  ---
+  duration_ms: 17.8539
+  type: 'test'
+  ...
+# Subtest: work card changes only for semantic facts; complete verification clears old failures
+ok 3 - work card changes only for semantic facts; complete verification clears old failures
+  ---
+  duration_ms: 1.3693
+  type: 'test'
+  ...
+# Subtest: prefix fingerprints ignore dynamic user context but detect system/schema changes
+ok 4 - prefix fingerprints ignore dynamic user context but detect system/schema changes
+  ---
+  duration_ms: 0.591
+  type: 'test'
+  ...
+# Subtest: context excerpts are bounded and confined, with a current file hash
+ok 5 - context excerpts are bounded and confined, with a current file hash
+  ---
+  duration_ms: 123.2734
+  type: 'test'
+  ...
+# Subtest: one inference stream at a time; waiting request runs while previous task does tools
+ok 6 - one inference stream at a time; waiting request runs while previous task does tools
+  ---
+  duration_ms: 0.7723
+  type: 'test'
+  ...
+# Subtest: FIFO cancellation never releases an active stream early and cleanup is idempotent
+ok 7 - FIFO cancellation never releases an active stream early and cleanup is idempotent
+  ---
+  duration_ms: 0.6531
+  type: 'test'
+  ...
+# Subtest: heavy tool capacity bounds resource contention without serializing every read
+ok 8 - heavy tool capacity bounds resource contention without serializing every read
+  ---
+  duration_ms: 0.7414
+  type: 'test'
+  ...
+# Subtest: compaction retains the existing bounded nonreasoning policy without recursion
+ok 9 - compaction retains the existing bounded nonreasoning policy without recursion
+  ---
+  duration_ms: 0.2177
+  type: 'test'
+  ...
+# Subtest: engine metrics require one unambiguous new record and preserve unknown values
+ok 10 - engine metrics require one unambiguous new record and preserve unknown values
+  ---
+  duration_ms: 0.2603
+  type: 'test'
+  ...
+# Subtest: shared billing is allocated exactly once including failed attempts and idle time
+ok 11 - shared billing is allocated exactly once including failed attempts and idle time
+  ---
+  duration_ms: 0.7356
+  type: 'test'
+  ...
+# Subtest: retries count toward the same task; stale or new work invalidates acceptance
+ok 12 - retries count toward the same task; stale or new work invalidates acceptance
+  ---
+  duration_ms: 0.5775
+  type: 'test'
+  ...
+# Subtest: unknown price windows are explicit and never become zero-cost success
+ok 13 - unknown price windows are explicit and never become zero-cost success
+  ---
+  duration_ms: 0.266
+  type: 'test'
+  ...
+# Subtest: phase overlap and duplicate journal records do not inflate elapsed time
+ok 14 - phase overlap and duplicate journal records do not inflate elapsed time
+  ---
+  duration_ms: 0.1605
+  type: 'test'
+  ...
+# Subtest: billing sampler never exposes credentials or double counts storage
+ok 15 - billing sampler never exposes credentials or double counts storage
+  ---
+  duration_ms: 5.3617
+  type: 'test'
+  ...
+# Subtest: journal capacity and corrupt trailing lines make reports explicitly incomplete
+ok 16 - journal capacity and corrupt trailing lines make reports explicitly incomplete
+  ---
+  duration_ms: 5.9414
+  type: 'test'
+  ...
+# Subtest: resource snapshots use fresh scoped telemetry and never treat stale Apps state as idle
+ok 17 - resource snapshots use fresh scoped telemetry and never treat stale Apps state as idle
+  ---
+  duration_ms: 8.157
+  type: 'test'
+  ...
+# Subtest: continuous billing uses durable observations, counts disk once and exposes unobserved gaps
+ok 18 - continuous billing uses durable observations, counts disk once and exposes unobserved gaps
+  ---
+  duration_ms: 16.3052
+  type: 'test'
+  ...
+1..18
+# tests 18
+# suites 0
+# pass 18
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 312.5509
+
+[stderr]

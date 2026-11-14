@@ -1,0 +1,126 @@
+TAP version 13
+# Subtest: real exit code overrides printed success; zero assertions cannot pass
+ok 1 - real exit code overrides printed success; zero assertions cannot pass
+  ---
+  duration_ms: 311.0221
+  type: 'test'
+  ...
+# Subtest: partial stage differs from full completion
+ok 2 - partial stage differs from full completion
+  ---
+  duration_ms: 403.7851
+  type: 'test'
+  ...
+# Subtest: source mutation makes a passing test stale
+ok 3 - source mutation makes a passing test stale
+  ---
+  duration_ms: 123.2785
+  type: 'test'
+  ...
+# Subtest: old structured evidence is rejected even after successful command
+ok 4 - old structured evidence is rejected even after successful command
+  ---
+  duration_ms: 123.5455
+  type: 'test'
+  ...
+# Subtest: timeout terminates a real process and preserves failure
+ok 5 - timeout terminates a real process and preserves failure
+  ---
+  duration_ms: 691.5481
+  type: 'test'
+  ...
+# Subtest: cancellation releases project lock
+ok 6 - cancellation releases project lock
+  ---
+  duration_ms: 237.6416
+  type: 'test'
+  ...
+# Subtest: concurrent verifications cannot overwrite evidence
+ok 7 - concurrent verifications cannot overwrite evidence
+  ---
+  duration_ms: 18.8846
+  type: 'test'
+  ...
+# Subtest: bounded noisy output retains final counts without a false failure
+ok 8 - bounded noisy output retains final counts without a false failure
+  ---
+  duration_ms: 162.8872
+  type: 'test'
+  ...
+# Subtest: path escape, shell masking and missing required checks are refused
+ok 9 - path escape, shell masking and missing required checks are refused
+  ---
+  duration_ms: 5.1311
+  type: 'test'
+  ...
+# Subtest: test summary parsers cover prepared runtimes
+ok 10 - test summary parsers cover prepared runtimes
+  ---
+  duration_ms: 0.605
+  type: 'test'
+  ...
+# Subtest: browser plan cannot silently ignore misspelled expectations or use foreign ports
+ok 11 - browser plan cannot silently ignore misspelled expectations or use foreign ports
+  ---
+  duration_ms: 0.8571
+  type: 'test'
+  ...
+# Subtest: plugin uses managed root and native confinement and reports once
+ok 12 - plugin uses managed root and native confinement and reports once
+  ---
+  duration_ms: 0.5896
+  type: 'test'
+  ...
+# Subtest: native tool definition uses a concurrency callback
+ok 13 - native tool definition uses a concurrency callback
+  ---
+  duration_ms: 0.1856
+  type: 'test'
+  ...
+# Subtest: plugin invalidates changed source and nonzero native exits
+ok 14 - plugin invalidates changed source and nonzero native exits
+  ---
+  duration_ms: 0.2745
+  type: 'test'
+  ...
+# Subtest: plugin refuses unmanaged projects without executing commands
+ok 15 - plugin refuses unmanaged projects without executing commands
+  ---
+  duration_ms: 0.1937
+  type: 'test'
+  ...
+# Subtest: plugin refuses legacy shared projects without executing commands
+ok 16 - plugin refuses legacy shared projects without executing commands
+  ---
+  duration_ms: 0.1186
+  type: 'test'
+  ...
+# Subtest: manager rejection is returned as failed evidence, never a pass
+ok 17 - manager rejection is returned as failed evidence, never a pass
+  ---
+  duration_ms: 0.211
+  type: 'test'
+  ...
+# Subtest: malformed native runner output cannot earn a manager pass
+ok 18 - malformed native runner output cannot earn a manager pass
+  ---
+  duration_ms: 0.2197
+  type: 'test'
+  ...
+# Subtest: unavailable Chromium produces failure with no invented screenshots
+ok 19 - unavailable Chromium produces failure with no invented screenshots
+  ---
+  duration_ms: 17.9748
+  type: 'test'
+  ...
+1..19
+# tests 19
+# suites 0
+# pass 19
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2228.4216
+
+[stderr]

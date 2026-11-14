@@ -1,0 +1,36 @@
+TAP version 13
+# Subtest: real YAML parser preserves unrelated configuration and never installs two schedulers
+ok 1 - real YAML parser preserves unrelated configuration and never installs two schedulers
+  ---
+  duration_ms: 10.6114
+  type: 'test'
+  ...
+# Subtest: real SDK validates output schemas, preserves canonical status and enforces one-use rewrite policy
+ok 2 - real SDK validates output schemas, preserves canonical status and enforces one-use rewrite policy
+  ---
+  duration_ms: 50.7936
+  type: 'test'
+  ...
+# Subtest: real SDK appends changing work context without changing the reusable system text or tool order
+ok 3 - real SDK appends changing work context without changing the reusable system text or tool order
+  ---
+  duration_ms: 14.3324
+  type: 'test'
+  ...
+# Subtest: real SDK can infer for another task during a heavy tool while serializing provider streams
+ok 4 - real SDK can infer for another task during a heavy tool while serializing provider streams
+  ---
+  duration_ms: 99.2343
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 384.2466
+
+[stderr]

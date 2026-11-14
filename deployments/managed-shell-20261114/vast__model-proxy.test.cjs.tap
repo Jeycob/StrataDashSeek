@@ -1,0 +1,36 @@
+TAP version 13
+# Subtest: workspace controls are bounded, request-local and never enable off-mode thinking
+ok 1 - workspace controls are bounded, request-local and never enable off-mode thinking
+  ---
+  duration_ms: 1.8197
+  type: 'test'
+  ...
+# Subtest: HomeAI defaults preserve explicit budgets and off-mode compaction
+ok 2 - HomeAI defaults preserve explicit budgets and off-mode compaction
+  ---
+  duration_ms: 0.8552
+  type: 'test'
+  ...
+# Subtest: the actual adapter forwards explicit HomeAI wire controls
+ok 3 - the actual adapter forwards explicit HomeAI wire controls
+  ---
+  duration_ms: 87.017
+  type: 'test'
+  ...
+# Subtest: cold-start requests wait for readiness and cancelled waits never reach inference
+ok 4 - cold-start requests wait for readiness and cancelled waits never reach inference
+  ---
+  duration_ms: 112.4629
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 343.0964
+
+[stderr]

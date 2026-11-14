@@ -3,7 +3,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WorkspaceManager } from './manager.mjs';
 import { WorkbenchError, DEFAULTS } from './policy.mjs';
-import { registerProjectTool } from './project-tool.mjs';
+import { createProjectCommandRunner, registerProjectTool } from './project-tool.mjs';
+import { createManagedShell } from './managed-shell.mjs';
 import { sameRequestOrigin, boundedJSON } from './http.mjs';
 import { createRequire } from 'node:module';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
@@ -18,20 +19,26 @@ export async function apply(ctx, config = {}) {
   const environmentReport = config.environmentReport ?? '/data/harness/state/development.json';
   const preflight = doctor({ output: environmentReport, directory: path.join(path.dirname(environmentReport), 'development') }).catch(error => ({ browser: { ok: false, error: error.message }, dotnet: { available: false } }));
   manager.environmentReady = preflight;
-  registerProjectTool(ctx, manager);
-  ctx.on('agent/created', async ({ agent, source, signal }) => { await manager.applyDefaults(agent, source); if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal); }, { global: true });
+  const runProjectCommand = createProjectCommandRunner(ctx, manager);
+  registerProjectTool(ctx, manager, runProjectCommand);
+  const managedShell = createManagedShell(ctx, manager, runProjectCommand);
+  // SDK tool admission precedes pre-step. Register at creation and enrollment,
+  // including seeded future projects, before the first tool-set snapshot.
+  for (const agent of ctx.agents.list()) managedShell.install(agent);
+  ctx.effect(() => () => managedShell.dispose());
+  ctx.on('agent/created', async ({ agent, source, signal }) => { await manager.applyDefaults(agent, source); if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal); managedShell.install(agent); }, { global: true });
   ctx.on('agent/pre-step', async (input, next) => {
     await manager.preStep(input); manager.frozenSettings.set(input.agent.id, { ...manager.settings(manager.ownerAgent(input.agent).session) });
     const decision = await next(), id = manager.ownerAgent(input.agent).id, message = manager.pendingNotices.get(id);
     if (decision.kind === 'enter' && message) { manager.pendingNotices.delete(id); return { ...decision, messages: [...decision.messages, message] }; }
     return decision;
   }, { prepend: true, global: true });
-  ctx.tools.guard(exec => manager.toolGuard({ ...exec, agent: manager.ownerAgent(exec.agent) }));
+  ctx.tools.guard(exec => manager.toolGuard({ ...exec, agent: manager.ownerAgent(exec.agent), managedProjectShell: managedShell.handles(exec) }));
   ctx.on('tools/post-execute', async (exec, result, next) => { if (exec.name !== 'verify_project') await manager.toolResult({ ...exec, agent: manager.ownerAgent(exec.agent) }, result); return next(); }, { global: true });
   ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
   ctx.on('workspace-runtime/review', async ({ sessionId }, next) => (await manager.review(sessionId)) ?? next());
   ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.releaseIfIdle(session.id).catch(() => {}), 0); });
-  ctx.on('agent/disposed', ({ agent }) => { manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
+  ctx.on('agent/disposed', ({ agent }) => { managedShell.remove(agent); manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
   const timer = setInterval(() => { for (const id of manager.running.keys()) void manager.releaseIfIdle(id).catch(() => {}); }, 10000); timer.unref();
   ctx.effect(() => () => clearInterval(timer));
   ctx.on('llm-pi-ai/request-headers', (request, headers, next) => {
@@ -51,7 +58,7 @@ export async function apply(ctx, config = {}) {
     const workspaces = ctx.workspaceRegistry.list().map(w => ({ id: w.id, title: w.title, path: w.path, sessionIds: w.sessionIds, settings: manager.data.workspaces[w.id]?.settings }));
     const projects = Object.fromEntries(Object.entries(manager.data.sessions).map(([id, p]) => [id, { root: p.root, ports: p.ports, databasePath: p.databasePath, baseCommit: p.baseCommit, nativeWorktree: p.nativeWorktree, legacy: p.legacy, budget: p.budget, checkpoints: Object.fromEntries(Object.entries(p.checkpoints ?? {}).map(([k, c]) => [k, { score: c.score, at: c.at, files: c.files }])), checkpointError: p.checkpointError }]));
     const update = await fs.readFile(config.updateReport ?? '/data/harness/state/startup-update.json', 'utf8').then(JSON.parse).then(value => Object.fromEntries(['version','enabled','phase','checkedAt','appliedCommit','targetCommit','error','signatureVerified'].map(key => [key,value[key]]))).catch(() => null);
-    return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, update, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
+    return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, managedShellVersion: 1, update, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
   }
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench', methods: ['GET', 'POST'], requestBody: 'buffered', fetch: async request => {
     try {

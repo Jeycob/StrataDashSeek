@@ -1,0 +1,162 @@
+TAP version 13
+# Subtest: Windows replacement denial falls back to a current diagnostic snapshot
+ok 1 - Windows replacement denial falls back to a current diagnostic snapshot
+  ---
+  duration_ms: 2.1872
+  type: 'test'
+  ...
+# Subtest: FIFO owns a complete turn, not a single model step
+ok 2 - FIFO owns a complete turn, not a single model step
+  ---
+  duration_ms: 9.8351
+  type: 'test'
+  ...
+# Subtest: child inherits ownership; parent waiting for child cannot deadlock
+ok 3 - child inherits ownership; parent waiting for child cannot deadlock
+  ---
+  duration_ms: 0.9045
+  type: 'test'
+  ...
+# Subtest: cancelled waiter is removed without changing the active owner
+ok 4 - cancelled waiter is removed without changing the active owner
+  ---
+  duration_ms: 1.0974
+  type: 'test'
+  ...
+# Subtest: already aborted request never joins the queue
+ok 5 - already aborted request never joins the queue
+  ---
+  duration_ms: 0.2479
+  type: 'test'
+  ...
+# Subtest: abort of owner does not release while its model request is still unwinding
+ok 6 - abort of owner does not release while its model request is still unwinding
+  ---
+  duration_ms: 1.3412
+  type: 'test'
+  ...
+# Subtest: later turn from the same chat goes behind an already queued chat
+ok 7 - later turn from the same chat goes behind an already queued chat
+  ---
+  duration_ms: 0.5023
+  type: 'test'
+  ...
+# Subtest: release is turn-specific and duplicate end events are harmless
+ok 8 - release is turn-specific and duplicate end events are harmless
+  ---
+  duration_ms: 0.3092
+  type: 'test'
+  ...
+# Subtest: repeated pre-step calls use the same receipt without accumulating listeners
+ok 9 - repeated pre-step calls use the same receipt without accumulating listeners
+  ---
+  duration_ms: 0.5509
+  type: 'test'
+  ...
+# Subtest: diagnostic failure does not break ownership or scheduling
+ok 10 - diagnostic failure does not break ownership or scheduling
+  ---
+  duration_ms: 0.4264
+  type: 'test'
+  ...
+# Subtest: dispose rejects all waiters and new work, and clears state
+ok 11 - dispose rejects all waiters and new work, and clears state
+  ---
+  duration_ms: 0.3827
+  type: 'test'
+  ...
+# Subtest: persisted diagnostic state does not retain an owner after the final turn ends
+ok 12 - persisted diagnostic state does not retain an owner after the final turn ends
+  ---
+  duration_ms: 0.2446
+  type: 'test'
+  ...
+# Subtest: every released notification has a settled owner snapshot
+ok 13 - every released notification has a settled owner snapshot
+  ---
+  duration_ms: 0.2253
+  type: 'test'
+  ...
+# Subtest: an unavailable logger cannot prevent the final status file update
+ok 14 - an unavailable logger cannot prevent the final status file update
+  ---
+  duration_ms: 22.7488
+  type: 'test'
+  ...
+# Subtest: FIFO remains ordered with fifty unrelated chats and cancelled waiters
+ok 15 - FIFO remains ordered with fifty unrelated chats and cancelled waiters
+  ---
+  duration_ms: 2.6356
+  type: 'test'
+  ...
+# Subtest: root ancestry is followed and cycles cannot hang scheduling
+ok 16 - root ancestry is followed and cycles cannot hang scheduling
+  ---
+  duration_ms: 0.2288
+  type: 'test'
+  ...
+# Subtest: plugin gates before automatic compaction and passes unconfigured providers through
+ok 17 - plugin gates before automatic compaction and passes unconfigured providers through
+  ---
+  duration_ms: 3.7326
+  type: 'test'
+  ...
+# Subtest: manual compaction from another session waits behind the active root turn
+ok 18 - manual compaction from another session waits behind the active root turn
+  ---
+  duration_ms: 1.0524
+  type: 'test'
+  ...
+# Subtest: compaction gets a real text budget without changing ordinary reasoning
+ok 19 - compaction gets a real text budget without changing ordinary reasoning
+  ---
+  duration_ms: 0.4934
+  type: 'test'
+  ...
+# Subtest: same-root LLM calls serialize across the full streamed iterator lifetime
+ok 20 - same-root LLM calls serialize across the full streamed iterator lifetime
+  ---
+  duration_ms: 0.8987
+  type: 'test'
+  ...
+# Subtest: early consumer return and adapter failure release all stream leases
+ok 21 - early consumer return and adapter failure release all stream leases
+  ---
+  duration_ms: 0.373
+  type: 'test'
+  ...
+# Subtest: constructing an unconsumed stream does not claim any scheduling ownership
+ok 22 - constructing an unconsumed stream does not claim any scheduling ownership
+  ---
+  duration_ms: 0.2114
+  type: 'test'
+  ...
+# Subtest: a cancelled auxiliary stream never dispatches its adapter
+ok 23 - a cancelled auxiliary stream never dispatches its adapter
+  ---
+  duration_ms: 0.2289
+  type: 'test'
+  ...
+# Subtest: nested agent-owned auxiliary requests without sessionId inherit the current root
+ok 24 - nested agent-owned auxiliary requests without sessionId inherit the current root
+  ---
+  duration_ms: 0.297
+  type: 'test'
+  ...
+# Subtest: resumed oversized requests are capped without changing model or effort
+ok 25 - resumed oversized requests are capped without changing model or effort
+  ---
+  duration_ms: 0.2066
+  type: 'test'
+  ...
+1..25
+# tests 25
+# suites 0
+# pass 25
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 204.9252
+
+[stderr]

@@ -1,0 +1,30 @@
+TAP version 13
+# Subtest: Native live and cold session roots use their own isolated projects
+ok 1 - Native live and cold session roots use their own isolated projects
+  ---
+  duration_ms: 2.0307
+  type: 'test'
+  ...
+# Subtest: unknown, trashed and malformed project roots cannot borrow another project
+ok 2 - unknown, trashed and malformed project roots cannot borrow another project
+  ---
+  duration_ms: 0.5279
+  type: 'test'
+  ...
+# Subtest: atomic registry replacements refresh cached roots; invalid registries fail closed
+ok 3 - atomic registry replacements refresh cached roots; invalid registries fail closed
+  ---
+  duration_ms: 17.2566
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 159.3149
+
+[stderr]

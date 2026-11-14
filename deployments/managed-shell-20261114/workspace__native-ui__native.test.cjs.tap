@@ -1,0 +1,18 @@
+TAP version 13
+# Subtest: rc.2 Native Settings, CtrlAltP, Docker and EN/CZ compose on desktop and mobile
+ok 1 - rc.2 Native Settings, CtrlAltP, Docker and EN/CZ compose on desktop and mobile
+  ---
+  duration_ms: 13436.3081
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 13578.5588
+
+[stderr]

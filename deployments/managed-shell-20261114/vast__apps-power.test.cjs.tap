@@ -1,0 +1,96 @@
+TAP version 13
+# Subtest: an available Docker API cannot restore containers before fresh bootstrap and isolation proof
+ok 1 - an available Docker API cannot restore containers before fresh bootstrap and isolation proof
+  ---
+  duration_ms: 266.2786
+  type: 'test'
+  ...
+# Subtest: failed guest isolation never becomes ready even when the Docker API is reachable
+ok 2 - failed guest isolation never becomes ready even when the Docker API is reachable
+  ---
+  duration_ms: 264.3785
+  type: 'test'
+  ...
+# Subtest: VM shutdown inspects all owners first and awaits every stop before reporting a failure
+ok 3 - VM shutdown inspects all owners first and awaits every stop before reporting a failure
+  ---
+  duration_ms: 50.3038
+  type: 'test'
+  ...
+# Subtest: listing asleep containers never starts Docker or renews the idle clock
+ok 4 - listing asleep containers never starts Docker or renews the idle clock
+  ---
+  duration_ms: 16.3244
+  type: 'test'
+  ...
+# Subtest: accepted project work protects sleep before demand-starting the worker
+ok 5 - accepted project work protects sleep before demand-starting the worker
+  ---
+  duration_ms: 55.0968
+  type: 'test'
+  ...
+# Subtest: new work invalidates sleep preparation and is not accepted during the transition
+ok 6 - new work invalidates sleep preparation and is not accepted during the transition
+  ---
+  duration_ms: 48.4767
+  type: 'test'
+  ...
+# Subtest: preview traffic holds sleep until the request is released exactly once
+ok 7 - preview traffic holds sleep until the request is released exactly once
+  ---
+  duration_ms: 22.138
+  type: 'test'
+  ...
+# Subtest: explicit awake lease is bounded and can be released without waiting
+ok 8 - explicit awake lease is bounded and can be released without waiting
+  ---
+  duration_ms: 19.7369
+  type: 'test'
+  ...
+# Subtest: a passive VM naps after ten minutes without resetting actual user activity
+ok 9 - a passive VM naps after ten minutes without resetting actual user activity
+  ---
+  duration_ms: 13.7842
+  type: 'test'
+  ...
+# Subtest: busy work and awake lease prevent a VM nap
+ok 10 - busy work and awake lease prevent a VM nap
+  ---
+  duration_ms: 18.0848
+  type: 'test'
+  ...
+# Subtest: failed VM poweroff cancels whole-instance sleep preparation
+ok 11 - failed VM poweroff cancels whole-instance sleep preparation
+  ---
+  duration_ms: 11.9013
+  type: 'test'
+  ...
+# Subtest: bootstrap refuses to reformat an initialized volume or fetch replacement packages
+ok 12 - bootstrap refuses to reformat an initialized volume or fetch replacement packages
+  ---
+  duration_ms: 0.4504
+  type: 'test'
+  ...
+# Subtest: simultaneous wake requests share one worker startup
+ok 13 - simultaneous wake requests share one worker startup
+  ---
+  duration_ms: 25.3476
+  type: 'test'
+  ...
+# Subtest: application proxy rejects the Harness hostname before waking or forwarding cookies
+ok 14 - application proxy rejects the Harness hostname before waking or forwarding cookies
+  ---
+  duration_ms: 51.6763
+  type: 'test'
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 14
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1040.1649
+
+[stderr]

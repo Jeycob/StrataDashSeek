@@ -1,0 +1,18 @@
+TAP version 13
+# Subtest: benchmark expiry never selects production or acts without fixed valid settings
+ok 1 - benchmark expiry never selects production or acts without fixed valid settings
+  ---
+  duration_ms: 25.9014
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 151.5622
+
+[stderr]

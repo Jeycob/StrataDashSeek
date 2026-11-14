@@ -1,0 +1,54 @@
+TAP version 13
+# Subtest: wake portal serves English and Czech and executable client JavaScript
+ok 1 - wake portal serves English and Czech and executable client JavaScript
+  ---
+  duration_ms: 24.7166
+  type: 'test'
+  ...
+# Subtest: HTTP 200 provider failure is never reported as a successful wake
+ok 2 - HTTP 200 provider failure is never reported as a successful wake
+  ---
+  duration_ms: 10.9255
+  type: 'test'
+  ...
+# Subtest: overlapping foreground wakes share one provider transition
+ok 3 - overlapping foreground wakes share one provider transition
+  ---
+  duration_ms: 29.683
+  type: 'test'
+  ...
+# Subtest: authentication, CSRF, signed cookies, fixed instance and idempotent wake
+ok 4 - authentication, CSRF, signed cookies, fixed instance and idempotent wake
+  ---
+  duration_ms: 5.3697
+  type: 'test'
+  ...
+# Subtest: only the configured private Harness origin may use its provisioned wake key
+ok 5 - only the configured private Harness origin may use its provisioned wake key
+  ---
+  duration_ms: 1.0914
+  type: 'test'
+  ...
+# Subtest: conditional status stays authenticated, shares cache and exposes only bounded diagnostic counts
+ok 6 - conditional status stays authenticated, shares cache and exposes only bounded diagnostic counts
+  ---
+  duration_ms: 2.7241
+  type: 'test'
+  ...
+# Subtest: provider Retry-After is preserved and repeat requests do not hammer a limited provider
+ok 7 - provider Retry-After is preserved and repeat requests do not hammer a limited provider
+  ---
+  duration_ms: 3.7105
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 202.9997
+
+[stderr]

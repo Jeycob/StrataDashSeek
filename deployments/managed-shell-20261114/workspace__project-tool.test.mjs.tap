@@ -1,0 +1,54 @@
+TAP version 13
+# Subtest: commands get the project cwd, trusted environment and an explicit project fence even in full-access sessions
+ok 1 - commands get the project cwd, trusted environment and an explicit project fence even in full-access sessions
+  ---
+  duration_ms: 12.7241
+  type: 'test'
+  ...
+# Subtest: a first read-only command does not create caches or grant writable roots
+ok 2 - a first read-only command does not create caches or grant writable roots
+  ---
+  duration_ms: 7.652
+  type: 'test'
+  ...
+# Subtest: separate projects and child agents keep their own owner environment
+ok 3 - separate projects and child agents keep their own owner environment
+  ---
+  duration_ms: 6.4682
+  type: 'test'
+  ...
+# Subtest: absolute, relative and symlink directory escapes fail before command execution
+ok 4 - absolute, relative and symlink directory escapes fail before command execution
+  ---
+  duration_ms: 8.1523
+  type: 'test'
+  ...
+# Subtest: invalid or wider arguments and missing confinement never run a command
+ok 5 - invalid or wider arguments and missing confinement never run a command
+  ---
+  duration_ms: 5.7
+  type: 'test'
+  ...
+# Subtest: exit codes and timeouts are retained, while caller cancellation is drained before returning
+ok 6 - exit codes and timeouts are retained, while caller cancellation is drained before returning
+  ---
+  duration_ms: 23.7953
+  type: 'test'
+  ...
+# Subtest: the trusted managed-shell marker never overrides Trash, repair stops or outside paths
+ok 7 - the trusted managed-shell marker never overrides Trash, repair stops or outside paths
+  ---
+  duration_ms: 0.9012
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 189.723
+
+[stderr]

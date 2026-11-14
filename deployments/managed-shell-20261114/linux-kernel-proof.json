@@ -1,0 +1,25 @@
+{
+  "at": "2026-11-14T22:45:13.880Z",
+  "platform": "linux",
+  "node": "v24.21.0",
+  "passed": true,
+  "checks": [
+    "actual Native bash and assigned environment, full-access capped to project",
+    "kernel refuses writes outside project",
+    "first read-only call works without creating cache directories",
+    "kernel retains read-only write denial",
+    "real nonzero exit preserved",
+    "repaired shop helper starts through actual Native confinement",
+    "repaired shop self-stop works across separate Native tool calls"
+  ],
+  "sourceHashes": {
+    "workspace/project-tool.mjs": "0ce7a4b9e62880cb6f3128d47b954968a7f80364a4bd32286e3272e8383104a7",
+    "workspace/managed-shell.mjs": "d6c60de8de14c98f3eb7b8b4dbda49e80f52f4baf6b05be77e017f22673c8d65",
+    "workspace/policy.mjs": "923e8bb03cb98cf9e951182645d2f474128248c02ff3df734cf14fdcc871969a",
+    "development/project-run.cjs": "a1d2c2b889ef7a734e32df86f898c011e95feced06d66492652bcdeee1595cbf"
+  },
+  "realSdk": true,
+  "realKernelConfinement": true,
+  "modelRequests": 0,
+  "existingServicesRestarted": false
+}

@@ -9,6 +9,8 @@ to distinguish first installation, ordinary wake and optional Apps. The
 [request budget](docs/request-budget.md) separates Worker traffic from direct
 Vast billing reads and private monitoring. A [read-only disk review](docs/disk-plan-20261114.md)
 identifies specific migration artifacts for review; it authorizes no deletion.
+For isolated projects, [managed commands](docs/managed-commands.md) explains how
+ordinary `bash` calls share the confined `project_exec` environment across chats.
 
 ```mermaid
 flowchart LR

@@ -1,0 +1,18 @@
+TAP version 13
+# Subtest: real Chromium distinguishes working shop from four known UI regressions
+ok 1 - real Chromium distinguishes working shop from four known UI regressions
+  ---
+  duration_ms: 13158.2876
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 13314.0063
+
+[stderr]

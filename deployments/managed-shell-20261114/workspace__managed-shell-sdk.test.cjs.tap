@@ -1,0 +1,54 @@
+TAP version 13
+# Subtest: real Native bash schema validates a scoped managed body without mutating call arguments
+ok 1 - real Native bash schema validates a scoped managed body without mutating call arguments
+  ---
+  duration_ms: 89.0503
+  type: 'test'
+  ...
+# Subtest: real SDK preserves native nonzero, timeout and sandbox facts instead of reporting a tool launch failure
+ok 2 - real SDK preserves native nonzero, timeout and sandbox facts instead of reporting a tool launch failure
+  ---
+  duration_ms: 4.4078
+  type: 'test'
+  ...
+# Subtest: SDK cancellation before dispatch does not enter the managed command body
+ok 3 - SDK cancellation before dispatch does not enter the managed command body
+  ---
+  duration_ms: 3.8131
+  type: 'test'
+  ...
+# Subtest: SDK cancellation after body start waits for quiescence and reports started ABORTED
+ok 4 - SDK cancellation after body start waits for quiescence and reports started ABORTED
+  ---
+  duration_ms: 6.6911
+  type: 'test'
+  ...
+# Subtest: admission identity rejects the old tool snapshot and other guards still take precedence
+ok 5 - admission identity rejects the old tool snapshot and other guards still take precedence
+  ---
+  duration_ms: 3.9685
+  type: 'test'
+  ...
+# Subtest: legacy and old unknown sessions retain Native bash; removal and disposal release only managed shadows
+ok 6 - legacy and old unknown sessions retain Native bash; removal and disposal release only managed shadows
+  ---
+  duration_ms: 5.6314
+  type: 'test'
+  ...
+# Subtest: a future seeded session admits the managed definition before its first project is provisioned
+ok 7 - a future seeded session admits the managed definition before its first project is provisioned
+  ---
+  duration_ms: 4.2383
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 256.3498
+
+[stderr]

@@ -1,0 +1,39 @@
+import { createProjectCommandRunner, projectCommandParameters } from './project-tool.mjs';
+
+const stream = value => ({ text: value.text, truncated: Boolean(value.truncated), ...(value.spillPath === undefined ? {} : { spillPath: value.spillPath }) });
+function foreground({ cwd, spec, result }) {
+  return { kind: 'foreground', cwd, exitCode: result.exitCode, signal: result.signal ?? null, timedOut: result.timedOut, aborted: result.aborted, timeoutMs: result.timeoutMs ?? spec.timeoutMs, stdout: stream(result.stdout), stderr: stream(result.stderr), ...(result.sandbox ? { sandbox: { mode: result.sandbox.mode, denied: result.sandbox.denied, ...(result.sandbox.enforcement === undefined ? {} : { enforcement: result.sandbox.enforcement }), ...(result.sandbox.runnerFailed === undefined ? {} : { runnerFailed: result.sandbox.runnerFailed }) } } : {}) };
+}
+function render(_args, value) {
+  const text = part => part.text + (part.truncated ? '\n[output truncated; full output: ' + (part.spillPath ?? '(unavailable)') + ']' : '');
+  const out = text(value.stdout), err = text(value.stderr);
+  let body = out + (err ? (out && !out.endsWith('\n') ? '\n' : '') + '[stderr]\n' + err : '');
+  if (!body) body = '(no output)';
+  const markers = [];
+  if (value.sandbox?.denied) markers.push('[sandbox: file access denied under ' + value.sandbox.mode + ' mode]');
+  if (value.timedOut) markers.push('[timed out after ' + value.timeoutMs + 'ms]');
+  if (value.signal !== null) markers.push('[killed by signal: ' + value.signal + ']');
+  else if (value.exitCode !== 0) markers.push('[exit code: ' + value.exitCode + ']');
+  return [{ type: 'text', text: body + (markers.length ? (body.endsWith('\n') ? '' : '\n') + markers.join('\n') : '') }];
+}
+
+// Scoped registrations are a supported SDK seam. No frozen tool execution is
+// rewritten and no pre-execute/approval middleware is bypassed.
+export function createManagedShell(ctx, manager, run = createProjectCommandRunner(ctx, manager)) {
+  const registrations = new Map(), definitions = new WeakSet();
+  function candidate(agent) {
+    const owner = manager.ownerAgent(agent); if (!owner) return false;
+    const record = manager.data.sessions[owner.id]; if (record) return !record.legacy;
+    const created = typeof owner.session.header.createdAt === 'number' ? owner.session.header.createdAt : Date.parse(owner.session.header.createdAt);
+    return !manager.existing.has(owner.id) && Number.isFinite(created) && created >= manager.data.installedAt;
+  }
+  function install(agent) {
+    if (registrations.has(agent) || !candidate(agent)) return;
+    const original = ctx.tools.get('bash', agent); if (!original || definitions.has(original)) return;
+    const definition = { ...original, description: 'Run a foreground bash command in this isolated project with its assigned ports, database and prepared tools. This is the same confined executor as project_exec. Commands time out and stop after at most 120000ms. Inspect real exit codes. Background and permission escalation arguments are not supported for managed commands.', parameters: projectCommandParameters, isConcurrencySafe: () => false, output: { ...original.output, render }, async execute(args, execution) { return foreground(await run(args, execution)); } };
+    const dispose = agent.ctx.tools.register(definition); definitions.add(definition); registrations.set(agent, { definition, dispose });
+  }
+  function handles(exec) { return exec.name === 'bash' && Boolean(exec.agent) && definitions.has(ctx.tools.get('bash', exec.agent, exec.toolSet)); }
+  function remove(agent) { const entry = registrations.get(agent); if (!entry) return; entry.dispose(); definitions.delete(entry.definition); registrations.delete(agent); }
+  return { install, handles, remove, dispose() { for (const agent of [...registrations.keys()]) remove(agent); } };
+}

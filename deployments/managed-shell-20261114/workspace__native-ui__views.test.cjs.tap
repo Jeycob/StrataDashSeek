@@ -1,0 +1,18 @@
+TAP version 13
+# Subtest: Native views isolate files, retain drafts, use safe CRUD and never wake on read
+ok 1 - Native views isolate files, retain drafts, use safe CRUD and never wake on read
+  ---
+  duration_ms: 1835.359
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1991.065
+
+[stderr]

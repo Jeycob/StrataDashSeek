@@ -1,0 +1,18 @@
+TAP version 13
+# Subtest: desktop wakes, waits and uses the latest official login without manual pairing
+ok 1 - desktop wakes, waits and uses the latest official login without manual pairing
+  ---
+  duration_ms: 24.3346
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 143.1036
+
+[stderr]

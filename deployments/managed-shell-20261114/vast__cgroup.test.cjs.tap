@@ -1,0 +1,36 @@
+TAP version 13
+# Subtest: cgroup v1 CPU nanoseconds normalize to microseconds and quota cores
+ok 1 - cgroup v1 CPU nanoseconds normalize to microseconds and quota cores
+  ---
+  duration_ms: 1.8078
+  type: 'test'
+  ...
+# Subtest: cgroup v2 CPU uses affinity as well as quota
+ok 2 - cgroup v2 CPU uses affinity as well as quota
+  ---
+  duration_ms: 0.3442
+  type: 'test'
+  ...
+# Subtest: cgroup v1 RAM reports its hard limit and includes own file cache
+ok 3 - cgroup v1 RAM reports its hard limit and includes own file cache
+  ---
+  duration_ms: 0.2962
+  type: 'test'
+  ...
+# Subtest: v1 I/O excludes Sync, Async and Total rows instead of double counting
+ok 4 - v1 I/O excludes Sync, Async and Total rows instead of double counting
+  ---
+  duration_ms: 0.3472
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 142.3756
+
+[stderr]

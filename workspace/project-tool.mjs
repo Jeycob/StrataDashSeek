@@ -1,22 +1,45 @@
 import path from 'node:path';
+import fs from 'node:fs/promises';
 import { WorkbenchError, within } from './policy.mjs';
 const quote = text => "'" + String(text).replaceAll("'", "'\\''") + "'";
-export function registerProjectTool(ctx, manager) {
+export const projectCommandParameters = { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' }, workdir: { type: 'string' }, timeoutMs: { type: 'number' } }, required: ['command', 'description'], additionalProperties: false };
+
+// Both model-facing command names enter the same bounded, confining executor.
+export function createProjectCommandRunner(ctx, manager, config = {}) {
+  return async (args, execution) => {
+    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !Object.hasOwn(projectCommandParameters.properties, key))) throw new WorkbenchError('INVALID_COMMAND', 'Only command, description, workdir and timeoutMs are supported for managed foreground commands.', 400);
+    if (typeof args.command !== 'string' || !args.command.trim() || args.command.length > 65536 || typeof args.description !== 'string' || !args.description.trim()) throw new WorkbenchError('INVALID_COMMAND', 'A bounded command and description are required.', 400);
+    if (args.workdir !== undefined && typeof args.workdir !== 'string' || args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0)) throw new WorkbenchError('INVALID_COMMAND', 'Invalid command directory or timeout.', 400);
+    const agent = manager.ownerAgent(execution.agent), project = manager.data.sessions[agent?.id];
+    if (!project || project.legacy) throw new WorkbenchError('NO_MANAGED_PROJECT', 'Start a new isolated project to use this tool.');
+    const cwd = path.resolve(project.root, args.workdir ?? '.');
+    if (!within(project.root, cwd)) throw new WorkbenchError('OUTSIDE_PROJECT', 'Command directory is outside the project.', 403);
+    const [realRoot, realCwd] = await Promise.all([fs.realpath(project.root), fs.realpath(cwd)]);
+    if (!within(realRoot, realCwd)) throw new WorkbenchError('OUTSIDE_PROJECT', 'Command directory resolves outside the project.', 403);
+    if (ctx.shell.sandboxMode === undefined || !ctx.sandboxPolicy) throw new WorkbenchError('NO_PROJECT_SANDBOX', 'A filesystem-confining shell and policy are required; refusing unconfined execution.', 503);
+    const standing = ctx.sandboxPolicy.resolve({ session: execution.agent.session });
+    if (!['read-only', 'workspace-write', 'danger-full-access'].includes(standing.mode)) throw new WorkbenchError('NO_PROJECT_SANDBOX', 'Unknown project execution policy.', 503);
+    const mode = standing.mode === 'read-only' ? 'read-only' : 'workspace-write';
+    const node = config.nodePath ?? '/data/harness/node/bin/node', wrapper = config.wrapperPath ?? '/data/harness/app/development/project-run.cjs';
+    if (![node, wrapper].every(value => path.isAbsolute(value))) throw new WorkbenchError('INVALID_RUNTIME_CONFIG', 'Absolute project runtime paths are required.');
+    execution.signal.throwIfAborted();
+    const command = 'exec ' + [node, wrapper, '--', 'bash', '-o', 'pipefail', '-c', args.command].map(quote).join(' ');
+    const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: Math.min(120000, Math.max(1000, args.timeoutMs ?? 60000)), signal: execution.signal, onExpiry: 'kill', dshEnv: { ...ctx.shellEnv.collect(execution), DSH_PROJECT_ROOT: project.root, DSH_PROJECT_READ_ONLY: mode === 'read-only' ? '1' : '0' }, sandboxPolicy: { mode, workspaceRoot: project.root, additionalWritableRoots: mode === 'read-only' ? [] : project.gitWritableRoots ?? [] } });
+    const result = await (await ctx.shell.execute(spec)).result();
+    execution.signal.throwIfAborted();
+    if (result.aborted) { const error = Error('Project command aborted'); error.name = 'AbortError'; throw error; }
+    return { cwd, spec, result };
+  };
+}
+
+export function registerProjectTool(ctx, manager, run = createProjectCommandRunner(ctx, manager)) {
   const tool = {
     name: 'project_exec',
     description: 'Run a shell command inside this isolated project. Writes are confined to its directory. PORT, API_PORT, DATABASE_URL, prepared Playwright and optional .NET paths are set automatically. Use direct verification commands such as npm test, npm run build or dotnet test; do not mask their exit status with pipelines or || true. Commands are cancelled on timeout. Use this instead of bash for managed projects.',
-    parameters: { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' }, workdir: { type: 'string' }, timeoutMs: { type: 'number' } }, required: ['command', 'description'], additionalProperties: false },
+    parameters: projectCommandParameters,
     output: { schema: { type: 'object', properties: { cwd: { type: 'string' }, exitCode: { oneOf: [{ type: 'integer' }, { type: 'null' }] }, stdout: { type: 'string' }, stderr: { type: 'string' }, timedOut: { type: 'boolean' } }, required: ['cwd', 'exitCode', 'stdout', 'stderr', 'timedOut'], additionalProperties: false }, render: (_args, v) => [{ type: 'text', text: `Exit code: ${v.exitCode}${v.timedOut ? ' (timed out)' : ''}\n${v.stdout}${v.stderr ? '\n[stderr]\n' + v.stderr : ''}` }] },
     async execute(args, execution) {
-      const agent = manager.ownerAgent(execution.agent), project = manager.data.sessions[agent?.id];
-      if (!project || project.legacy) throw new WorkbenchError('NO_MANAGED_PROJECT', 'Start a new isolated project to use this tool.');
-      if (typeof args.command !== 'string' || !args.command.trim() || args.command.length > 65536 || typeof args.description !== 'string') throw new WorkbenchError('INVALID_COMMAND', 'A bounded command and description are required.', 400);
-      const cwd = path.resolve(project.root, args.workdir ?? '.'); if (!within(project.root, cwd)) throw new WorkbenchError('OUTSIDE_PROJECT', 'Command directory is outside the project.', 403);
-      if (ctx.shell.sandboxMode === undefined) throw new WorkbenchError('NO_PROJECT_SANDBOX', 'A filesystem-confining shell is required; refusing unconfined execution.', 503);
-      const command = 'exec /data/harness/node/bin/node /data/harness/app/development/project-run.cjs -- bash -o pipefail -c ' + quote(args.command);
-      const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: Math.min(120000, Math.max(1000, Number(args.timeoutMs) || 60000)), dshEnv: ctx.shellEnv.collect(execution), signal: execution.signal, sandboxPolicy: { mode: 'workspace-write', workspaceRoot: project.root, additionalWritableRoots: project.gitWritableRoots ?? [] } });
-      const result = await (await ctx.shell.execute(spec)).result();
-      if (execution.signal.aborted || result.aborted) throw execution.signal.reason ?? Error('Project command aborted');
+      const { cwd, result } = await run(args, execution);
       return { cwd, exitCode: result.exitCode, stdout: result.stdout.text, stderr: result.stderr.text, timedOut: result.timedOut };
     },
   };

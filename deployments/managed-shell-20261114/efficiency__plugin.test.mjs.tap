@@ -1,0 +1,54 @@
+TAP version 13
+# Subtest: large overwrite denial is synchronous at the final guard; explanation is one-use and hash-bound
+ok 1 - large overwrite denial is synchronous at the final guard; explanation is one-use and hash-bound
+  ---
+  duration_ms: 23.417
+  type: 'test'
+  ...
+# Subtest: resumed local sessions retain the legacy output ceiling without changing other providers
+ok 2 - resumed local sessions retain the legacy output ceiling without changing other providers
+  ---
+  duration_ms: 7.6006
+  type: 'test'
+  ...
+# Subtest: small edits remain allowed and existing denial is never overridden
+ok 3 - small edits remain allowed and existing denial is never overridden
+  ---
+  duration_ms: 9.7285
+  type: 'test'
+  ...
+# Subtest: a large apply_patch cannot bypass explanation and multi-file grants are consumed together
+ok 4 - a large apply_patch cannot bypass explanation and multi-file grants are consumed together
+  ---
+  duration_ms: 17.3583
+  type: 'test'
+  ...
+# Subtest: log compaction preserves failure exit status, images and the immutable canonical result
+ok 5 - log compaction preserves failure exit status, images and the immutable canonical result
+  ---
+  duration_ms: 16.086
+  type: 'test'
+  ...
+# Subtest: working summary is appended context; system policy and original messages are unchanged
+ok 6 - working summary is appended context; system policy and original messages are unchanged
+  ---
+  duration_ms: 7.3769
+  type: 'test'
+  ...
+# Subtest: actual streamed iterator completion owns release, including thrown provider and cancelled queue
+ok 7 - actual streamed iterator completion owns release, including thrown provider and cancelled queue
+  ---
+  duration_ms: 35.1515
+  type: 'test'
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 241.9916
+
+[stderr]

@@ -1,0 +1,150 @@
+TAP version 13
+# Subtest: project registration confines paths and rejects invalid manifests
+ok 1 - project registration confines paths and rejects invalid manifests
+  ---
+  duration_ms: 21.1596
+  type: 'test'
+  ...
+# Subtest: build snapshot excludes credentials, preserves exact source and enforces limits
+ok 2 - build snapshot excludes credentials, preserves exact source and enforces limits
+  ---
+  duration_ms: 41.2782
+  type: 'test'
+  ...
+# Subtest: snapshot rejects links even when they would point to another project
+ok 3 - snapshot rejects links even when they would point to another project
+  ---
+  duration_ms: 20.3185
+  type: 'test'
+  ...
+# Subtest: source identity binds file boundaries so embedded filenames cannot hide a changed tree
+ok 4 - source identity binds file boundaries so embedded filenames cannot hide a changed tree
+  ---
+  duration_ms: 17.6423
+  type: 'test'
+  ...
+# Subtest: Docker connections refuse nonlocal plaintext endpoints
+ok 5 - Docker connections refuse nonlocal plaintext endpoints
+  ---
+  duration_ms: 0.6921
+  type: 'test'
+  ...
+# Subtest: stream parser failures reject the request instead of crashing the worker
+ok 6 - stream parser failures reject the request instead of crashing the worker
+  ---
+  duration_ms: 31.7361
+  type: 'test'
+  ...
+# Subtest: Docker response sizes are bounded
+ok 7 - Docker response sizes are bounded
+  ---
+  duration_ms: 4.2489
+  type: 'test'
+  ...
+# Subtest: Docker multiplexed logs decode both stdout and stderr
+ok 8 - Docker multiplexed logs decode both stdout and stderr
+  ---
+  duration_ms: 0.2555
+  type: 'test'
+  ...
+# Subtest: successful build records an immutable image and handles split UTF-8
+ok 9 - successful build records an immutable image and handles split UTF-8
+  ---
+  duration_ms: 90.1066
+  type: 'test'
+  ...
+# Subtest: failed build does not become a deployable image
+ok 10 - failed build does not become a deployable image
+  ---
+  duration_ms: 59.1072
+  type: 'test'
+  ...
+# Subtest: deployment uses the built manifest and image, then retires the old container
+ok 11 - deployment uses the built manifest and image, then retires the old container
+  ---
+  duration_ms: 37.0842
+  type: 'test'
+  ...
+# Subtest: failed candidate leaves the previous deployment alone
+ok 12 - failed candidate leaves the previous deployment alone
+  ---
+  duration_ms: 33.4594
+  type: 'test'
+  ...
+# Subtest: replacement deployment preserves the public preview address while changing its backend port
+ok 13 - replacement deployment preserves the public preview address while changing its backend port
+  ---
+  duration_ms: 42.1335
+  type: 'test'
+  ...
+# Subtest: HTTP-only checks are explicitly distinguished from application tests
+ok 14 - HTTP-only checks are explicitly distinguished from application tests
+  ---
+  duration_ms: 33.5909
+  type: 'test'
+  ...
+# Subtest: single and Compose previews reserve unique stable addresses independently of backend ports
+ok 15 - single and Compose previews reserve unique stable addresses independently of backend ports
+  ---
+  duration_ms: 20.1437
+  type: 'test'
+  ...
+# Subtest: historical Compose containers cannot start separately against a current database volume
+ok 16 - historical Compose containers cannot start separately against a current database volume
+  ---
+  duration_ms: 31.2149
+  type: 'test'
+  ...
+# Subtest: application tests use a bounded separate container and preserve the application
+ok 17 - application tests use a bounded separate container and preserve the application
+  ---
+  duration_ms: 41.8134
+  type: 'test'
+  ...
+# Subtest: unmanaged container cannot be stopped and operations cannot overlap
+ok 18 - unmanaged container cannot be stopped and operations cannot overlap
+  ---
+  duration_ms: 25.2296
+  type: 'test'
+  ...
+# Subtest: worker service requires a private key and CLI cannot choose a remote daemon
+ok 19 - worker service requires a private key and CLI cannot choose a remote daemon
+  ---
+  duration_ms: 76.7042
+  type: 'test'
+  ...
+# Subtest: disabled worker performs no Docker calls and cannot enqueue builds
+ok 20 - disabled worker performs no Docker calls and cannot enqueue builds
+  ---
+  duration_ms: 33.9379
+  type: 'test'
+  ...
+# Subtest: activity is published immediately before an asynchronous build
+ok 21 - activity is published immediately before an asynchronous build
+  ---
+  duration_ms: 101.0676
+  type: 'test'
+  ...
+# Subtest: failed application test reports its exit code and cleans only its test container
+ok 22 - failed application test reports its exit code and cleans only its test container
+  ---
+  duration_ms: 41.5051
+  type: 'test'
+  ...
+# Subtest: phone application routes preserve Harness authentication, Origin checks and private worker key
+ok 23 - phone application routes preserve Harness authentication, Origin checks and private worker key
+  ---
+  duration_ms: 98.9984
+  type: 'test'
+  ...
+1..23
+# tests 23
+# suites 0
+# pass 23
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1112.9739
+
+[stderr]
