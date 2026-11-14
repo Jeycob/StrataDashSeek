@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-14T17:04:23.736Z",
+  "at": "2026-11-14T17:05:31.977Z",
   "instanceId": 60637500,
   "coreRuntimeDeployed": true,
   "coreVerifiedBeforeStop": true,
@@ -23,5 +23,10 @@
     "realModelProbes": 6,
     "additionalWakeAndMaintenance": 6
   },
-  "noNewRentals": true
+  "noNewRentals": true,
+  "capacityRetryFinished": true,
+  "capacityRetryPassed": false,
+  "localRetryProcessStopped": true,
+  "providerError": "Required resources are currently unavailable, state change queued.",
+  "officialCapacityExplanation": "https://github.com/vast-ai/docs/blob/main/guides/reference/troubleshooting.mdx"
 }
