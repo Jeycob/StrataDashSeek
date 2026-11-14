@@ -1,4 +1,14 @@
 import test from 'node:test';import assert from 'node:assert/strict';import worker from './worker.mjs';
+import { Script } from 'node:vm';
+test('wake portal serves English and Czech and executable client JavaScript',async()=>{
+ const settings={HARNESS_URL:'https://harness.example.ts.net/phone/'};
+ const en=await worker.fetch(new Request('https://wake.example.com/?lang=en'),settings);
+ assert.match(await en.text(),/Your remote Harness/u);
+ const cs=await worker.fetch(new Request('https://wake.example.com/?lang=cs'),settings);
+ assert.match(await cs.text(),/Tvůj vzdálený Harness/u);
+ const script=await worker.fetch(new Request('https://wake.example.com/app.js'),settings);
+ assert.equal(script.status,200);const source=await script.text();assert.doesNotThrow(()=>new Script(source));
+});
 const origin='https://wake.example.com',env={WAKE_ACCESS_KEY:'a'.repeat(64),VAST_API_KEY:'test-only',INSTANCE_ID:'42',HARNESS_URL:'https://harness.example.ts.net/phone/'};
 const req=(path,method='GET',body,cookie)=>new Request(origin+path,{method,headers:{Origin:origin,...(cookie?{Cookie:cookie}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});
 test('authentication, CSRF, signed cookies, fixed instance and idempotent wake',async()=>{
