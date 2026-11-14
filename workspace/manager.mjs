@@ -251,6 +251,7 @@ export class WorkspaceManager {
     delete this.data.trash[id]; await this.save(); return { restored: true };
   }
   async projectFor(id) {
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(id)) throw new WorkbenchError('INVALID_SESSION', 'Invalid conversation.', 400);
     const live = this.ctx.sessions.get(id), stored = live ? undefined : await this.ctx.sessionPersistence.stat(id);
     const header = live?.header ?? stored?.header; if (!header) throw new WorkbenchError('SESSION_NOT_FOUND', 'Conversation not found.', 404);
     return { root: this.data.sessions[id]?.root ?? (live ? this.ctx.workingDirectory.get(live) : header.cwd), live, header };
