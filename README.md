@@ -138,7 +138,7 @@ Trash and enforced repair/stage limits. Open More → Projects and files or
 Ctrl+Alt+P. The custom panel/shell support EN/CZ. Browser and optional .NET
 runtimes are prepared once and checked locally at startup.
 
-Recorded validation: 13 real native integration checks, 116 Node regressions,
+Recorded validation: 13 real native integration checks, 119 Node regressions,
 32 Python regressions, real Chromium screenshots/console/WebGL and a .NET
 compile/run. Six real model probes verified Off versus Low/Medium wire settings
 and actual reasoning blocks; all six small code-analysis answers were correct.
