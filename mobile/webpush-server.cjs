@@ -112,7 +112,7 @@ function createPushServer(cfg,adapter=webpush){
    }
    if(!await authorized(req))return json(res,401,{error:'Tento prohlížeč ještě není propojený s Harness serverem.'});
    if(u.pathname.startsWith('/phone/api/apps/')){
-    const route=u.pathname.slice('/phone/api/apps'.length),getRoutes=['/state','/job-log','/container-log','/releases'],postRoutes=['/register','/scaffold','/vault-config','/project-settings','/target-settings','/project-action','/container-action','/worker-action','/hold','/preview-settings'];
+    const route=u.pathname.slice('/phone/api/apps'.length),getRoutes=['/state','/job-log','/container-log','/releases','/release'],postRoutes=['/register','/scaffold','/vault-config','/project-settings','/target-settings','/project-action','/container-action','/worker-action','/hold','/preview-settings'];
     if(req.method==='GET'&&route==='/export-download')return streamExport(u.searchParams.get('id'),res,{keyFile:cfg.appsKeyFile||'/data/harness/secrets/apps-internal.key',port:cfg.appsPort||3093});
     if(!(req.method==='GET'&&getRoutes.includes(route)||req.method==='POST'&&postRoutes.includes(route)))return json(res,404,{error:'Not found'});
     const payload=req.method==='POST'?await body(req):undefined;

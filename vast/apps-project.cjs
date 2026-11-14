@@ -35,10 +35,10 @@ async function snapshot(project,destination,{maxBytes=128*1024*1024,maxFiles=120
    if(!(await input.stat()).isFile())throw Error('Build source is not a regular file');
    const actual=await fs.realpath(process.platform==='linux'?'/proc/self/fd/'+input.fd:source);
    if(!inside(project.directory,actual))throw Error('Build source escaped project directory');
-   output=await fs.open(target,'wx',stat.mode&511);hash.update(rel+'\0');hash.update(String(stat.mode&511)+'\0');
-   for await(const chunk of input.createReadStream({autoClose:false})){bytes+=chunk.length;if(bytes>maxBytes)throw Error('Build context exceeds its size limit');hash.update(chunk);await output.writeFile(chunk);}
+   output=await fs.open(target,'wx',stat.mode&511);hash.update(JSON.stringify([rel,stat.mode&511,stat.size])+'\n');let fileBytes=0;
+   for await(const chunk of input.createReadStream({autoClose:false})){bytes+=chunk.length;fileBytes+=chunk.length;if(bytes>maxBytes)throw Error('Build context exceeds its size limit');hash.update(chunk);await output.writeFile(chunk);}if(fileBytes!==stat.size)throw Error('Source file changed during snapshot: '+rel);
   }finally{await input.close();await output?.close();}
  }}
- await copy('');return{bytes,files,sha256:hash.digest('hex')};
+ await copy('');return{version:2,bytes,files,sha256:hash.digest('hex')};
 }
 module.exports={projectAt,snapshot,inside,excluded};

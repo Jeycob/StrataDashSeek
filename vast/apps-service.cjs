@@ -16,7 +16,8 @@ function createAppsService(cfg={},injected){
   if(req.method==='GET'&&u.pathname==='/job-log')return json(res,200,{text:manager.jobLog(u.searchParams.get('id'))});
   if(req.method==='GET'&&u.pathname==='/container-log')return json(res,200,{text:await manager.logs(u.searchParams.get('id'))});
   if(req.method==='GET'&&u.pathname==='/releases')return json(res,200,{releases:await manager.releaseList(u.searchParams.get('id'))});
-  if(req.method==='GET'&&u.pathname==='/export-download'){const e=manager.exportFile(u.searchParams.get('id')),s=fs.statSync(e.file);res.writeHead(200,{'Content-Type':'application/gzip','Content-Length':s.size,'Content-Disposition':'attachment; filename="'+e.filename+'"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});const input=fs.createReadStream(e.file);input.on('error',()=>res.destroy());req.on('close',()=>input.destroy());return input.pipe(res);}
+  if(req.method==='GET'&&u.pathname==='/release')return json(res,200,{release:await manager.releaseDetail(u.searchParams.get('id'),u.searchParams.get('releaseId'))});
+  if(req.method==='GET'&&u.pathname==='/export-download'){const e=manager.exportFile(u.searchParams.get('id')),s=fs.statSync(e.file);res.writeHead(200,{'Content-Type':'application/gzip','Content-Length':s.size,'Content-Disposition':'attachment; filename="'+e.filename+'"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});const input=fs.createReadStream(e.file);input.on('error',()=>res.destroy());res.on('close',()=>input.destroy());return input.pipe(res);}
   if(req.method!=='POST')return json(res,404,{error:'Not found'});
   let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>16384)throw Object.assign(Error('Request too large'),{status:413});}let data;try{data=JSON.parse(raw)}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}
   if(u.pathname==='/register')return json(res,200,await manager.register(data.path));

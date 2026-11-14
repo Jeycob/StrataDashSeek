@@ -125,7 +125,7 @@ def main():
                     if not decide(time.time(),last,life3,model3,jobs_running(cfg.get('ignoreDetachedPreviews',False),apps3),lease3,cfg.get('idleSeconds',300),apps3)[0]:
                         audit('sleep_cancelled',reason='new activity after Docker save');continue
                     if token and application_call('confirm-sleep',{'token':token},10).get('ready') is not True:raise RuntimeError('Application sleep token changed')
-                    key=(ROOT/'root-secrets/vast-api.key').read_text().strip()
+                    key=pathlib.Path(cfg.get('vastApiKeyFile',str(ROOT/'root-secrets/vast-api.key'))).read_text().strip()
                     req=urllib.request.Request('https://console.vast.ai/api/v0/instances/'+str(cfg['instanceId'])+'/',data=b'{"state":"stopped"}',headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},method='PUT')
                     with urllib.request.urlopen(req,timeout=15) as r:
                         result=json.load(r)
