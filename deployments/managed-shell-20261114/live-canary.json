@@ -1,0 +1,60 @@
+{
+  "at": "2026-11-14T23:01:36.863Z",
+  "commit": "04f71b2ff1ead3f8a6c4c2371d12a4a97751a127",
+  "sessionId": "session-c2697e89-e3f4-4876-a5a4-82b449dc1f46",
+  "userInitiated": true,
+  "source": "Actual live Native session events; commands hashed to avoid exporting project source",
+  "asOfSeq": 81,
+  "calls": [
+    {
+      "callId": "call_c2989b55465f458083d07acc",
+      "commandSha256": "ae30333e7fc9c49e9915faec1bd80f8b0c70506db53fcf06e261d37ed1d8d921",
+      "isError": false,
+      "cwd": "/data/harness/workspaces/projects/session-c2697e89-e3f4-4876-a5a4-82b449dc1f46",
+      "exitCode": 1,
+      "legacyGuardError": false
+    },
+    {
+      "callId": "call_a4fa89853a974d599bd90227",
+      "commandSha256": "4c7657a866cd900b4bb5a5bcf0c93d60274e7ed1288f25487d2ff41dfa68bf64",
+      "isError": false,
+      "cwd": "/data/harness/workspaces/projects/session-c2697e89-e3f4-4876-a5a4-82b449dc1f46",
+      "exitCode": 0,
+      "legacyGuardError": false
+    },
+    {
+      "callId": "call_452c1412f6b847e99c67b980",
+      "commandSha256": "80c6fba7eedd5880f37e02d5401dd7dd6e978180471d551f9c3383b1f112266a",
+      "isError": false,
+      "cwd": "/data/harness/workspaces/projects/session-c2697e89-e3f4-4876-a5a4-82b449dc1f46",
+      "exitCode": 0,
+      "legacyGuardError": false
+    },
+    {
+      "callId": "call_569bd4a28de34f11ae6b438d",
+      "commandSha256": "4e7b47bd9f97f3598efab1fd8c43fe9107093d987d712f261f93f3d598c35b09",
+      "isError": false,
+      "cwd": "/data/harness/workspaces/projects/session-c2697e89-e3f4-4876-a5a4-82b449dc1f46",
+      "exitCode": 0,
+      "legacyGuardError": false
+    },
+    {
+      "callId": "call_5b404b454da64abdb454c628",
+      "commandSha256": "b9de06e806233bad00929d4958db52b1ed680591c68e30df4ba4d1105c6a39e5",
+      "isError": false,
+      "cwd": "/data/harness/workspaces/projects/session-c2697e89-e3f4-4876-a5a4-82b449dc1f46",
+      "exitCode": 0,
+      "legacyGuardError": false
+    },
+    {
+      "callId": "call_4c4b9aab312042c993def1c9",
+      "commandSha256": "ff25542253f015ec4460dc9ecae1047a91b89d2921bfb5bbce01e82f3990cc37",
+      "isError": false,
+      "cwd": "/data/harness/workspaces/projects/session-c2697e89-e3f4-4876-a5a4-82b449dc1f46",
+      "exitCode": 1,
+      "legacyGuardError": false
+    }
+  ],
+  "passed": true,
+  "applicationCompletionClaimed": false
+}

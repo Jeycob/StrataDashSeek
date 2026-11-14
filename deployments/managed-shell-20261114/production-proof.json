@@ -1,0 +1,24 @@
+{
+  "at": "2026-11-14T22:52:14.031Z",
+  "commit": "04f71b2ff1ead3f8a6c4c2371d12a4a97751a127",
+  "signatureVerified": true,
+  "managedShellVersion": 1,
+  "harnessPidBefore": 157,
+  "harnessPidAfter": 21273,
+  "unchangedProtectedServices": {
+    "strata": true,
+    "tailscaled": true,
+    "model-proxy": true,
+    "proxy": true,
+    "push-watcher": true,
+    "telemetry": true,
+    "idle-guard": true,
+    "efficiency-billing": true,
+    "applications": true,
+    "push": true
+  },
+  "profileUnchanged": true,
+  "sessionsBefore": 50,
+  "sessionsAfter": 50,
+  "passed": true
+}

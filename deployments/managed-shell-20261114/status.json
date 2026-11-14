@@ -609,5 +609,8 @@
   },
   "safetyScope": "Actual Native Host and Chromium are local; SDK shell seams are inert in unit tests. No claim of kernel confinement proof here; HomeAI owns independent Linux provider proof.",
   "linuxKernelProof": "linux-kernel-proof.json",
-  "deploymentStatus": "tested-awaiting-controlled-activation"
+  "deploymentStatus": "production-loaded-and-live-routing-verified",
+  "productionProof": "production-proof.json",
+  "liveCanary": "live-canary.json",
+  "ownMaintenanceLeaseReleased": true
 }
