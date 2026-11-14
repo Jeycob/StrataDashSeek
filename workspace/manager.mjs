@@ -100,7 +100,7 @@ export class WorkspaceManager {
       record = { root, sourceRoot: current, workspaceId: workspace?.id, ports, databasePath, baseCommit, branch, nativeWorktree, at: Date.now(), settings };
       this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save();
       await atomicJSON(path.join(root, '.harness', 'project.json'), { sessionId: agent.id, ports, databasePath, baseCommit, root });
-      this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. Use project_exec for shell commands; it confines writes to this checkout and automatically exports PORT, API_PORT, DATABASE_URL and the prepared tool paths. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs. Validate each milestone; repeated failing checks or an unverified stage exceeding ${settings.maxStageSteps} steps will pause the run for a user strategy decision.`));
+      this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. Use project_exec for shell commands; it confines writes to this checkout and automatically exports PORT, API_PORT, DATABASE_URL and the prepared tool paths. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Validate each milestone; repeated failing checks or an unverified stage exceeding ${settings.maxStageSteps} steps will pause the run for a user strategy decision.`));
       return record;
     });
   }
@@ -108,6 +108,10 @@ export class WorkspaceManager {
     const initiator = agent.id; agent = this.ownerAgent(agent);
     if (this.data.trash[agent.id]) throw new WorkbenchError('SESSION_IN_TRASH', 'Restore this conversation before continuing.');
     const record = await this.ensureProject(agent, signal);
+    if (!record.legacy && this.environmentReady) {
+      const environment = await this.environmentReady, kind = this.settings(agent.session).environment;
+      if (kind === 'web' && !environment.browser?.ok || kind === 'dotnet' && !environment.dotnet?.available) throw new WorkbenchError('ENVIRONMENT_UNAVAILABLE', 'Prepared environment preflight failed. Open Workspace → Environment; do not install replacements.', 503);
+    }
     await this.locks.acquire(record.root, agent.id); this.running.set(agent.id, record.root);
     const budget = this.budgets.get(agent.id), settings = this.settings(agent.session);
     // One admission per proposed step; retries do not consume a second stage step.
@@ -265,7 +269,8 @@ export class WorkspaceManager {
       if (operation === 'mkdir') { await fs.mkdir(file, { mode: 0o755 }); return { created: true }; }
       if (operation === 'download') { const data = await this.ctx.fs.readBytes(target, signal, 10 * 1024 * 1024); return { bytes: data, name: path.basename(file) }; }
       if (operation === 'upload') {
-        const data = Buffer.from(args.base64 ?? '', 'base64'); if (data.length > 4 * 1024 * 1024) throw new WorkbenchError('TOO_LARGE', 'Upload limit is 4 MiB.', 413);
+        if (typeof args.base64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(args.base64)) throw new WorkbenchError('INVALID_UPLOAD', 'Expected base64 file content.', 400);
+        const data = Buffer.from(args.base64, 'base64'); if (data.length > 4 * 1024 * 1024) throw new WorkbenchError('TOO_LARGE', 'Upload limit is 4 MiB.', 413);
         await fs.writeFile(file, data, { flag: 'wx', mode: 0o644 }); return { uploaded: true };
       }
       throw new WorkbenchError('UNKNOWN_OPERATION', 'Unknown file operation.', 400);

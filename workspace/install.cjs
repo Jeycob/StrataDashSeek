@@ -3,7 +3,7 @@ const fs=require('node:fs'),path=require('node:path'),{createRequire}=require('n
 function addWorkspaceRuntime(text,yaml,options={}){
  const root=options.appRoot||'/data/harness/app',stateRoot=options.stateRoot||'/data/harness/state/workbench',projectsRoot=options.projectsRoot||'/data/harness/workspaces/projects';
  const doc=yaml.parseDocument(text);if(doc.errors.length)throw doc.errors[0];const rows=doc.contents.items;
- const definitions=[{id:'cloud-native-worktrees',name:'@deepseek-ai/dsh-experimental-worktree',config:{retainOnArchive:true}},{id:'cloud-workspace-runtime',name:'file://'+root+'/workspace/plugin.mjs',config:{stateRoot,projectsRoot,environmentReport:options.environmentReport||'/data/harness/state/development.json'}}];
+ const definitions=[{id:'cloud-native-worktrees',name:'@deepseek-ai/dsh-experimental-worktree',config:{retainOnArchive:true}},{id:'cloud-workspace-runtime',name:'file://'+root+'/workspace/plugin.mjs',config:{stateRoot,projectsRoot,environmentReport:options.environmentReport||'/data/harness/state/development.json'}},...(options.quality===false?[]:[{id:'cloud-quality-gates',name:'file://'+root+'/quality/plugin.mjs'}])];
  let changed=false;for(const entry of definitions)if(!rows.some(x=>x.get?.('id')===entry.id||x.get?.('insert')?.items?.some(y=>y.get?.('id')===entry.id))){rows.push(doc.createNode({insert:[entry]}));changed=true;}
  return changed?String(doc):text;
 }

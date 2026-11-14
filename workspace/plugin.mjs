@@ -5,6 +5,8 @@ import { WorkspaceManager } from './manager.mjs';
 import { WorkbenchError, DEFAULTS } from './policy.mjs';
 import { registerProjectTool } from './project-tool.mjs';
 import { sameRequestOrigin, boundedJSON } from './http.mjs';
+import { createRequire } from 'node:module';
+const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
 export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees'];
@@ -12,6 +14,10 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 export async function apply(ctx, config = {}) {
   const manager = new WorkspaceManager(ctx, config); await manager.initialize();
+  // Local, bounded checks only: never install or download during a cold start.
+  const environmentReport = config.environmentReport ?? '/data/harness/state/development.json';
+  const preflight = doctor({ output: environmentReport, directory: path.join(path.dirname(environmentReport), 'development') }).catch(error => ({ browser: { ok: false, error: error.message }, dotnet: { available: false } }));
+  manager.environmentReady = preflight;
   registerProjectTool(ctx, manager);
   ctx.on('agent/created', async ({ agent, source, signal }) => { await manager.applyDefaults(agent, source); if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal); }, { global: true });
   ctx.on('agent/pre-step', async (input, next) => {
