@@ -37,7 +37,7 @@ def main():
             jobs=jobs_running();lease=load(ROOT/'state/maintenance.json').get('until',0) if (ROOT/'state/maintenance.json').exists() else 0
             if life.get('active') or model.get('busy') or model.get('queued') or jobs:last=now
             stop,reason=decide(now,last,life,model,jobs,lease,cfg.get('idleSeconds',300))
-            state={'at':now,'canStop':stop,'reason':reason,'idleSeconds':max(0,int(now-max(last,life.get('lastActivity',now*1000)/1000)))}
+            state={'at':now,'canStop':stop,'reason':reason,'idleTimeoutSeconds':cfg.get('idleSeconds',300),'idleSeconds':max(0,int(now-max(last,life.get('lastActivity',now*1000)/1000)))}
             (ROOT/'state/idle-status.json').write_text(json.dumps(state))
             if stop and cfg.get('enabled',False):
                 # Second read prevents stopping across an observed new turn.
@@ -53,3 +53,4 @@ def main():
         except Exception as error:print('Idle guard holding: '+type(error).__name__,flush=True)
         time.sleep(5)
 if __name__=='__main__':main()
+

@@ -112,3 +112,5 @@ Official references: [Harness source](https://github.com/deepseek-ai/deepseek-ha
 ## Recorded deployment
 
 `deployments/2026-11-14-homeai-iq3/` contains sanitized settings actually captured from the deployed stack, a checksum manifest and verification results. Take a new sanitized snapshot and push it before changing production configurations or versions. Private backups stay outside Git. Hardware search results are observations, not proof of inference speed; benchmark the same model and tasks before promoting another host.
+
+Monitor telemetry normalizes CPU to the container quota and uses cgroup I/O counters rather than other tenants' host activity. It also exposes elapsed generation time, output budget and whole-turn queue ages. Energy remains an estimate for the GPU only, measured since the telemetry process started.
