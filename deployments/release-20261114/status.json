@@ -10,19 +10,19 @@
     "feat/container-workbench"
   ],
   "node": {
-    "startedAt": 1794678752697,
-    "finishedAt": 1794678766440,
+    "startedAt": 1794684778700,
+    "finishedAt": 1794684799016,
     "platform": "win32",
     "node": "v24.21.0",
     "source": {
-      "sha256": "e63c5478508d4f487eb753c193aa23cf4e61d8460d6f94677b4a46b813e638a1",
+      "sha256": "4de357060b805e1b3cc8a464db110263ab204cbca2579b9c397d49d3d13c4f4a",
       "files": 192,
       "definition": "Sorted tracked JS/Python/config/UI paths and LF-normalized UTF-8 content; release evidence excluded."
     },
     "stale": false,
     "passed": true,
     "files": 26,
-    "passedTests": 153,
+    "passedTests": 154,
     "failedTests": 0,
     "skippedTests": 0,
     "results": [
@@ -87,7 +87,7 @@
         "exitCode": 0,
         "timedOut": false,
         "counts": {
-          "passed": 6,
+          "passed": 7,
           "failed": 0
         },
         "skipped": 0
@@ -341,9 +341,9 @@
     ]
   },
   "deployment": {
-    "status": "blocked",
+    "status": "scheduler-deployed-billing-pending",
     "liveReleaseVerified": false,
-    "reason": "Existing Vast instance has no available provider resources.",
+    "reason": "Production scheduler activated through HMR with no model or Harness restart. HomeAI owns separate billing activation.",
     "wake": {
       "at": 1794678450185,
       "instanceId": 60637500,
@@ -357,11 +357,20 @@
       "available": false
     },
     "pending": [
-      "Wait for existing instance capacity; do not rent a replacement automatically.",
-      "Upload pending mobile/phone-boot.js, shared/i18n.cjs and shared/ui-copy.cjs from main.",
-      "Verify native mobile, Apple workflow and container persistence.",
-      "Verify efficiency on isolated Linux fixtures before activating scheduler or billing.",
-      "Deploy merged main only after server-side checks pass."
-    ]
+      "HomeAI to activate and verify the separate root-only billing collector in its supervisor/vault maintenance.",
+      "Confirm billing observations and final production health before marking the entire release verified."
+    ],
+    "postwake": {
+      "evidence": "postwake-readonly.json",
+      "at": "2026-11-14T19:17:20.576Z",
+      "reportedBy": "Vast.AI",
+      "baselineVerified": true,
+      "pendingThreeAssetsDeployed": true,
+      "efficiencyActivated": true,
+      "physicalApplePushTested": false,
+      "dockerPersistenceReportedPassedByHomeAI": true
+    },
+    "efficiencyFixture": "efficiency-native.json",
+    "efficiencyActivation": "efficiency-activation.json"
   }
 }

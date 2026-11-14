@@ -1,0 +1,45 @@
+{
+  "at": "2026-11-14T19:17:20.576Z",
+  "readOnly": true,
+  "native": {
+    "pid": 139,
+    "pluginPid": 139,
+    "loaded": true,
+    "pidMatches": true,
+    "lifecycleFresh": true,
+    "active": 0,
+    "ownerAPI": true,
+    "workspaceRuntimeEntries": 1,
+    "qualityEntries": 1
+  },
+  "history": {
+    "sessionCount": 47,
+    "knownConversationPresent": true,
+    "knownConversationAsOfSeq": 2193,
+    "registeredProjects": 3,
+    "managedProjects": 3,
+    "missingRoots": 0,
+    "badManifests": 0
+  },
+  "apple": {
+    "activeRegistrations": 1,
+    "retiredRegistrations": 1,
+    "activeAppleRegistrations": 1,
+    "internalStateHTTP": 200,
+    "watcherOnline": true,
+    "registeredCountMatches": true
+  },
+  "assets": {
+    "mobile/phone-boot.js": true,
+    "shared/i18n.cjs": true,
+    "shared/ui-copy.cjs": true
+  },
+  "services": {
+    "webReady": true,
+    "modelHealthHTTP": 200,
+    "modelLoaded": true,
+    "browserPreflight": true,
+    "dotnetAvailable": true
+  },
+  "passed": true
+}

@@ -32,6 +32,11 @@ export async function apply(ctx,config={}){
     try{const file=config.statusPath??path.join(directory,'queue.json'),temp=file+'.'+process.pid+'.tmp';fssync.mkdirSync(path.dirname(file),{recursive:true});fssync.writeFileSync(temp,JSON.stringify({...state,updatedAt:new Date().toISOString(),implementation:'efficiency-request-v1'}),{mode:0o600});fssync.renameSync(temp,file);}catch{}
   }});
   const toolGate=new FairGate({capacity:config.maxHeavyTools??1});
+  // Preserve the legacy gate's output ceiling for resumed sessions.
+  ctx.on('agent/request',async(_input,next)=>{
+    const request=await next();if(!providers.has(request.provider))return request;
+    return{...request,maxTokens:Math.min(request.maxTokens??32768,config.maxTokens??32768)};
+  },{global:true});
   // Stable content only. All task paths/errors are appended as runtime context.
   ctx.systemPrompt.section({name:'efficiency:stable-work-policy',order:650,text:POLICY,interpolate:false});
   ctx.systemPrompt.context({name:'efficiency:work-card',order:230,text:assembly=>{const agent=assembly.agent??ctx.agents.get(assembly.scope?.id);const id=agent?idOf(agent):undefined;return id?cards.get(id)?.render()??'':'';},interpolate:false});

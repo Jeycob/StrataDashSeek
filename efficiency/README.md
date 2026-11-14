@@ -134,8 +134,15 @@ and another task's inference during a heavy tool with max one provider stream.
 Set `EFFICIENCY_SDK_ROOT` to the pinned runtime's `node_modules` and run
 `node --test efficiency/core.test.mjs efficiency/plugin.test.mjs efficiency/sdk.test.mjs`.
 
-The Linux native-Harness fixture and production activation remain uncompleted:
-after the coordinated stop test Vast reported that the original instance's GPU
-resources were unavailable. No replacement was rented and no production scheduler
-was changed. Run `efficiency/smoke.cjs` only after the other chats confirm ready,
-then coordinate one scheduler replacement and the separate billing collector.
+After provider capacity recovered, the isolated Linux native-Harness fixture
+passed all eight checks, including preserving the original file on a denied
+overwrite, focused context, log errors, acceptance events and stable tool order.
+The final synthetic second task took1669ms with the whole-turn gate and148ms with
+the request gate; paired wall time was2333ms versus2185ms. This used a fake model,
+not GPU inference, and does not establish a Qwen throughput gain.
+The production scheduler was then replaced through HMR after two fresh checks
+confirmed no running or queued work. Harness PID139 was preserved, the model was
+not restarted, and the profile was backed up. Exactly one efficiency scheduler
+is configured and loaded; the legacy scheduler is absent. The resumed-session
+32768 output-token ceiling remains in force. HomeAI owns activation of the
+separate billing collector. See `deployments/release-20261114/` for evidence.

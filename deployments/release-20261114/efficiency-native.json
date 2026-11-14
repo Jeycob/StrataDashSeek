@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "checks": {
+    "semantic-installer-is-idempotent-and-single-scheduler": true,
+    "turn-single-stream-and-expected-overlap": true,
+    "request-single-stream-and-expected-overlap": true,
+    "native-denied-write-preserves-source": true,
+    "native-focused-context-and-one-use-rewrite": true,
+    "native-log-compaction-preserves-error": true,
+    "native-cost-and-verified-acceptance-events": true,
+    "native-stable-tool-order": true
+  },
+  "results": [
+    {
+      "mode": "turn",
+      "secondTaskLatencyMs": 1669,
+      "pairedWallMs": 2333,
+      "maxActive": 1,
+      "overlap": false,
+      "calls": 3
+    },
+    {
+      "mode": "request",
+      "secondTaskLatencyMs": 148,
+      "pairedWallMs": 2185,
+      "maxActive": 1,
+      "overlap": true,
+      "calls": 13
+    }
+  ],
+  "realHarness": true,
+  "realModel": false,
+  "usedGPU": false,
+  "source": {
+    "sha256": "4de357060b805e1b3cc8a464db110263ab204cbca2579b9c397d49d3d13c4f4a",
+    "files": 192,
+    "definition": "Sorted tracked JS/Python/config/UI paths and LF-normalized UTF-8 content; release evidence excluded."
+  },
+  "limitation": "Synthetic fake-provider integration, not a Qwen performance benchmark."
+}
