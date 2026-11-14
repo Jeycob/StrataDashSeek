@@ -4,8 +4,8 @@
   "implementation": "3260e3e",
   "documentation": "b28fb14",
   "tests": {
-    "startedAt": 1794687953125,
-    "finishedAt": 1794687974561,
+    "startedAt": 1794688160043,
+    "finishedAt": 1794688185127,
     "platform": "win32",
     "node": "v24.21.0",
     "source": {
@@ -386,6 +386,25 @@
   },
   "deployment": {
     "performed": false,
-    "reason": "HomeAI owns server and Worker maintenance; no deployment lease handed over yet."
+    "reason": "Worker-only maintenance lease granted; deployment prepared. Vast is asleep with capacity unavailable; do not deploy monitor/server files."
+  },
+  "pythonIntegration": {
+    "platform": "Ubuntu WSL",
+    "passed": true,
+    "tests": 32,
+    "files": [
+      "vast/test-idle-guard.py",
+      "vast/test-preview-settings.py",
+      "vast/test-session-migration.py"
+    ]
+  },
+  "completedAppsMilestone": {
+    "ownerDeclaredReady": true,
+    "source": "ec101d1",
+    "merge": "e2acf93",
+    "ownerReportedColdSleepSeconds": 41.7,
+    "ownerReportedColdWakeSeconds": 154.4,
+    "ownerReportedPersistencePassed": true,
+    "note": "Owner-reported production milestone. No server deployment was performed by this merge."
   }
 }
