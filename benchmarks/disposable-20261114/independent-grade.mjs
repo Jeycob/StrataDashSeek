@@ -1,0 +1,21 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+import assert from 'node:assert/strict';
+const root=path.resolve(process.argv[2]);
+const {buildReport:run}=await import(pathToFileURL(path.join(root,'csv-agent/src/report.mjs')));
+const H='id,date,category,amount_czk,status\n',checks=[];
+function check(name,fn){try{fn();checks.push({name,passed:true})}catch(e){checks.push({name,passed:false,error:e.message})}}
+check('supplied fixture numeric oracle',()=>{const r=run(fs.readFileSync(path.join(root,'csv-agent/data/expenses.csv'),'utf8'));assert.equal(r.postedCount,7);assert.equal(r.totalCzk,'1460.50');assert.deepEqual(r.months,[{month:'2026-09',totalCzk:'1234.56'},{month:'2026-10',totalCzk:'215.64'},{month:'2026-11',totalCzk:'10.30'}])});
+check('BOM CRLF leap year quoted commas',()=>assert.equal(run('\uFEFF'+H.replace('\n','\r\n')+'a,2024-02-29,"Food, home",0.10,posted\r\nb,2024-02-29,"Food, home",0.20,posted\r\n').totalCzk,'0.30'));
+check('refunds pending deduplication',()=>assert.deepEqual(run(H+'a,2026-11-01,X,-0.10,posted\na,2026-11-01,X,-0.10,posted\nb,2026-11-01,Y,10.00,pending'),{postedCount:1,totalCzk:'-0.10',months:[{month:'2026-11',totalCzk:'-0.10'}],categories:[{category:'X',totalCzk:'-0.10'}]}));
+check('normalized category',()=>assert.deepEqual(run(H+'a,2026-01-01, Cafe\u0301 ,1.00,posted\nb,2026-01-02,Café,2.00,posted').categories,[{category:'Café',totalCzk:'3.00'}]));
+check('malformed rows',()=>{for(const row of ['a,2026-02-30,X,1.00,posted','a,2026-11-01,X,1.1,posted','a,2026-11-01,X,90071992547409.92,posted','a,2026-11-01,X,1.00,unknown','a,2026-11-01,"X,1.00,posted','a,2026-11-01,"X"oops,1.00,posted','a,2026-11-01,X,1.00'])assert.throws(()=>run(H+row),TypeError)});
+check('empty report',()=>assert.deepEqual(run(H.slice(0,-1)),{postedCount:0,totalCzk:'0.00',months:[],categories:[]}));
+for(const tail of [',',',,',',,,'])check('reject extra columns '+tail.length,()=>assert.throws(()=>run(H+'z,2026-12-01,Q,3.20,posted'+tail),TypeError));
+check('trailing delimiter header with LF',()=>assert.throws(()=>run(H.trim()+',\n'),TypeError));
+check('quoted final field EOF accepted',()=>assert.equal(run(H+'z,2026-12-01,Q,3.20,"posted"').totalCzk,'3.20'));
+check('negative category subtotal cannot hide in positive category',()=>assert.throws(()=>run(H+['a,2026-01-01,Q,-90071992547409.91,posted','b,2026-01-01,R,90071992547409.91,posted','c,2026-01-01,Q,-0.01,posted'].join('\n')),TypeError));
+check('negative month subtotal cannot hide in other month',()=>assert.throws(()=>run(H+['a,2026-01-01,Q,-90071992547409.91,posted','b,2026-02-01,Q,90071992547409.91,posted','c,2026-01-01,Q,-0.01,posted'].join('\n')),TypeError));
+check('unsafe intermediate total rejected despite later cancellation',()=>assert.throws(()=>run(H+['a,2026-01-01,Q,90071992547409.91,posted','b,2026-01-01,Q,0.01,posted','c,2026-01-01,Q,-0.01,posted'].join('\n')),TypeError));
+const result={passed:checks.every(x=>x.passed),passedChecks:checks.filter(x=>x.passed).length,checkCount:checks.length,checks};fs.writeFileSync(path.join(root,'independent-grade.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));

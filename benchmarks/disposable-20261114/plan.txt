@@ -1,0 +1,37 @@
+Plán omezeného porovnání hardwaru – 14. 11. 2026
+
+Produkce zůstává na Vast 60529418: RTX 4060 Ti 16 GB, 96 GB disk,
+0,14756 USD/h při běhu včetně disku. Zastavený disk stojí asi 10,24 USD/měsíc.
+
+Kandidát z nabídky v 00:20 UTC: Q RTX 8000 48 GB, offer 57992482,
+128 723 MiB host RAM, gpu_frac=1, 32 efektivních vCPU,
+0,23822 USD/h včetně 96 GB disku. Dostupnost a cenu znovu ověřit.
+Alternativa RTX A5000 24 GB, offer 37734321, 193 184 MiB RAM,
+0,22667 USD/h. Rychlost žádného kandidáta zatím nebyla změřena.
+
+Levné nabídky s vysokou host RAM mohou přidělovat jen její zlomek:
+například 128 GB host RAM × gpu_frac 0,125 znamená asi 16 GB pro pronájem.
+Takové nabídky nejsou vhodné pro tento IQ3 model.
+
+Před placeným testem je nutné schválit dodatečný limit 1 USD.
+Test: jediná dočasná instance, maximálně 60 minut od vytvoření,
+poté odstranit pouze tuto testovací instanci včetně jejího disku.
+Při neúspěchu stahování nebo nedostatku času test ukončit a zdokumentovat.
+Přenos 84,5 GB při 0,002604 USD/GB je přibližně 0,22 USD;
+hodina uvedeného pronájmu asi 0,24 USD. Rezerva je na inicializaci a přenosy.
+Před vytvořením připravit nezávislý časový hlídač úklidu mimo testovací stroj.
+Produkční disk, historie, přístupové tokeny ani notifikace se nekopírují.
+
+Metodika: stejný IQ3_S model, Strata engine, kontext a Harness profil jako
+produkce. Zaznamenat skutečný cgroup limit RAM a CPU, nikoliv pouze nabídku.
+Ověřit podporu GPU při startu. Nejprve krátká odpověď a nástrojové volání,
+pak shodný CSV projekt s nezměněnými testy a nezávislou kontrolou výsledku.
+Měřit celý čas dokončení, prefill, decode, spotřebu tokenů a chyby nástrojů.
+Nesrovnávat pouze nejvyšší tok/s; testy musí projít.
+
+Dosavadní produkční CSV: 333,844 s, 18/18 původních a 14/14 nezávislých kontrol,
+46,94 tok/s decode. Jeden běh není obecná záruka výkonu.
+RTX 8000 by při uvedené hodinové ceně potřebovala stejnou úlohu dokončit
+asi do 207 s, aby vyrovnala průběžnou cenu produkce. A5000 asi do 217 s.
+Pro dlouhodobé rozhodnutí navíc započítat dražší uložený disk a starty.
+Produkci přesunout teprve po prokázání přínosu; žádný přesun není součástí POC.

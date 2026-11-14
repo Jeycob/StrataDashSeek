@@ -1,0 +1,23 @@
+{
+  "productionId": 60529418,
+  "instanceId": 60570656,
+  "createdAt": "2026-11-14T00:49:54.262Z",
+  "expiresAt": "2026-11-14T01:39:54.262Z",
+  "limitUSD": 1,
+  "conservativeTotalUSD": 0.7723958333333334,
+  "offer": {
+    "id": 59336757,
+    "gpu": "RTX PRO 4500",
+    "hourlyTotal": 0.4,
+    "downloadPerGB": 0.0026041666666666665,
+    "uploadPerGB": 0.00390625,
+    "diskGB": 96
+  },
+  "productionMutationsAllowed": false,
+  "status": "preparing",
+  "cleanup": {
+    "cloudflareCron": "every minute after expiry",
+    "localWatchdog": "10 second polling",
+    "deadlineMinutes": 50
+  }
+}
