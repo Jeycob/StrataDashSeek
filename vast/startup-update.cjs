@@ -14,7 +14,9 @@ function commitPayload(input){
 function config(raw){
  if(raw.version!==1||raw.repository!==REPOSITORY||raw.branch!=='main')throw Error('Unsupported update source');
  if(!Array.isArray(raw.signers)||!raw.signers.length||raw.signers.some(x=>!/^([A-F0-9]{40}|[A-F0-9]{64})$/.test(x)))throw Error('Pinned signing fingerprints are required');
- return{...raw,minimumFreeBytes:Math.max(raw.minimumFreeBytes??2*1024*MIB,2*1024*MIB)};
+ const minimumFreeBytes=raw.minimumFreeBytes??2*1024*MIB;
+ if(!Number.isSafeInteger(minimumFreeBytes)||minimumFreeBytes<0)throw Error('Disk reserve must be a finite nonnegative integer');
+ return{...raw,minimumFreeBytes:Math.max(minimumFreeBytes,2*1024*MIB)};
 }
 function safeEnvironment(root){return{PATH:process.env.PATH??'/usr/bin:/bin',HOME:path.join(root,'update-cache/home'),LANG:'C.UTF-8',GIT_TERMINAL_PROMPT:'0',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null'};}
 function program(command,args,{root,timeout=30000,maxBuffer=64*MIB,...options}={}){const result=cp.spawnSync(command,args,{encoding:null,timeout,maxBuffer,env:safeEnvironment(root),...options});if(result.error||result.status!==0)throw Error(path.basename(command)+' failed');return result.stdout??Buffer.alloc(0);}
@@ -57,7 +59,7 @@ function activate(root,candidate,sha,{afterSwitch=()=>{}}={}){
  catch(error){linkTo(pointer.legacy,pointer.path);if(previousApplied)atomic(applied,previousApplied);else if(fs.existsSync(applied))fs.unlinkSync(applied);fs.unlinkSync(journal);throw error;}
 }
 function sameRuntime(candidate,root){return['package.json','package-lock.json'].every(name=>fs.readFileSync(path.join(candidate,'runtime',name)).equals(fs.readFileSync(path.join(root,'runtime',name))));}
-function releaseDigest(directory){const hash=crypto.createHash('sha256');function visit(relative){for(const entry of fs.readdirSync(path.join(directory,relative),{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name),file=path.join(directory,name),info=rootOwned(file);hash.update(name.split(path.sep).join('/')+'\0');if(entry.isDirectory()){hash.update('directory\0');visit(name);}else if(entry.isFile()){hash.update('file:'+(info.mode&0o111?'x':'-')+'\0');hash.update(fs.readFileSync(file));hash.update('\0');}else throw Error('Unsafe release entry');}}visit('');return hash.digest('hex');}
+function releaseDigest(directory){rootOwned(directory);const hash=crypto.createHash('sha256');function visit(relative){for(const entry of fs.readdirSync(path.join(directory,relative),{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name),file=path.join(directory,name),info=rootOwned(file);hash.update(name.split(path.sep).join('/')+'\0');if(entry.isDirectory()){hash.update('directory\0');visit(name);}else if(entry.isFile()){hash.update('file:'+(info.mode&0o111?'x':'-')+'\0');hash.update(fs.readFileSync(file));hash.update('\0');}else throw Error('Unsafe release entry');}}visit('');return hash.digest('hex');}
 function statusWriter(root){let state={version:1,enabled:true,phase:'checking',checkedAt:null,appliedCommit:readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{})?.commit??null,targetCommit:null,error:null,signatureVerified:false};return patch=>{state={...state,...patch,checkedAt:new Date().toISOString()};atomic(path.join(root,'state/startup-update.json'),state,0o644);return state;};}
 async function update(root='/data/harness',{checkOnly=false}={}){
  const configFile=path.join(root,'root-secrets/startup-update.json');
@@ -91,10 +93,8 @@ async function update(root='/data/harness',{checkOnly=false}={}){
   if(fs.existsSync(candidate)&&releaseDigest(candidate)!==releaseDigest(staging))throw Error('An existing release differs from its signed source');
   if(checkOnly)return{...checked,checkOnly:true,verified:true,commit:sha};
   if(!fs.existsSync(candidate))fs.renameSync(staging,candidate);
-  activate(root,candidate,sha,{afterSwitch:()=>{
-   // Only verified source can update the next boot's stable code; trust stays pinned.
-   for(const name of['startup-update.cjs','startup-extract.py'])atomic(path.join(root,'bootstrap',name),fs.readFileSync(path.join(candidate,'vast',name)),0o644);
-  }});
+  // Keep recovery code stable; its upgrades are separate explicit maintenance.
+  activate(root,candidate,sha);
   return write({phase:'ready',appliedCommit:sha,error:null});
  }catch(error){write({phase:'blocked',error:error.code?'Update filesystem operation failed ('+String(error.code).replace(/[^A-Z0-9_]/g,'')+').':error.message,appliedCommit:readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{})?.commit??null});throw error;}
  finally{if(work&&path.resolve(work).startsWith(path.resolve(cache)+path.sep+'stage-'))fs.rmSync(work,{recursive:true,force:true});}

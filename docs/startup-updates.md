@@ -31,6 +31,9 @@ need explicit operator integration; the installer does not guess. It installs
 a stable bootstrap outside the release tree, which is essential for recovery
 if power is lost while switching the first directory to a release pointer.
 Installing the gate does not restart a model or a running conversation.
+The stable updater and extractor are not replaced by automatic code releases.
+Their upgrade is a separate operator maintenance action through this installer,
+so a failed code activation cannot leave a mixed recovery implementation.
 
 Private policy is `/data/harness/root-secrets/startup-update.json`. Its source
 is fixed to this repository's `main` branch. The keyring is separately pinned

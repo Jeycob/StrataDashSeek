@@ -15,6 +15,7 @@ test('unsigned or ambiguous signatures cannot become an update',()=>{
  assert.throws(()=>commitPayload(Buffer.from('tree x\ngpgsig one\ngpgsig two\n\nmessage')),/Multiple/);
  assert.throws(()=>config({version:1,repository:'evil/repo',branch:'main',signers:[fixture.fingerprint]}),/source/);
  assert.throws(()=>config({version:1,repository:'Jeycob/StrataDashSeek',branch:'main',signers:['short']}),/fingerprints/);
+ for(const reserve of['invalid',NaN,Infinity,-1,1.5])assert.throws(()=>config({version:1,repository:'Jeycob/StrataDashSeek',branch:'main',signers:[fixture.fingerprint],minimumFreeBytes:reserve}),/finite nonnegative/);
 });
 test('bootstrap code is written as exact bytes rather than serialized Buffer data',t=>{
  const root=temporary(t),target=path.join(root,'bootstrap.cjs'),bytes=Buffer.from('#!/usr/bin/env node\nconsole.log("ready");\n');atomic(target,bytes);assert.deepEqual(fs.readFileSync(target),bytes);
