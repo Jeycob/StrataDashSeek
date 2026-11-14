@@ -1,4 +1,5 @@
 import {client} from './client.mjs';
+import {cleanupBenchmark} from './benchmark-cleanup.mjs';
 const encoder = new TextEncoder();
 function json(value, status=200, extra={}) { return new Response(JSON.stringify(value), {status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff',...extra}}); }
 async function equal(a,b) { const x=await crypto.subtle.digest('SHA-256',encoder.encode(a||'')),y=await crypto.subtle.digest('SHA-256',encoder.encode(b||''));let diff=0;new Uint8Array(x).forEach((v,i)=>diff|=v^new Uint8Array(y)[i]);return diff===0; }
@@ -16,4 +17,4 @@ async function handle(request,env) {try{
  if(url.pathname==='/api/wake'&&request.method==='POST'){const data=await vast(env,'GET');if(data.instances.intended_status!=='running')await vast(env,'PUT',{state:'running'});return json({ok:true});}
  return json({error:'Not found'},404);
  }catch{return json({error:'Služba se právě nepodařila kontaktovat. Zkus to za chvíli.'},503);}}
-export default {async fetch(request,env){const allowed=new URL(env.HARNESS_URL).origin,origin=request.headers.get("origin");if(request.method==="OPTIONS"){if(origin!==allowed)return json({error:"Origin refused"},403);return new Response(null,{status:204,headers:{"Access-Control-Allow-Origin":allowed,"Access-Control-Allow-Methods":"GET, POST, OPTIONS","Access-Control-Allow-Headers":"Authorization, Content-Type","Access-Control-Max-Age":"600","Vary":"Origin"}});}const response=await handle(request,env);if(origin===allowed){response.headers.set("Access-Control-Allow-Origin",allowed);response.headers.set("Vary","Origin");}return response;}};
+export default {async scheduled(event,env){await cleanupBenchmark(env);},async fetch(request,env){const allowed=new URL(env.HARNESS_URL).origin,origin=request.headers.get("origin");if(request.method==="OPTIONS"){if(origin!==allowed)return json({error:"Origin refused"},403);return new Response(null,{status:204,headers:{"Access-Control-Allow-Origin":allowed,"Access-Control-Allow-Methods":"GET, POST, OPTIONS","Access-Control-Allow-Headers":"Authorization, Content-Type","Access-Control-Max-Age":"600","Vary":"Origin"}});}const response=await handle(request,env);if(origin===allowed){response.headers.set("Access-Control-Allow-Origin",allowed);response.headers.set("Vary","Origin");}return response;}};
