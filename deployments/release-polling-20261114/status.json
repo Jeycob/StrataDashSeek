@@ -1,5 +1,5 @@
 {
-  "status": "tested-awaiting-coordinated-deployment",
+  "status": "worker-deployed-monitor-pending",
   "base": "2d9e5c1",
   "implementation": "3260e3e",
   "documentation": "b28fb14",
@@ -385,8 +385,17 @@
     "modelOrCacheChanged": false
   },
   "deployment": {
-    "performed": false,
-    "reason": "Worker-only maintenance lease granted; deployment prepared. Vast is asleep with capacity unavailable; do not deploy monitor/server files."
+    "performed": true,
+    "reason": "Worker deployed and verified. Monitor update is committed but Vast is asleep with unavailable capacity; no server deployment lease or server changes.",
+    "scope": "Worker only",
+    "workerVersion": "9af02e28-e2a5-4afd-ae41-d131ee1d0564",
+    "evidence": "worker-live.json",
+    "monitorPending": {
+      "file": "mobile/monitor.js",
+      "gitBlob": "74903bc8803187675dd85db6e65933609cf9159a",
+      "deployed": false,
+      "requires": "HomeAI server readiness and explicit static-file handoff"
+    }
   },
   "pythonIntegration": {
     "platform": "Ubuntu WSL",

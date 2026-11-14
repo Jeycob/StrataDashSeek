@@ -153,4 +153,13 @@ quality ranking. See deployments/workspace-20261114/ for sanitized evidence.
 
 Whole-stack installation simplification is [design only](docs/installation-design.md).
 
-Real cold-cycle result: automatic stop succeeded, but the original GPU was unavailable on resume. The Worker now reports HTTP202 capacity queue instead of false success and retries only the same instance. See docs/workspace-runtime.md and deployment status for pending server-side bootstrap updates.
+Cold-cycle history: an earlier automatic stop was followed by unavailable GPU
+capacity. After capacity recovered, HomeAI reported the completed Apps v2
+milestone passing a41.7-second worker sleep and154.4-second wake, preserving
+the Compose database and containers. A later wake again encountered capacity
+unavailability. The deployed Worker correctly reports HTTP202 for that state,
+retries only the original instance and preserves authenticated conditional
+status reads. The three earlier pending bootstrap files were verified deployed.
+See [current integration and deployment evidence](deployments/release-polling-20261114/status.json);
+the monitor update still awaits server availability. Cold-cycle success does
+not guarantee that the provider can reallocate the GPU on every wake.

@@ -1,7 +1,9 @@
 # Request budget and measurement
 
-Reviewed 2026-11-14. This change is prepared in `feat/polling-budget`; a commit
-alone does not deploy the Worker or update an open browser.
+Reviewed 2026-11-14. The Worker changes are merged into `main` and deployed to
+the existing Worker. The private monitor file is merged but awaits server
+availability and coordinated deployment; an existing open browser also needs
+to load the updated file. See `deployments/release-polling-20261114/status.json`.
 
 ## What the graph proves
 
@@ -68,7 +70,15 @@ cooldown blocks repeated reads and wake attempts. Real Chromium tests verify
 conditional status, one wake after visibility resumes, idle/busy monitor timing
 and no polling while hidden or closed.
 
-After a coordinated deployment, use the existing authenticated session to read
+The bounded live check observed two status requests, one upstream GET, one
+cache hit, zero state-changing writes and a conditional304. A separate explicit
+wake of the configured original instance returned202/CAPACITY_UNAVAILABLE with
+Retry-After15. Unauthorized and foreign-origin requests were denied. Cloudflare
+compression changes the response validator to a weak ETag; the Worker accepts
+weak and list-form If-None-Match validators. These observations prove this
+bounded scenario, not a daily or globally shared reduction.
+
+For follow-up, use the existing authenticated session to read
 `/api/request-metrics` once before and after a bounded scenario. Counters separate
 incoming status/wake requests, upstream reads/writes, cache hits and joins.
 They are explicitly scoped to the current isolate and can reset or land on a

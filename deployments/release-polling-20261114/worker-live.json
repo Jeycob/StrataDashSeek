@@ -1,0 +1,58 @@
+{
+  "at": "2026-11-14T20:43:22.101Z",
+  "instanceId": 60637500,
+  "unauthorizedDenied": true,
+  "foreignOriginDenied": true,
+  "existingWakeCredentialAccepted": true,
+  "deployedClientSHA256": "2686118d6a00a153b7cccb58d1bc3acde15086b38d44d8660f8a5389572c5299",
+  "instanceStatus": "stopped",
+  "statusSource": "provider",
+  "statusNoStore": true,
+  "authenticatedConditional304": true,
+  "conditionalSource": "cache",
+  "readWindow": {
+    "scope": "current-isolate-only; separate isolates cannot be compared as global totals",
+    "before": {
+      "scope": "current-isolate-only",
+      "statusRequests": 0,
+      "wakeRequests": 0,
+      "reads": 0,
+      "writes": 0,
+      "cacheHits": 0,
+      "joinedReads": 0,
+      "joinedWakes": 0,
+      "cooldownSeconds": 0
+    },
+    "after": {
+      "scope": "current-isolate-only",
+      "statusRequests": 2,
+      "wakeRequests": 0,
+      "reads": 1,
+      "writes": 0,
+      "cacheHits": 1,
+      "joinedReads": 0,
+      "joinedWakes": 0,
+      "cooldownSeconds": 0
+    }
+  },
+  "privateClientCanReadBackoffHeaders": true,
+  "wake": {
+    "http": 202,
+    "queued": true,
+    "code": "CAPACITY_UNAVAILABLE",
+    "retryAfterSeconds": 15
+  },
+  "passed": true,
+  "serverDeploymentPerformed": false,
+  "workerVersion": "9af02e28-e2a5-4afd-ae41-d131ee1d0564",
+  "codeCommit": "8ee50ec254d686fcc41d4667d018e4189f874d06",
+  "bindings": {
+    "version": "9af02e28-e2a5-4afd-ae41-d131ee1d0564",
+    "allBindingMetadataAndNonSecretValuesUnchanged": true,
+    "plainTextCount": 5,
+    "secretNames": [
+      "VAST_API_KEY",
+      "WAKE_ACCESS_KEY"
+    ]
+  }
+}
