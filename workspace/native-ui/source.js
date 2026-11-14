@@ -11,10 +11,11 @@ function relativeProject(root,base){
  return relative&&!relative.split('/').some(p=>!p||p==='.'||p==='..')?relative:null;
 }
 function useLanguage(){const [language,set]=React.useState(window.HarnessI18n.language);React.useEffect(()=>{const change=()=>set(window.HarnessI18n.language);window.addEventListener('harness-language-change',change);return()=>window.removeEventListener('harness-language-change',change);},[]);return language;}
-function translateView(root){const originals=new WeakMap();const apply=()=>{const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let n;while((n=walk.nextNode())){if(n.parentElement?.closest('pre,code,textarea,[data-no-translate],.apps-project h4,.apps-project p:first-of-type'))continue;const prior=originals.get(n),original=prior?.last===n.nodeValue?prior.original:n.nodeValue,last=window.HarnessCopy.translate(original,window.HarnessI18n.language);originals.set(n,{original,last});if(n.nodeValue!==last)n.nodeValue=last;}};let pending=false;const schedule=()=>{if(!pending){pending=true;queueMicrotask(()=>{pending=false;if(root.isConnected)apply();});}};const observer=new MutationObserver(schedule);observer.observe(root,{childList:true,subtree:true,characterData:true});window.addEventListener('harness-language-change',schedule);apply();return()=>{observer.disconnect();window.removeEventListener('harness-language-change',schedule);};}
+function translateView(root){const originals=new WeakMap();const apply=()=>{const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let n;while((n=walk.nextNode())){if(n.parentElement?.closest('script,style,pre,code,textarea,.workspace-workbench,[data-no-translate],.apps-project h4,.apps-project p:first-of-type,td:first-child'))continue;const prior=originals.get(n),original=prior?.last===n.nodeValue?prior.original:n.nodeValue,last=window.HarnessCopy.translate(original,window.HarnessI18n.language);originals.set(n,{original,last});if(n.nodeValue!==last)n.nodeValue=last;}};let pending=false;const schedule=()=>{if(!pending){pending=true;queueMicrotask(()=>{pending=false;if(root.isConnected)apply();});}};const observer=new MutationObserver(schedule);observer.observe(root,{childList:true,subtree:true,characterData:true});window.addEventListener('harness-language-change',schedule);apply();return()=>{observer.disconnect();window.removeEventListener('harness-language-change',schedule);};}
 function apply(ctx,config={}){
  const ROOT=config.appsWorkspaceRoot||'/data/harness/workspaces';
  const views=new Set();
+ ctx.effect(()=>{if(window.parent===window)return;let parent;try{parent=window.parent;if(!parent.HarnessI18n)return;}catch{return;}const outward=()=>{if(parent.HarnessI18n.language!==window.HarnessI18n.language)parent.HarnessI18n.setLanguage(window.HarnessI18n.language);},inward=()=>{if(window.HarnessI18n.language!==parent.HarnessI18n.language)window.HarnessI18n.setLanguage(parent.HarnessI18n.language);};window.addEventListener('harness-language-change',outward);parent.addEventListener('harness-language-change',inward);inward();return()=>{window.removeEventListener('harness-language-change',outward);parent.removeEventListener('harness-language-change',inward);};},'native-workbench: phone language');
  function Mounted({kind,sessionId,workspaceId,section,useTabInfo}){
   const ref=React.useRef(null),view=React.useRef(null),info=useTabInfo?.(),visible=React.useRef(true);
   visible.current=info?info.tab.visible:true;
@@ -24,6 +25,8 @@ function apply(ctx,config={}){
    return()=>{stop();views.delete(instance);instance.destroy();view.current=null;};
   },[kind,sessionId,workspaceId,section]);
   React.useEffect(()=>{if(visible.current)void view.current?.refresh();},[info?.tab.visible]);
+  React.useEffect(()=>{if(info?.tab.visible)view.current?.notifyChange?.();},[info?.tab.navigation.revision]);
+  React.useEffect(()=>info?.tab.actions.bindCommands({refresh:()=>{void view.current?.reload?.();}}),[info?.tab.actions]);
   return h('div',{ref,style:{height:'100%',minHeight:240,minWidth:0,overflow:'auto'},'data-harness-native-view':kind});
  }
  function Files(props){return h(Mounted,{...props,kind:'files',section:'files'});}
@@ -41,9 +44,11 @@ function apply(ctx,config={}){
   return h('div',{style:{height:'100%',overflow:'auto',minWidth:0}},h('div',{style:{padding:'12px 16px'}},h('button',{onClick:prepare,disabled:busy||!props.sessionId,style:{padding:10,cursor:'pointer',width:'100%',whiteSpace:'normal',border:'1px solid #c5cfdf',borderRadius:9,background:'white'}},text(busy?'preparing':'newDocker')),message&&h('p',{role:'status'},message)),h('div',{ref:host}));
  }
  function WorkspaceSettings(){
-  const [rows,setRows]=React.useState([]),[id,setId]=React.useState(window.HarnessNativeWorkspaceSelection||''),[error,setError]=React.useState('');useLanguage();
-  React.useEffect(()=>{let active=true;state().then(s=>{if(active){setRows(s.workspaces);setId(old=>old||s.workspaces[0]?.id||'');}}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[]);
-  return h('section',null,h('label',null,text('language'),' ',h('select',{value:window.HarnessI18n.language,onChange:e=>window.HarnessI18n.setLanguage(e.target.value)},h('option',{value:'en'},'English'),h('option',{value:'cs'},'Čeština'))),h('p',null,text('workspace'),' ',h('select',{value:id,onChange:e=>setId(e.target.value)},...rows.map(w=>h('option',{key:w.id,value:w.id},w.title)))),error&&h('p',{role:'alert'},error),id?h(Mounted,{kind:'files',section:'settings',workspaceId:id,key:id}):h('p',null,text('noWorkspace')));
+  const [rows,setRows]=React.useState([]),[id,setId]=React.useState(window.HarnessNativeWorkspaceSelection||''),[error,setError]=React.useState(''),[update,setUpdate]=React.useState(null);useLanguage();
+  React.useEffect(()=>{let active=true;state().then(s=>{if(active){setRows(s.workspaces);setUpdate(s.update||null);setId(old=>old||s.workspaces[0]?.id||'');}}).catch(e=>{if(active)setError(e.message);});const select=()=>setId(window.HarnessNativeWorkspaceSelection||'');window.addEventListener('harness-workspace-settings',select);return()=>{active=false;window.removeEventListener('harness-workspace-settings',select);};},[]);
+  const cs=window.HarnessI18n.language==='cs',phases=cs?{checking:'kontrola',verifying:'ověřování podpisu',staging:'příprava',ready:'připraveno',blocked:'pozastaveno',rollback:'návrat předchozí verze'}:{checking:'checking',verifying:'verifying signature',staging:'staging',ready:'ready',blocked:'blocked',rollback:'rollback'};
+  const commit=typeof update?.appliedCommit==='string'?update.appliedCommit.slice(0,12):null;
+  return h('section',null,h('label',null,text('language'),' ',h('select',{value:window.HarnessI18n.language,onChange:e=>window.HarnessI18n.setLanguage(e.target.value)},h('option',{value:'en'},'English'),h('option',{value:'cs'},'Čeština'))),h('p',null,text('workspace'),' ',h('select',{value:id,onChange:e=>setId(e.target.value)},...rows.map(w=>h('option',{key:w.id,value:w.id},w.title)))),update&&h('details',{'data-harness-update-status':true,style:{fontSize:12,margin:'12px 0',color:'#536c75'}},h('summary',null,(cs?'Aktualizace: ':'Updates: ')+(update.enabled?(phases[update.phase]||String(update.phase).slice(0,60)):(cs?'vypnuté':'disabled'))+(commit?' · '+commit:'')),h('p',null,update.signatureVerified?(cs?'Podpis ověřen.':'Signature verified.'):(cs?'Podpis zatím není ověřen.':'Signature has not been verified yet.')),update.checkedAt&&h('p',null,(cs?'Poslední změna stavu: ':'Last status change: ')+String(update.checkedAt).slice(0,40)),update.error&&h('p',null,String(update.error).slice(0,500))),error&&h('p',{role:'alert'},error),id?h(Mounted,{kind:'files',section:'settings',workspaceId:id,key:id}):h('p',null,text('noWorkspace')));
  }
  function Notifications(){
   const ref=React.useRef(null);useLanguage();
@@ -54,7 +59,15 @@ function apply(ctx,config={}){
  const register=(definition,Component)=>ctx.effect(()=>ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:definition.id,inject:sessionId=>({sessionId})},Component)),'native-workbench: '+definition.kind);
  const files={id:'stratadashseek/workspace-files',kind:'files',keepMounted:true,title:()=>text('files'),guide:[{id:'workspace',commandId:'workspace.files',order:10,title:()=>text('files'),description:()=>text('filesHelp')}]};
  const docker={id:'stratadashseek/docker',kind:'harness-docker',keepMounted:true,title:()=>text('docker'),guide:[{id:'docker',order:20,title:()=>text('docker'),description:()=>text('dockerHelp')}]};
- ctx.effect(()=>ctx.sidebarRightTabs.register(files),'native-workbench: files type');register(files,Files);
+ // A compatibility switch also lets integration tests exercise the original
+ // Native explorer against the server's effective-root resolver.
+ if(config.enhancedFiles!==false){ctx.effect(()=>ctx.sidebarRightTabs.register(files),'native-workbench: files type');register(files,Files);
+  // In rc.2 the preview's standard folder button toggles a separate legacy
+  // navigator Factory instead of opening kind=files. Route that exact control
+  // through the product's pane/session target API to the same corrected browser.
+  // Deliberately do not intercept generic folder buttons or infer IDs from DOM.
+  ctx.effect(()=>{const folder=e=>{const element=e.target instanceof Element?e.target:null;if(!element?.closest('[data-files-navigator-toggle]'))return;const target=ctx.sidebarRight.commandTarget(element);if(!target)return;e.preventDefault();e.stopImmediatePropagation();ctx.sidebarRight.openTabFromTarget('files',target);};document.addEventListener('click',folder,true);return()=>document.removeEventListener('click',folder,true);},'native-workbench: preview folder compatibility');
+ }
  ctx.effect(()=>ctx.sidebarRightTabs.register(docker),'native-workbench: Docker type');register(docker,Docker);
  ctx.effect(()=>ctx.slots.inject('sidebar.right.tab.guide.entry',()=>ctx.slots.register({name:'sidebar.right.tab.guide.entry',key:docker.id},DockerGuide)),'native-workbench: Docker overview');
  let sections=[];
@@ -67,6 +80,6 @@ function apply(ctx,config={}){
  let navigation=0;
  const openPanel=async(kind,sessionId)=>{const ticket=++navigation;if(sessionId)ctx.uiWorkspace.openSession(sessionId);const until=Date.now()+5000;while(Date.now()<until&&ticket===navigation){const mounted=ctx.sidebarRight.mounted.getSnapshot();if(mounted&&(!sessionId||mounted===sessionId)){try{ctx.sidebarRight.openTab(kind);return true;}catch(e){if(!String(e.message).includes('no session surface'))throw e;}}await new Promise(resolve=>setTimeout(resolve,50));}return false;};
  ctx.effect(()=>{const api={openSettings,openDocker:sessionId=>openPanel('harness-docker',sessionId),openFiles:sessionId=>openPanel('files',sessionId)};window.HarnessNativeUI=api;try{window.parent.HarnessNativeUI=api;}catch{}return()=>{if(window.HarnessNativeUI===api)delete window.HarnessNativeUI;try{if(window.parent.HarnessNativeUI===api)delete window.parent.HarnessNativeUI;}catch{}};},'native-workbench: settings bridge');
- ctx.inject(['contextMenus'],c=>c.effect(()=>c.contextMenus.register({id:'harness.workspace-settings',target:'workspace',order:120,resolve:({workspaceId})=>[{id:'settings',label:text('workspaces'),run:()=>{window.HarnessNativeWorkspaceSelection=workspaceId;window.HarnessNativeUI?.openSettings('harness-workspaces');}}]}),'native-workbench: workspace menu'));
+ ctx.inject(['contextMenus'],c=>c.effect(()=>c.contextMenus.register({id:'harness.workspace-settings',target:'workspace',order:120,resolve:({workspaceId})=>[{id:'settings',label:text('workspaces'),run:()=>{window.HarnessNativeWorkspaceSelection=workspaceId;window.dispatchEvent(new Event('harness-workspace-settings'));window.HarnessNativeUI?.openSettings('harness-workspaces');}}]}),'native-workbench: workspace menu'));
  ctx.effect(()=>()=>{for(const view of views)view.destroy();views.clear();},'native-workbench: cleanup');
 }

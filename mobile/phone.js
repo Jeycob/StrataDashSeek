@@ -1,13 +1,16 @@
 'use strict';
 const phoneNodes=new Map([...document.querySelectorAll('[id]')].map(e=>[e.id,e]));
 const byId=id=>phoneNodes.get(id)||document.getElementById(id);
+const notificationCopy=[];{const walker=document.createTreeWalker(byId('settings'),NodeFilter.SHOW_TEXT);let n;while((n=walker.nextNode()))if(!n.parentElement.closest('#message'))notificationCopy.push([n,n.nodeValue]);}
+function notificationLanguage(){for(const [node,original]of notificationCopy)node.nodeValue=window.HarnessCopy?.translate(original,window.HarnessI18n?.language||'cs')||original;}
+window.addEventListener('harness-language-change',notificationLanguage);
 let installationId=localStorage.getItem('harness.push.installation');
 if(!installationId){installationId=crypto.randomUUID();localStorage.setItem('harness.push.installation',installationId);}
 const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
 const ios=/iPhone|iPad|iPod/.test(navigator.userAgent);
 let registration=null,state=null;
 const supported='serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window;
-function note(text){byId('message').textContent=text;}
+function note(text){byId('message').textContent=window.HarnessCopy?.translate(text,window.HarnessI18n?.language||'cs')||text;}
 async function api(route,data){const response=await fetch('/phone/api/'+route,{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(6000),headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const result=await response.json();if(!response.ok)throw Object.assign(Error(result.error||'Požadavek selhal.'),{status:response.status});return result;}
 let refreshing=false;
 function keyBytes(text){return Uint8Array.from(atob(text.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));}
@@ -70,7 +73,7 @@ window.HarnessPhoneSettings={mount(host){
  const section=byId('settings'),placeholder=document.createComment('phone-notifications');
  section.before(placeholder);const prior={hidden:section.hidden,style:section.getAttribute('style'),role:section.getAttribute('role')};
  section.hidden=false;section.removeAttribute('role');section.style.cssText='position:relative;inset:auto;max-height:none;border:0;padding:16px;box-shadow:none';
- byId('close-settings').hidden=true;byId('settings-title').hidden=true;host.append(section);
+ byId('close-settings').hidden=true;byId('settings-title').hidden=true;host.append(section);notificationLanguage();
  return()=>{placeholder.replaceWith(section);section.hidden=prior.hidden;prior.style===null?section.removeAttribute('style'):section.setAttribute('style',prior.style);if(prior.role)section.setAttribute('role',prior.role);byId('close-settings').hidden=false;byId('settings-title').hidden=false;};
 }};
 harnessPrepare().then(refresh);setInterval(refresh,15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)harnessPrepare().then(refresh);});

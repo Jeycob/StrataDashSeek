@@ -32,7 +32,8 @@ test('Native views isolate files, retain drafts, use safe CRUD and never wake on
   await page.locator('#one .wb-tree button',{hasText:'a.txt'}).click();await page.locator('#two .wb-tree button',{hasText:'b.txt'}).click();
   assert.equal(await page.locator('#one textarea').inputValue(),'alpha');assert.equal(await page.locator('#two textarea').inputValue(),'beta');
   await page.locator('#one textarea').fill('unsaved draft');
-  await page.evaluate(()=>{a.destroy();window.a=HarnessWorkbench.mount(document.querySelector('#one'),{sessionId:'s1',instanceId:'tab1'});});
+  await page.evaluate(()=>a.notifyChange());await page.locator('#one [id$="wb-message"]').filter({hasText:'Files changed.'}).waitFor();assert.equal(await page.locator('#one textarea').inputValue(),'unsaved draft');
+  await page.evaluate(()=>{a.destroy();window.a=HarnessWorkbench.mount(document.querySelector('#one'),{sessionId:'s1',instanceId:'new-tab-id'});});
   await page.waitForFunction(()=>document.querySelector('#one textarea')?.value==='unsaved draft');
   await page.getByRole('button',{name:'Save',exact:true}).first().click();await page.waitForFunction(()=>!window.a.dirty);assert.equal(files.s1['a.txt'],'unsaved draft');
   await page.locator('#one').getByRole('button',{name:'Delete',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('#one textarea'));assert.equal(files.s2['b.txt'],'beta');
