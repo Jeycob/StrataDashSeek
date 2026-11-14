@@ -10,19 +10,19 @@
     "feat/container-workbench"
   ],
   "node": {
-    "startedAt": 1794684401900,
-    "finishedAt": 1794684442985,
+    "startedAt": 1794684778700,
+    "finishedAt": 1794684799016,
     "platform": "win32",
     "node": "v24.21.0",
     "source": {
-      "sha256": "02565b32c67e1bf6f7758607d5ff68562749f3b7e17882c720a951f600ac8e33",
+      "sha256": "4de357060b805e1b3cc8a464db110263ab204cbca2579b9c397d49d3d13c4f4a",
       "files": 192,
       "definition": "Sorted tracked JS/Python/config/UI paths and LF-normalized UTF-8 content; release evidence excluded."
     },
     "stale": false,
     "passed": true,
     "files": 26,
-    "passedTests": 153,
+    "passedTests": 154,
     "failedTests": 0,
     "skippedTests": 0,
     "results": [
@@ -87,7 +87,7 @@
         "exitCode": 0,
         "timedOut": false,
         "counts": {
-          "passed": 6,
+          "passed": 7,
           "failed": 0
         },
         "skipped": 0

@@ -25,6 +25,13 @@ test('large overwrite denial is synchronous at the final guard; explanation is o
   const allowed=f.exec('write',e.arguments);assert.equal((await f.call('tools/pre-execute',allowed,async()=>({kind:'allow'}))).kind,'allow');
   const denied=f.exec('write',e.arguments);assert.equal((await f.call('tools/pre-execute',denied,async()=>({kind:'allow'}))).kind,'deny');
 });
+test('resumed local sessions retain the legacy output ceiling without changing other providers',async t=>{
+  const f=await fixture(t),request={provider:'strata-vast',maxTokens:65536,reasoningEffort:'high'};
+  assert.deepEqual(await f.call('agent/request',{},async()=>request),{...request,maxTokens:32768});
+  assert.equal((await f.call('agent/request',{},async()=>({...request,maxTokens:4096}))).maxTokens,4096);
+  const external={...request,provider:'external'};assert.equal(await f.call('agent/request',{},async()=>external),external);
+});
+
 test('small edits remain allowed and existing denial is never overridden',async t=>{
   const f=await fixture(t);await fs.writeFile(path.join(f.directory,'small.js'),'const total=1;');
   assert.equal((await f.call('tools/pre-execute',f.exec('write',{file_path:'small.js',content:'const total=2;'}),async()=>({kind:'allow'}))).kind,'allow');
