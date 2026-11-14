@@ -22,7 +22,7 @@ async function handle(request,env) {try{
  if(url.pathname==='/api/request-metrics'&&request.method==='GET')return json({scope:'current-isolate-only',...control(env).metrics()});
  if(url.pathname==='/api/status'&&request.method==='GET'){let applicationUrl;try{applicationUrl=applicationTarget(env,url.searchParams.get('appPort'));}catch{return json({error:'Neplatná nebo nenastavená adresa aplikace.'},400);}const {data,source}=await control(env).read();const instance=data.instances,value={status:instance.actual_status==='exited'&&instance.intended_status==='stopped'?'stopped':instance.actual_status,intended:instance.intended_status,harnessUrl:env.HARNESS_URL,applicationUrl,ssh:{host:instance.ssh_host,port:instance.ssh_port}};
  const tag='"'+Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(JSON.stringify(value)))),b=>b.toString(16).padStart(2,'0')).join('')+'"',headers={etag:tag,'x-harness-status-source':source};
- if(request.headers.get('if-none-match')===tag)return new Response(null,{status:304,headers:{'cache-control':'no-store',...headers}});return json(value,200,headers);}
+ if((request.headers.get('if-none-match')??'').split(',').some(value=>value.trim()==='*'||value.trim().replace(/^W\//u,'')===tag))return new Response(null,{status:304,headers:{'cache-control':'no-store',...headers}});return json(value,200,headers);}
  if(url.pathname==='/api/wake'&&request.method==='POST'){const result=await control(env).wake();return json(result,result.queued?202:200,result.queued?{'retry-after':String(result.retryAfterSeconds)}:{});}
  return json({error:'Not found'},404);
  }catch(error){return json({error:'Služba se právě nepodařila kontaktovat. Zkus to za chvíli.'},503,{'retry-after':String(error.retryAfterSeconds??30)});}}

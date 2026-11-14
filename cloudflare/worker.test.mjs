@@ -50,8 +50,9 @@ test('conditional status stays authenticated, shares cache and exposes only boun
  const env={...baseEnv};let calls=0;const saved=globalThis.fetch;globalThis.fetch=async()=>{calls++;return Response.json({instances:{actual_status:'running',intended_status:'running'}});};
  try{const login=await worker.fetch(req('/api/login','POST',{key:env.WAKE_ACCESS_KEY}),env),cookie=login.headers.get('set-cookie').split(';')[0];const first=await worker.fetch(req('/api/status','GET',undefined,cookie),env),tag=first.headers.get('etag');assert(tag);
   const headers={Cookie:cookie,'If-None-Match':tag};const second=await worker.fetch(new Request(origin+'/api/status',{headers}),env);assert.equal(second.status,304);assert.equal(await second.text(),'');assert.equal(calls,1);
+  const weak=await worker.fetch(new Request(origin+'/api/status',{headers:{Cookie:cookie,'If-None-Match':'"other", W/'+tag}}),env);assert.equal(weak.status,304);
   assert.equal((await worker.fetch(new Request(origin+'/api/status',{headers:{'If-None-Match':tag}}),env)).status,401);
-  const metrics=await worker.fetch(req('/api/request-metrics','GET',undefined,cookie),env),text=await metrics.text();assert.equal(JSON.parse(text).reads,1);assert.equal(JSON.parse(text).statusRequests,2);assert(!text.includes(env.VAST_API_KEY));assert.equal(calls,1);
+  const metrics=await worker.fetch(req('/api/request-metrics','GET',undefined,cookie),env),text=await metrics.text();assert.equal(JSON.parse(text).reads,1);assert.equal(JSON.parse(text).statusRequests,3);assert(!text.includes(env.VAST_API_KEY));assert.equal(calls,1);
  }finally{globalThis.fetch=saved;}
 });
 
