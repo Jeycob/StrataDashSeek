@@ -1,8 +1,8 @@
 # Verified quality for local Qwen runs
 
 Status: implemented and tested on A4000 on `feat/qwen-quality-gates`.
-Plugin files are staged additively; shared profile activation is coordinated with
-the workspace runtime owner. Its isolated native integration fixture passed.
+Plugin files are staged additively; shared profile activation follows the separate
+workspace runtime's isolated native integration fixture.
 
 The observed bottleneck was completion and verification, not just decode speed.
 A faster decoder still produced long repair loops and a nominally complete web
@@ -66,8 +66,6 @@ its workspace-write policy remain responsible for command confinement.
 On the existing A4000 host, Node v24.21.0 and prepared Playwright 1.65.1:
 `node --test quality/core.test.mjs quality/browser.test.mjs` passed 20/20 tests,
 0 skipped, 0 failed, in 4.61 seconds. No GPU/model inference was requested.
-The same full suite also passed 20/20 under the unprivileged `harness` account
-in 4.49 seconds, including the real browser subprocess.
 The browser regression fixture produced and checked 10 actual desktop/mobile
 PNGs across five shop variants. A further end-to-end core-driver check produced
 two more PNGs and checked structured run nonce, source fingerprint and artifacts.
@@ -82,14 +80,8 @@ Empty-page screenshots cannot pass: each browser flow must navigate to the app
 and positively assert rendered UI. Legacy shared projects are refused; the native
 environment channel contains only DSH_* keys and standard variables come from
 the shared project-run wrapper.
-The joint isolated native Harness fixture subsequently passed 12/12 integrations,
-including a real registered `verify_project` call accepted as `lastVerification`
-by the shared workspace manager, a nonzero quality command accepted as failure,
-and a real browser assertion plus screenshot inside the native project sandbox.
-The fixture used 16 fake model requests and no GPU inference. Its result lives
-at `/data/migration/workspace-smoke-result.json` on the test host; the fixture
-implementation belongs to the workspace-runtime branch. Shared profile activation
-is a separate coordinated rollout and is not implied by the test pass.
+Mocked manager tests do not establish live Harness registration; that is owned by
+the joint native fixture before profile activation.
 
 ## Recommended order for Qwen IQ3_S / A4000
 

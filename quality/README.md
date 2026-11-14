@@ -23,7 +23,7 @@ Create `.harness-quality.json` in the project root (adapt commands and sources):
 
 Programs are direct argv arrays. Globs are **not** shell-expanded: list test files
 or use the test runner's directory discovery. A command's nonzero exit is always
-failure. Tests need a positive test/check count (Node TAP/spec, pytest/Playwright,
+failure. Tests need a positive assertion count (Node TAP/spec, pytest/Playwright,
 or .NET summary). Other runners may write `resultFile` JSON containing this process's
 `HARNESS_QUALITY_RUN_ID` as `runId`, plus integer `passed` and `failed` counts.
 Shell wrappers are refused. This is honest evidence accounting, not protection
