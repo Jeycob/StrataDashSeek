@@ -1,0 +1,367 @@
+{
+  "baseMain": "0cb1802",
+  "integrationCommit": "01ad5e6",
+  "mergedInactiveBranches": {
+    "feat/qwen-efficiency": "6eeb04e",
+    "feat/workspace-runtime-improvements": "0cb1802",
+    "feat/qwen-quality-gates": "89005e3"
+  },
+  "excludedActiveBranches": [
+    "feat/container-workbench"
+  ],
+  "node": {
+    "startedAt": 1794678752697,
+    "finishedAt": 1794678766440,
+    "platform": "win32",
+    "node": "v24.21.0",
+    "source": {
+      "sha256": "e63c5478508d4f487eb753c193aa23cf4e61d8460d6f94677b4a46b813e638a1",
+      "files": 192,
+      "definition": "Sorted tracked JS/Python/config/UI paths and LF-normalized UTF-8 content; release evidence excluded."
+    },
+    "stale": false,
+    "passed": true,
+    "files": 26,
+    "passedTests": 153,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "results": [
+      {
+        "file": "cloudflare/application-target.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "cloudflare/benchmark-cleanup.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "cloudflare/worker.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "desktop/open-harness.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "efficiency/core.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 18,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "efficiency/plugin.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 6,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "efficiency/sdk.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/notifications.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/phone-boot.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 3,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/phone-shell.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "quality/browser.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "quality/core.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 19,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps-power.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 11,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 20,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/cgroup.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/completion-guard.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/homeai-profile.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/homeai-reliability.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/lifecycle.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/model-proxy.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/telemetry.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/turn-queue/queue.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 25,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/http.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/install.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/owner-api.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/policy.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 7,
+          "failed": 0
+        },
+        "skipped": 0
+      }
+    ]
+  },
+  "python": {
+    "platform": "linux",
+    "python": "3.14.4",
+    "passed": true,
+    "tests": 32,
+    "results": [
+      {
+        "file": "vast/test-idle-guard.py",
+        "tests": 24,
+        "passed": true,
+        "exitCode": 0
+      },
+      {
+        "file": "vast/test-preview-settings.py",
+        "tests": 5,
+        "passed": true,
+        "exitCode": 0
+      },
+      {
+        "file": "vast/test-session-migration.py",
+        "tests": 3,
+        "passed": true,
+        "exitCode": 0
+      }
+    ]
+  },
+  "deployment": {
+    "status": "blocked",
+    "liveReleaseVerified": false,
+    "reason": "Existing Vast instance has no available provider resources.",
+    "wake": {
+      "at": 1794678450185,
+      "instanceId": 60637500,
+      "action": "wake-existing-only",
+      "before": "exited",
+      "requested": true,
+      "providerConfirmed": false,
+      "providerMessage": "Required resources are currently unavailable, state change queued.",
+      "capacityQueued": true,
+      "after": "exited",
+      "available": false
+    },
+    "pending": [
+      "Wait for existing instance capacity; do not rent a replacement automatically.",
+      "Upload pending mobile/phone-boot.js, shared/i18n.cjs and shared/ui-copy.cjs from main.",
+      "Verify native mobile, Apple workflow and container persistence.",
+      "Verify efficiency on isolated Linux fixtures before activating scheduler or billing.",
+      "Deploy merged main only after server-side checks pass."
+    ]
+  }
+}
