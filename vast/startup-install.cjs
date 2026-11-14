@@ -17,8 +17,10 @@ function install({root='/data/harness',keyring,signers,onstart='/root/onstart.sh
  const bootstrapStat=fs.lstatSync(bootstrap);if(bootstrapStat.isSymbolicLink()||bootstrapStat.uid!==0||(bootstrapStat.mode&0o022))throw Error('Bootstrap directory must be protected');
  const files=[['start.sh','startup-bootstrap.sh'],['startup-update.cjs','startup-update.cjs'],['startup-extract.py','startup-extract.py']];
  for(const[name,source]of files){const target=path.join(bootstrap,name);if(fs.existsSync(target)&&!fs.readFileSync(target).equals(fs.readFileSync(path.join(__dirname,source))))throw Error('Stable bootstrap differs; an explicit reviewed upgrade is required');}
- for(const[name,source]of files)atomic(path.join(bootstrap,name),fs.readFileSync(path.join(__dirname,source)),name==='start.sh'?0o755:0o644);
+ for(const[name,source]of files.filter(([name])=>name!=='start.sh'))atomic(path.join(bootstrap,name),fs.readFileSync(path.join(__dirname,source)),0o644);
  atomic(trust,fs.readFileSync(keyring));atomic(configFile,settings);
+ // Publish the executable entry only after its policy, trust and code exist.
+ atomic(path.join(bootstrap,'start.sh'),fs.readFileSync(path.join(__dirname,'startup-bootstrap.sh')),0o755);
  if(!installed){const backup=path.join(privateRoot,'onstart-before-update-'+Date.now()+'.sh');fs.copyFileSync(onstart,backup);fs.chmodSync(backup,0o600);atomic(onstart,existing.split('\n').map(line=>forms(old).includes(line.trim())?line.replace(old,replacement):line).join('\n'),fs.statSync(onstart).mode&0o777);}
  const status={version:1,enabled:true,phase:'checking',checkedAt:new Date().toISOString(),appliedCommit:null,targetCommit:null,error:null,signatureVerified:false};
  atomic(path.join(root,'state/startup-update.json'),status,0o644);return{installed:true,enabled:true,startsOnNextBoot:true,modelRestarted:false};
