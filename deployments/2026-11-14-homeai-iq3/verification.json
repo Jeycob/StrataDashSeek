@@ -1,0 +1,162 @@
+{
+  "date": "2026-11-14",
+  "timezone": "Europe/Budapest",
+  "instance": 60529418,
+  "diskGB": 96,
+  "model": "qwen3.8-flash-next-iq3_s",
+  "context": 131072,
+  "kv": "int8",
+  "drafting": "dflash2",
+  "vision": "CPU",
+  "vramReserveMiB": 1536,
+  "harnessVersion": "0.2.2-rc.2",
+  "nodeVersion": "v24.21.0",
+  "homeaiPolicy": {
+    "mediumBudget": 4096,
+    "maxOutputTokens": 32768,
+    "transientRetries": 2,
+    "headroomTokens": 12288,
+    "summaryMaxTokens": 8192,
+    "retainTokens": 8192,
+    "compactionRetries": 1,
+    "maxOverflowRetries": 1,
+    "maxParallelToolCalls": 1,
+    "maxActiveSubagents": 1,
+    "maxSubagentDepth": 1,
+    "wholeTurnFIFO": true,
+    "offModeSummary": true,
+    "llmTitlesDisabled": true,
+    "normalMediumWireObserved": true
+  },
+  "liveCases": [
+    {
+      "name": "whole-turn FIFO across tool gap",
+      "passed": true,
+      "waitingObserved": true,
+      "toolGapObserved": true
+    },
+    {
+      "name": "transient",
+      "passed": true,
+      "injections": 2
+    },
+    {
+      "name": "http413",
+      "passed": true,
+      "injections": 1
+    },
+    {
+      "name": "cancel active stream releases queued follower",
+      "passed": true,
+      "upstreamClosed": true
+    },
+    {
+      "name": "empty compaction summary is rejected",
+      "passed": true,
+      "injections": 1,
+      "before": 0,
+      "after": 0
+    },
+    {
+      "name": "real compaction preserves six facts",
+      "passed": true,
+      "before": 0,
+      "after": 1,
+      "answer": {
+        "currency": "PLN",
+        "arithmetic": "integer cents",
+        "outputFile": "report-final.json",
+        "newDependencies": false,
+        "mode": "read-only",
+        "network": false
+      }
+    },
+    {
+      "name": "context overflow recovery is bounded",
+      "passed": true,
+      "injections": 2
+    },
+    {
+      "name": "compaction wire has reasoning off and 8192 budget",
+      "passed": true
+    },
+    {
+      "name": "CPU vision sees supplied synthetic image",
+      "passed": true,
+      "answer": " green"
+    }
+  ],
+  "allFinalLiveCasesPassed": true,
+  "csvProject": {
+    "completed": true,
+    "wallSeconds": 333.844,
+    "stats": {
+      "turns": 1,
+      "steps": 30,
+      "llmMs": 325694,
+      "toolMs": 6874,
+      "ttftMs": 57046,
+      "ttftSteps": 30,
+      "decodeMs": 268648,
+      "decodeTokens": 12610
+    },
+    "usage": {
+      "uncachedInputTokens": 25073,
+      "outputTokens": 12610,
+      "cacheReadTokens": 742543,
+      "cacheWriteTokens": 0
+    },
+    "toolCalls": 29,
+    "toolErrors": 2,
+    "testExit": 0,
+    "testsUnchanged": true,
+    "regressionTestsPassed": 18,
+    "independentPassed": 14,
+    "independentTotal": 14,
+    "decodeTokensPerSecond": 46.938745123730676,
+    "completionTokensPerWallSecond": 37.7721330921029
+  },
+  "history": {
+    "listed": 31,
+    "readable": 31,
+    "unreadable": []
+  },
+  "previousFailedOrInvalidFixturesRetained": true,
+  "limitations": [
+    "One CSV trajectory is not a general performance or quality guarantee.",
+    "Fresh oversized synthetic seeding ignored no-tool instructions, requested unavailable permissions and was cancelled; no escalation granted.",
+    "An archived test fork was correctly blocked. Final overflow verification used a new fork of valid preserved history.",
+    "The new Home Screen iOS cold start was not physically confirmed in this migration; server-side Web Push acceptance was checked.",
+    "GameShift/ThermalDesk Windows applications are replaced by cloud idle control and integrated monitor, not installed on Linux."
+  ],
+  "coldStart": {
+    "testedAt": "2026-11-14T00:06:14.073Z",
+    "observedStopped": true,
+    "uiReadySeconds": 15.025,
+    "answerReadySeconds": 36.781,
+    "automaticTailscaleLogin": true,
+    "answer": "COLD_IQ3_OK",
+    "passed": true,
+    "sessionId": "session-3cef8792-ad50-41a8-ae0b-986ebe948e3b",
+    "model": "qwen3.8-flash-next-iq3_s",
+    "agentQueue": {
+      "working": true,
+      "waiting": 0
+    }
+  },
+  "validation": {
+    "nodeTestsPassed": 34,
+    "idleGuardTestsPassed": 10,
+    "sessionMigrationTestsPassed": 3,
+    "publicSecretAudit": {
+      "trackedFiles": 49,
+      "leaksFound": 0,
+      "scope": "before adding sanitized deployment snapshot"
+    }
+  },
+  "automaticIdleStop": {
+    "observedAfterThisMigration": false,
+    "reason": "The user started two new real tasks during the idle observation. Live lifecycle active=2, idle guard correctly holds with agent turn active.",
+    "configuredSeconds": 300
+  }
+}

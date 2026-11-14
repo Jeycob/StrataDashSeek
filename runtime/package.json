@@ -1,6 +1,6 @@
 {
   "dependencies": {
-    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "@deepseek-ai/dsh": "0.2.2-rc.2",
     "web-push": "3.6.7"
   }
 }

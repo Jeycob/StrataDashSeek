@@ -7,18 +7,35 @@
         api: openai-completions
         baseURL: http://127.0.0.1:8088/v1
         reasoning: medium
+        thinkingBudgets:
+          minimal: 512
+          low: 2048
+          medium: 4096
+          high: 8192
         compat:
           supportsDeveloperRole: false
           maxTokensField: max_tokens
         retryPolicy:
           mode: normal
-          maxRetries: 1
+          maxRetries: 2
         models:
           - id: strata
-            name: Qwen Flash Next 128K
+            name: Qwen Flash Next IQ3_S 128K
             contextWindow: 131072
-            maxTokens: 16384
-            input: [text]
+            maxTokens: 32768
+            input: [text, image]
+            compat:
+              maxTokensField: max_tokens
+              supportsReasoningEffort: true
+              thinkingFormat: chat-template
+              supportsThinkingTokenBudget: true
+              thinkingTokenBudgetField: thinking_budget_tokens
+              chatTemplateKwargs:
+                enable_thinking:
+                  $var: thinking.enabled
+                reasoning_effort:
+                  $var: thinking.effort
+                  omitWhenOff: true
             reasoningEfforts:
               off: none
               low: low

@@ -1,5 +1,5 @@
 'use strict';
-const SHELL_CACHE='harness-static-shell-v5';
+const SHELL_CACHE='harness-static-shell-v6';
 const SHELL_FILES=['/phone/','/phone/app.js','/phone/boot.js','/phone/monitor.js','/phone/config.json','/phone/icon.png'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{const cache=await caches.open(SHELL_CACHE);await cache.addAll(SHELL_FILES);await self.skipWaiting();})()));
 self.addEventListener('activate',event=>event.waitUntil((async()=>{for(const key of await caches.keys())if(key.startsWith('harness-static-shell-')&&key!==SHELL_CACHE)await caches.delete(key);await self.clients.claim();})()));
@@ -19,3 +19,4 @@ self.addEventListener('push',event=>{
 self.addEventListener('notificationclick',event=>{
  event.notification.close();event.waitUntil((async()=>{const destination=target(event.notification.data?.url);const windows=await self.clients.matchAll({type:'window',includeUncontrolled:true});for(const client of windows){if(client.url===destination)return client.focus();}return self.clients.openWindow(destination);})());
 });
+

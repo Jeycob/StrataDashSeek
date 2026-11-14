@@ -1,4 +1,4 @@
-# Harness Cloud Sleep
+# StrataDashSeek
 
 Run DeepSeek Harness, Strata and a local model together on one stoppable Vast.ai instance. Wake it from a free Cloudflare Worker, connect privately through Tailscale and receive iOS Web Push when work finishes.
 
@@ -31,12 +31,13 @@ The Worker hosts only the wake page and controller. Your projects, chat history 
 
 ## Install on an existing Strata instance
 
-This package does **not** download model weights or install Strata. First provide a tested `/data/start-strata.sh` that serves Strata on `127.0.0.1:8080`. Model files must already fit the persistent disk and available RAM/VRAM. The deployed reference uses a Qwen3.8 Flash Next IQ2_XS build; exact model availability and Strata compatibility are separate from this controller.
+Install Strata separately before using this package. `vast/start-strata.sh` serves Strata on `127.0.0.1:8080`, reusing the saved configuration on ordinary boots. Its provisioning fallback launches Qwen3.8 Flash Next IQ3_S, 128K, int8 KV, DFlash2 and CPU vision with 1536 MiB VRAM reserve. Model availability and installed Strata compatibility must be checked. The reference IQ3 weights need about 83.6 GB plus about 0.9 GB for vision; do not assume a disk can hold both complete IQ2 and IQ3 installations.
 
 1. Copy this repository to `/data/harness/app`, then run `bash /data/harness/app/vast/install.sh` as root. The script verifies the official Node tarball checksum and pins Harness and Web Push versions.
 2. Install Tailscale from its official Ubuntu repository. Start `tailscaled` with **both** `--state=/data/harness/root-secrets/tailscaled.state` and `--statedir=/data/harness/root-secrets/tailscale`, plus `--tun=userspace-networking --socket=/data/harness/tailscaled.sock`. Authenticate the server in your personal tailnet. Preserve its state and certificate directory across stops.
 3. Copy `vast/config.example.json` to `/data/harness/config.json` and `vast/push-config.example.json` to `/data/harness/push-config.json`. Use the real Tailscale hostname and your Worker URL.
 4. Copy `vast/provider.patch.example.yml` to `/data/harness/home/.dsh/profiles/web/cordis.patch.yml`. Create the parent directory if needed. The supervisor provides `STRATA_GATEWAY_KEY=local-strata`; this is a local adapter placeholder, not a Vast credential. The adapter binds only to loopback.
+   Apply the HomeAI policy with `/data/harness/node/bin/node /data/harness/app/vast/prepare-homeai-profile.cjs` while Harness is stopped. It preserves the YAML expression tags and existing cloud entries, configures all four shipped agent presets, disables LLM titles and adds the whole-turn queue. The pinned runtime is Harness 0.2.2-rc.2 on Node 24.21.0. Do not copy Windows shell paths or the GameShift desktop application onto Linux.
 5. Copy `vast/guard.example.json` to `/data/harness/root-secrets/guard.json`, enter the existing instance ID and leave `enabled:false` during validation. Put your scoped Vast token in `/data/harness/root-secrets/vast-api.key`. Keep the directory mode 0700 and files 0600, root-owned.
 6. For a migration, copy the existing VAPID keys and subscription store to `/data/harness/secrets/`; otherwise the push service generates new keys. Make this directory 0700 and its files 0600, owned by `harness`. Never regenerate VAPID keys on every boot.
 7. Preserve the existing `/root/onstart.sh` and append `nohup bash /data/harness/app/vast/start.sh > /data/harness/logs/supervisor.log 2>&1 < /dev/null &`. Start it once manually. The flock prevents duplicate supervisors. No package installs or model downloads run on normal boots.
@@ -74,6 +75,10 @@ For Windows history migrations, `vast/session-migration.py` maps path separators
 
 ## Sleep rules and maintenance
 
+HomeAI parity adds one root-turn FIFO across tool gaps, inherited ownership for explicitly requested children and a lazy full-stream gate for auxiliary LLM requests. One tool runs at a time, with at most one child and depth one. Normal generation uses medium reasoning (4096 budget) and a 32768 output ceiling. All presets use compaction headroom 12288, summary limit 8192, retained tail 8192 and one overflow recovery; summary generation explicitly uses reasoning off. Ordinary transient failures retry at most twice. Explicit payload-size HTTP 413 failures stop without unnecessary context recovery. This preserves the failure in history; it does not mask it as a successful response.
+
+The adapter waits up to 180 seconds for the local model to finish loading, and cancellation while waiting prevents inference dispatch. Health checks and model catalog requests do not wake the instance. Queue ownership improves scheduling and cache continuity; it does not guarantee faster individual tasks or correct generated code. Hardware-specific worker/cache counts remain selected for the actual cloud CPU/GPU.
+
 The idle timer is independent of browser connectivity. Closing Safari does not cancel an agent. An active turn or a long build keeps the instance awake; after work finishes the 300-second countdown starts. A pending approval/question inside an open turn may keep it awake until answered or cancelled. Persistent preview servers also count as workspace jobs: stop them when finished.
 
 Unknown model status or a missing/stale plugin heartbeat holds the instance awake. This protects work but can cost money after a service fault; inspect `/data/harness/state/idle-status.json` and the service logs. It is not a guaranteed spending cap. A root-only `state/maintenance.json` with `{"until":UNIX_SECONDS}` temporarily holds sleep for maintenance. Do not use a browser poll as an always-on lease.
@@ -103,3 +108,7 @@ The Worker should fit the Cloudflare Free request/CPU limits for personal use; n
 
 Official references: [Harness source](https://github.com/deepseek-ai/deepseek-harness), [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve), [Vast instance FAQ](https://github.com/vast-ai/docs/blob/main/guides/reference/faq/instances.mdx).
 
+
+## Recorded deployment
+
+`deployments/2026-11-14-homeai-iq3/` contains sanitized settings actually captured from the deployed stack, a checksum manifest and verification results. Take a new sanitized snapshot and push it before changing production configurations or versions. Private backups stay outside Git. Hardware search results are observations, not proof of inference speed; benchmark the same model and tasks before promoting another host.

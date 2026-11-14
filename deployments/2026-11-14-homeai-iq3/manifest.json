@@ -1,0 +1,13 @@
+{
+  "capturedAt": "2026-11-14T00:22:27.633Z",
+  "sanitized": true,
+  "credentialsIncluded": false,
+  "files": {
+    "strata-launch.json": "c47796bbd10cb917b0e2c3143499b3ae8ee7fb14324305865ed7940f007e4dd7",
+    "proxy-config.json": "516701732f894d9cacf640f974c6e2cf9b02b0883e36976094a7776024dc187d",
+    "push-config.json": "e3cea8b2747a8af00480d867a739e30626d1c6962089845d06cd40f5b680e228",
+    "guard-config.json": "ea5d69a9373c031d21f20a79b7f4eac99a7e6d1e0916dce346f5c8e84a3767d3",
+    "harness-profile.yml": "55737315be6490f683749fa9b0c195ac292653d9c7673a620f072f73f6963248",
+    "start-strata.sh": "f119b4e350bf43ada4b9fdcada215aa2c4bdc007d09028281d745706771a75da"
+  }
+}
