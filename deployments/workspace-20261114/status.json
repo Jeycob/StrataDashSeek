@@ -1,5 +1,5 @@
 {
-  "at": "2026-11-14T16:59:55.088Z",
+  "at": "2026-11-14T17:04:23.736Z",
   "instanceId": 60637500,
   "coreRuntimeDeployed": true,
   "coreVerifiedBeforeStop": true,
@@ -17,11 +17,11 @@
   "filesAndHistoryRetained": true,
   "tests": {
     "linuxNode": 119,
-    "additionalWake": 4,
     "python": 32,
     "nativeIntegration": 13,
     "productionViewports": 2,
-    "realModelProbes": 6
+    "realModelProbes": 6,
+    "additionalWakeAndMaintenance": 6
   },
   "noNewRentals": true
 }
