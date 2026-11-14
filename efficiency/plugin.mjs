@@ -63,7 +63,7 @@ export async function apply(ctx,config={}){
     const {id}=activeFor(exec.agent),project=await projectFor(id);if(!project||project.legacy)return null;
     const c=card(id);if(!c.verified&&!Object.keys(project.checkpoints??{}).length)return null;
     const relative=path.isAbsolute(fileArg(args))?path.relative(project.root,fileArg(args)):fileArg(args);
-    let name,before;try{name=await confined(project.root,relative);before=await fs.readFile(name,'utf8');if(before.length>1024*1024)return null;}catch(error){if(error.code==='ENOENT')return null;throw error;}
+    let name,before;try{name=await confined(project.root,relative);const stat=await fs.stat(name);if(!stat.isFile()||stat.size>1024*1024)return null;before=await fs.readFile(name,'utf8');}catch(error){if(error.code==='ENOENT')return null;throw error;}
     let after=args.content;
     if(exec.name==='edit'){
       const old=args.old_string??args.oldText,replacement=args.new_string??args.newText;
@@ -80,9 +80,9 @@ export async function apply(ctx,config={}){
   ctx.tools.guard(exec=>rewriteDenials.get(exec.token));
 
   ctx.on('tools/execute',async(exec,next)=>{
-    if(!exec.agent)return next();const {id}=activeFor(exec.agent),queued=Date.now();let permit;
-    if(config.schedule!==false&&heavyTool(exec)){permit=await toolGate.acquire({rootId:id,signal:exec.signal});phase(id,'tool-queue',queued,Date.now());}
-    const started=Date.now();try{return await next();}finally{phase(id,'tools',started,Date.now());permit?.release();}
+    if(!exec.agent)return next();const {id}=activeFor(exec.agent),queued=Date.now();let permit,started;
+    try{if(config.schedule!==false&&heavyTool(exec)){permit=await toolGate.acquire({rootId:id,signal:exec.signal});phase(id,'tool-queue',queued,Date.now());}started=Date.now();return await next();}
+    finally{phase(id,started===undefined?'tool-queue':'tools',started??queued,Date.now());permit?.release();}
   },{global:true});
   ctx.on('tools/result',(exec,result)=>{
     rewriteDenials.delete(exec.token);
@@ -91,7 +91,7 @@ export async function apply(ctx,config={}){
     if(exec.name==='verify_project'&&result.value){const r=result.value;c.verification(r,r.sourceHash);
       if(!r.passed){pendingAccepted.delete(id);emit('verification-failed',{taskId:id,runId});if(!repairStarts.has(id))repairStarts.set(id,Date.now());}
       else if(r.complete&&!r.stale){pendingAccepted.set(id,{hash:r.sourceHash,runId});if(repairStarts.has(id)){phase(id,'repair',repairStarts.get(id),Date.now());repairStarts.delete(id);}}
-    }else if(result.isError||Number.isInteger(result.value?.exitCode)&&result.value.exitCode!==0){c.failure(exec.name,result.error?.message??textOf(result.content).slice(-700));}
+    }else{const key=exec.name+':'+digest(JSON.stringify(args??{})).slice(0,12);if(result.isError||Number.isInteger(result.value?.exitCode)&&result.value.exitCode!==0)c.failure(key,result.error?.message??textOf(result.content).slice(-700));else c.issues.delete(key);}
   },{global:true});
 
   async function metrics(){if(config.engineMetrics===false)return null;try{const u=new URL(config.engineURL??'http://127.0.0.1:8080');if(!['127.0.0.1','localhost','[::1]'].includes(u.hostname))return null;const r=await fetch(new URL('/metrics',u),{signal:AbortSignal.timeout(350)});return r.ok?await r.json():null;}catch{return null;}}
@@ -116,7 +116,7 @@ export async function apply(ctx,config={}){
           if(started!==undefined){phase(id,'model',started,ended);const measured=uniqueEngineRecord(before,await metrics());
             emit('request-end',{taskId:id,requestId,started,ended,firstTokenMs:firstToken===undefined?null:firstToken-started,finish:finish??(options.signal?.aborted?'aborted':'interrupted'),engine:measured,engineCorrelation:measured?'unique-new-record-within-serialized-call':'unavailable-or-ambiguous'});
             if(usage)emit('usage',{taskId:id,requestId,...usage});
-          }
+          }else phase(id,'model-queue',queued,ended);
         }finally{permit?.release();}
       }
     })();

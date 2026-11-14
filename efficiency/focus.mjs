@@ -4,12 +4,19 @@ import {pathToFileURL} from 'node:url';
 import {confined,digest,runProgram} from '../quality/core.mjs';
 
 export async function focusContext(workspace, request={}) {
-  const root=await fs.realpath(workspace),files=request.files??[];
+  const root=await fs.realpath(workspace);let files=request.files??[];
   if(!Array.isArray(files)||files.length>6)throw Error('Request at most six relevant files.');
+  let changedFiles=[];
+  if(!files.length){
+    const status=await runProgram(['git','--no-pager','-c','core.fsmonitor=false','status','--porcelain=v1','-z','--untracked-files=normal'],{cwd:root,timeoutMs:3000,outputLimit:8000});
+    if(status.exitCode===0){const entries=status.stdout.split('\0');for(let i=0;i<entries.length;i++){const entry=entries[i];if(!entry)continue;const name=entry.slice(3);if(/^[RC]/u.test(entry))i++;
+      if(!/(?:^|[\\/])(?:\.harness|node_modules|\.git|dist|build|bin|obj)(?:[\\/]|$)/u.test(name)&&/\.(?:[cm]?js|jsx|tsx?|py|cs|css|html|json|md)$/u.test(name))changedFiles.push(name);
+    }files=changedFiles.slice(0,3).map(name=>({path:name,lines:40}));}
+  }
   const excerpts=[];let remaining=16000;
   for(const file of files){
     if(typeof file.path!=='string'||!Number.isInteger(file.start??1)||!Number.isInteger(file.lines??60)||(file.start??1)<1||(file.lines??60)<1||(file.lines??60)>120)throw Error('Use project-relative files, a positive start and 1–120 lines.');
-    const name=await confined(root,file.path),stat=await fs.stat(name);
+    let name,stat;try{name=await confined(root,file.path);stat=await fs.stat(name);}catch(e){if(e.code==='ENOENT'){excerpts.push({path:file.path,deleted:true});continue;}throw e;}
     if(!stat.isFile()||stat.size>1024*1024)throw Error('Excerpts require regular files up to1MiB.');
     const text=await fs.readFile(name,'utf8');if(text.includes('\0'))throw Error('Binary excerpts are not supported.');
     const all=text.split(/\r?\n/u),start=file.start??1;
@@ -18,7 +25,7 @@ export async function focusContext(workspace, request={}) {
     if(remaining<=0)break;
   }
   const git=await runProgram(['git','--no-pager','-c','core.fsmonitor=false','diff','--no-ext-diff','--no-textconv','--stat','--no-renames','HEAD','--','.'],{cwd:root,timeoutMs:3000,outputLimit:2500});
-  return {workspace:root,excerpts,changes:git.exitCode===0?git.stdout.trim():'No committed Git baseline available.',note:'Snapshot only. Use the file hash for a justified large rewrite; read more explicit ranges when needed.'};
+  return {workspace:root,excerpts,changedFiles,changes:git.exitCode===0?git.stdout.trim():'No committed Git baseline available.',note:'Snapshot only. Use the file hash for a justified large rewrite; read more explicit ranges when needed.'};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   try{console.log(JSON.stringify(await focusContext(process.argv[2],JSON.parse(process.argv[3]??'{}'))));}
