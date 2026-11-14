@@ -9,5 +9,6 @@ export async function cleanupBenchmark(env, now=Date.now()) {
   method:'DELETE',headers:{Authorization:'Bearer '+env.VAST_API_KEY},signal:AbortSignal.timeout(12000)
  });
  if(!response.ok&&response.status!==404)throw Error('Benchmark cleanup failed: '+response.status);
+ if(response.status!==404&&(await response.json()).success!==true)throw Error('Benchmark cleanup was not confirmed');
  return {action:response.status===404?'already-removed':'removed',instanceId:id};
 }
