@@ -91,7 +91,7 @@ sanitized observations/windows readable by Harness. Coordinate this supervisor
 entry with HomeAI (no supervisor restart during active work):
 
 ```js
-launch('efficiency-billing','/usr/bin/flock',['-n',R+'/root-secrets/efficiency-billing.lock',R+'/node/bin/node',R+'/app/efficiency/billing-daemon.mjs'],true);
+launch('efficiency-billing','/usr/bin/flock',['-n','-F',R+'/root-secrets/efficiency-billing.lock',R+'/node/bin/node',R+'/app/efficiency/billing-daemon.mjs'],true);
 ```
 
 The collector does not touch idle timestamps or create a keep-awake lease.

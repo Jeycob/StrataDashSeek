@@ -1,10 +1,10 @@
 import fs from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 
-export async function sampleBilling({instanceId,keyFile,fetcher=fetch,now=Date.now}={}){
+export async function sampleBilling({instanceId,keyFile,fetcher=fetch,now=Date.now,signal}={}){
   if(!/^\d+$/u.test(String(instanceId)))throw Error('Numeric instance id required.');
   const key=(await fs.readFile(keyFile,'utf8')).trim();
-  const response=await fetcher(`https://console.vast.ai/api/v0/instances/${instanceId}/`,{headers:{Authorization:'Bearer '+key},signal:AbortSignal.timeout(20000)});
+  const response=await fetcher(`https://console.vast.ai/api/v0/instances/${instanceId}/`,{headers:{Authorization:'Bearer '+key},signal:signal?AbortSignal.any([signal,AbortSignal.timeout(20000)]):AbortSignal.timeout(20000)});
   if(!response.ok)throw Error(`Vast billing snapshot HTTP ${response.status}`);
   const body=await response.json(),value=Array.isArray(body.instances)?body.instances.find(x=>String(x.id)===String(instanceId)):body.instances;
   if(!value||String(value.id)!==String(instanceId))throw Error('Unexpected instance response.');
