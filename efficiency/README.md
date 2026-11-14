@@ -137,9 +137,12 @@ Set `EFFICIENCY_SDK_ROOT` to the pinned runtime's `node_modules` and run
 After provider capacity recovered, the isolated Linux native-Harness fixture
 passed all eight checks, including preserving the original file on a denied
 overwrite, focused context, log errors, acceptance events and stable tool order.
-The synthetic second task took1688ms with the whole-turn gate and159ms with the
-request gate; paired wall time was2246ms versus2256ms. This used a fake model,
+The final synthetic second task took1669ms with the whole-turn gate and148ms with
+the request gate; paired wall time was2333ms versus2185ms. This used a fake model,
 not GPU inference, and does not establish a Qwen throughput gain.
-Production scheduler replacement and the separate billing collector still need
-coordinated activation after checking running and queued work. See the sanitized
-release evidence in `deployments/release-20261114/`.
+The production scheduler was then replaced through HMR after two fresh checks
+confirmed no running or queued work. Harness PID139 was preserved, the model was
+not restarted, and the profile was backed up. Exactly one efficiency scheduler
+is configured and loaded; the legacy scheduler is absent. The resumed-session
+32768 output-token ceiling remains in force. HomeAI owns activation of the
+separate billing collector. See `deployments/release-20261114/` for evidence.
