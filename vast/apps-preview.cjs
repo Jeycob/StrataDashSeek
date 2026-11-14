@@ -11,7 +11,7 @@ function createPreview(manager, publicPort, listenPort){
   const finish=()=>{if(closed)return;closed=true;release?.();upstream?.destroy();};res.once('close',finish);req.once('aborted',finish);
   try{
    release=await manager.beginPreview(publicPort);if(closed){release();return;}
-   upstream=http.request({host:'127.0.0.1',port:publicPort,path:req.url,method:req.method,headers:headers(req)},reply=>{res.writeHead(reply.statusCode,reply.headers);reply.on('error',()=>res.destroy());reply.pipe(res);});
+   upstream=http.request({host:'127.0.0.1',port:release.backendPort||publicPort,path:req.url,method:req.method,headers:headers(req)},reply=>{res.writeHead(reply.statusCode,reply.headers);reply.on('error',()=>res.destroy());reply.pipe(res);});
    upstream.on('error',e=>{if(!res.headersSent)fail(res,e);else res.destroy();});upstream.setTimeout(600000,()=>upstream.destroy(Error('Application request timed out')));req.pipe(upstream);
   }catch(e){fail(res,e);finish();}
  });
@@ -20,7 +20,7 @@ function createPreview(manager, publicPort, listenPort){
   let release,upstream,closed=false;
   const finish=()=>{if(closed)return;closed=true;release?.();upstream?.destroy();socket.destroy();};socket.on('error',finish);socket.on('close',finish);
   try{release=await manager.beginPreview(publicPort);if(closed){release();return;}
-   upstream=net.connect(publicPort,'127.0.0.1',()=>{const h=headers(req);upstream.write(req.method+' '+req.url+' HTTP/'+req.httpVersion+'\r\n'+Object.entries(h).map(([k,v])=>k+': '+v).join('\r\n')+'\r\n\r\n');if(head.length)upstream.write(head);socket.pipe(upstream).pipe(socket);});upstream.on('error',finish);upstream.on('close',finish);
+   upstream=net.connect(release.backendPort||publicPort,'127.0.0.1',()=>{const h=headers(req);upstream.write(req.method+' '+req.url+' HTTP/'+req.httpVersion+'\r\n'+Object.entries(h).map(([k,v])=>k+': '+v).join('\r\n')+'\r\n\r\n');if(head.length)upstream.write(head);socket.pipe(upstream).pipe(socket);});upstream.on('error',finish);upstream.on('close',finish);
   }catch{socket.end('HTTP/1.1 503 Service Unavailable\r\nRetry-After: 5\r\nConnection: close\r\n\r\n');finish();}
  });
  server.requestTimeout=0;server.headersTimeout=65000;server.keepAliveTimeout=5000;
