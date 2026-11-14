@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "codeCommit": "6fbc6203ffe468d429bdc12b931de371ee981945",
+  "sourceSha256": "0155f40da0d69abb5c39c8a00b659700874282ffa2e94c8ca61ef146a54bc564",
+  "sourceHashStableBeforeAfter": true,
+  "sourceFiles": 246,
+  "infrastructure": {
+    "filesExecuted": 44,
+    "passed": 269,
+    "failed": 0,
+    "skipped": 0,
+    "actualNativeHostAndChromium": true,
+    "nodeVersion": "24.21.0",
+    "firstAttemptEnvironmentErrors": "Two files initially used an incorrect local test dependency path. Only the test environment was corrected; both complete files were rerun successfully without source changes."
+  },
+  "linux": {
+    "actualNativeSdkAndKernelConfinement": true,
+    "passedChecks": 9,
+    "modelRequests": 0,
+    "existingServicesRestarted": false,
+    "checks": [
+      "Managed command uses project environment and caps full access to project writes",
+      "Kernel refuses writes outside the project",
+      "Read-only commands do not create cache directories",
+      "Read-only commands cannot write",
+      "Real nonzero exit status is retained",
+      "Literal Node test directories expand to test files and the first failing assertion stays visible",
+      "A successful direct test returns zero without forced exit",
+      "An empty test directory returns a failure",
+      "npm lifecycle hooks and package scripts are preserved"
+    ]
+  },
+  "historicalCsvFixture": {
+    "includedInProductionGate": false,
+    "publicPassed": 14,
+    "edgeFailed": 4,
+    "sourceUnchanged": true
+  },
+  "allDiscoveredTestsPass": false,
+  "privacy": "Public aggregate only. Raw logs, screenshots, private run identifiers, host addresses and application source are excluded."
+}
