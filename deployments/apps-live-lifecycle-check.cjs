@@ -24,6 +24,6 @@ async function main(){
   result.persistedWritableLayer=(await exec(saved.containerId,['cat','/tmp/strata-persist-check'])).trim()===marker;if(!result.persistedWritableLayer)throw Error('Writable layer was lost');
   await perform('check');result.final=await api('state');result.passed=true;
  }catch(e){result.passed=false;result.error=e.stack;process.exitCode=1;}
- finally{fs.writeFileSync('/data/harness/state/apps-live-lifecycle-results.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));}
+ finally{fs.writeFileSync('/data/harness/state/apps-live-lifecycle-results.json',JSON.stringify(result,null,2));console.log(JSON.stringify({passed:result.passed,error:result.error,operations:result.operations.map(j=>({action:j.action,status:j.status,milliseconds:j.endedAt-j.startedAt})),sleepMilliseconds:result.sleepMilliseconds,wakeMilliseconds:result.resumedPreview?.milliseconds,persistedWritableLayer:result.persistedWritableLayer,containerId:result.containerId}));}
 }
 main().catch(e=>{console.error(e.stack);process.exitCode=1});
