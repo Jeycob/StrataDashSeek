@@ -14,6 +14,22 @@ class Safety(unittest.TestCase):
     def test_recent_user_action(self):self.check(False,lifecycle={'at':1000000,'active':0,'lastActivity':950000})
     def test_maintenance(self):self.check(False,lease_until=1100)
     def test_recent_job_end(self):self.check(False,last=990)
+    def test_application_build_holds_idle(self):self.check(False,applications={'at':1000000,'active':1})
+    def test_stale_application_heartbeat_holds_idle(self):self.check(False,applications={'at':900000,'active':0})
+    def test_idle_application_worker_allows_sleep(self):self.check(True,applications={'at':1000000,'active':0})
+    def test_worker_transition_holds_sleep(self):self.check(False,applications={'at':1000000,'active':0,'worker':{'pid':99,'phase':'saving'}})
+    def test_awake_lease_holds_sleep(self):self.check(False,applications={'at':1000000,'active':0,'holdUntil':1100000})
+    def test_stopped_worker_error_does_not_run_up_gpu_bill(self):self.check(True,applications={'at':1000000,'active':0,'worker':{'pid':None,'phase':'error'}})
+    def test_only_verified_docker_infrastructure_is_passive(self):
+        p={10:{'args':['/data/harness/node/bin/node','/data/harness/app/vast/apps-service.cjs','/data/harness/apps-config.json'],'cwd':'/data/harness/workspaces','ppid':1},11:{'args':['qemu-system-x86_64','-name','stratadashseek-docker','-drive','file=/data/harness/docker-worker/volume.raw,format=raw,if=virtio,cache=writeback'],'cwd':'/data/harness/docker-worker','ppid':10},12:{'args':['gcc','main.c'],'cwd':'/data/harness/workspaces','ppid':10}}
+        a={'at':1000000,'servicePid':10,'worker':{'pid':11}}
+        self.assertEqual(guard.passive_worker_processes(p,a,1000),{10,11})
+        p[11]['ppid']=1
+        self.assertEqual(guard.passive_worker_processes(p,a,1000),{10,11})
+        self.assertEqual(guard.passive_worker_processes(p,a,1030),set())
+        p[11]['args']=['qemu-system-x86_64','other-job']
+        self.assertEqual(guard.passive_worker_processes(p,a,1000),{10})
+    def test_recent_application_completion_restarts_idle_clock(self):self.check(False,applications={'at':1000000,'active':0,'lastActivity':950000})
     def test_preview_and_esbuild_child_do_not_hold_idle(self):
         p={10:{'args':['node','/x/vite/bin/vite.js','--host','127.0.0.1'],'cwd':'/data/harness/workspaces/app','ppid':1},11:{'args':['esbuild','--service'],'cwd':'/data/harness/workspaces/app','ppid':10}}
         self.assertEqual(guard.preview_processes(p),{10,11})

@@ -1,5 +1,6 @@
 import {client} from './client.mjs';
 import {cleanupBenchmark} from './benchmark-cleanup.mjs';
+import {applicationTarget} from './application-target.mjs';
 const encoder = new TextEncoder();
 function json(value, status=200, extra={}) { return new Response(JSON.stringify(value), {status,headers:{'content-type':'application/json; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff',...extra}}); }
 async function equal(a,b) { const x=await crypto.subtle.digest('SHA-256',encoder.encode(a||'')),y=await crypto.subtle.digest('SHA-256',encoder.encode(b||''));let diff=0;new Uint8Array(x).forEach((v,i)=>diff|=v^new Uint8Array(y)[i]);return diff===0; }
@@ -13,7 +14,7 @@ async function handle(request,env) {try{
  if(request.method==='POST'&&![url.origin,new URL(env.HARNESS_URL).origin].includes(request.headers.get('origin')))return json({error:'Origin refused'},403);
  if(url.pathname==='/api/login'&&request.method==='POST'){if(Number(request.headers.get('content-length'))>1024)return json({error:'Too large'},413);const text=await request.text();if(text.length>1024)return json({error:'Too large'},413);const body=JSON.parse(text);if(!env.WAKE_ACCESS_KEY||env.WAKE_ACCESS_KEY.length<32||!await equal(body.key,env.WAKE_ACCESS_KEY))return json({error:'Nesprávný přístupový klíč'},401);const expires=String(Date.now()+30*86400000);return json({ok:true},200,{'set-cookie':'harness_wake='+expires+'.'+await signature(env,expires)+'; Path=/; Max-Age=2592000; Secure; HttpOnly; SameSite=Strict'});}
  if(!await authenticated(request,env))return json({error:'Přihlas se přístupovým klíčem.'},401);
- if(url.pathname==='/api/status'&&request.method==='GET'){const data=await vast(env,'GET');const instance=data.instances;return json({status:instance.actual_status==='exited'&&instance.intended_status==='stopped'?'stopped':instance.actual_status,intended:instance.intended_status,harnessUrl:env.HARNESS_URL,ssh:{host:instance.ssh_host,port:instance.ssh_port}});}
+ if(url.pathname==='/api/status'&&request.method==='GET'){let applicationUrl;try{applicationUrl=applicationTarget(env,url.searchParams.get('appPort'));}catch{return json({error:'Neplatná nebo nenastavená adresa aplikace.'},400);}const data=await vast(env,'GET');const instance=data.instances;return json({status:instance.actual_status==='exited'&&instance.intended_status==='stopped'?'stopped':instance.actual_status,intended:instance.intended_status,harnessUrl:env.HARNESS_URL,applicationUrl,ssh:{host:instance.ssh_host,port:instance.ssh_port}});}
  if(url.pathname==='/api/wake'&&request.method==='POST'){const data=await vast(env,'GET');if(data.instances.intended_status!=='running')await vast(env,'PUT',{state:'running'});return json({ok:true});}
  return json({error:'Not found'},404);
  }catch{return json({error:'Služba se právě nepodařila kontaktovat. Zkus to za chvíli.'},503);}}
