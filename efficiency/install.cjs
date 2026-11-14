@@ -2,6 +2,7 @@
 // Semantic YAML patch; unrelated profile rows and provider credentials are preserved.
 const ID='cloud-qwen-efficiency-v1',LEGACY='cloud-homeai-turn-queue-v1';
 function installEfficiency(text,yaml,config={}){
+ if(config.schedule===false)throw Error('Observe-only mode must retain the legacy scheduler in an isolated fixture; this installer activates request scheduling.');
  const doc=yaml.parseDocument(text);if(doc.errors.length)throw doc.errors[0];
  const rows=doc.contents?.items;if(!Array.isArray(rows))throw Error('Expected a Cordis patch sequence');
  const queues=[],installed=[];

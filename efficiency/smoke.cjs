@@ -5,6 +5,8 @@ const R='/data/harness',node=R+'/node/bin/node',runtime=R+'/runtime',yaml=create
 const {installEfficiency}=require('./install.cjs');
 const origin='http://127.0.0.1:3197',pause=ms=>new Promise(r=>setTimeout(r,ms));
 const checks={},results=[];let runningChild,runningServer;
+const sampleProfile='- insert:\n  - id: cloud-homeai-turn-queue-v1\n    name: file:///data/harness/app/vast/turn-queue/plugin.mjs\n  - id: unchanged\n    name: example\n    config:\n      value: keep-me\n';
+const installed=installEfficiency(sampleProfile,yaml);assert.equal(installEfficiency(installed,yaml),installed);assert(installed.includes('keep-me'));assert(!installed.includes('cloud-homeai-turn-queue-v1'));assert.throws(()=>installEfficiency(sampleProfile.replace('/vast/turn-queue/plugin.mjs','/unexpected.mjs'),yaml));assert.throws(()=>installEfficiency(sampleProfile,yaml,{schedule:false}));checks['semantic-installer-is-idempotent-and-single-scheduler']=true;
 async function fixture(mode){
  const dir=R+'/home/.efficiency-smoke-'+mode+'-'+Date.now(),home=dir+'/.dsh',profile=home+'/profiles/web',source=dir+'/source',log=dir+'/harness.log',state=dir+'/state/efficiency';
  fs.mkdirSync(profile,{recursive:true,mode:0o700});fs.mkdirSync(source,{recursive:true,mode:0o700});fs.mkdirSync(state,{recursive:true,mode:0o700});
