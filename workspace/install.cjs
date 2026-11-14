@@ -4,7 +4,11 @@ function addWorkspaceRuntime(text,yaml,options={}){
  const root=options.appRoot||'/data/harness/app',stateRoot=options.stateRoot||'/data/harness/state/workbench',projectsRoot=options.projectsRoot||'/data/harness/workspaces/projects';
  const doc=yaml.parseDocument(text);if(doc.errors.length)throw doc.errors[0];const rows=doc.contents.items;
  const definitions=[{id:'cloud-native-worktrees',name:'@deepseek-ai/dsh-experimental-worktree',config:{retainOnArchive:true}},{id:'cloud-workspace-runtime',name:'file://'+root+'/workspace/plugin.mjs',config:{stateRoot,projectsRoot,environmentReport:options.environmentReport||'/data/harness/state/development.json'}},...(options.quality===false?[]:[{id:'cloud-quality-gates',name:'file://'+root+'/quality/plugin.mjs'}])];
- let changed=false;for(const entry of definitions)if(!rows.some(x=>x.get?.('id')===entry.id||x.get?.('insert')?.items?.some(y=>y.get?.('id')===entry.id))){rows.push(doc.createNode({insert:[entry]}));changed=true;}
+ let changed=false;
+ const appGuidance='[Managed application deployment] For a requested Docker build or deployed application test, read /data/harness/app/docs/applications.md. Prepare Dockerfile and .harness-app.json in the project; use /data/harness/app/vast/apps-cli.cjs and wait for the final operation state. Test the exact deployed image at its actual address. HTTP availability alone is not an application or visual test. If the worker is unavailable, report the concrete blocker; do not rent another instance or attach a host Docker socket.';
+ function guidance(node){if(yaml.isMap(node)){const prefix=node.get('prefix');if(typeof prefix==='string'&&prefix.includes('[Focused local coding defaults]')&&!prefix.includes('[Managed application deployment]')){node.set('prefix',prefix+'\n\n'+appGuidance);changed=true;}for(const pair of node.items)guidance(pair.value);}else if(yaml.isSeq(node))for(const item of node.items)guidance(item);}
+ guidance(doc.contents);
+ for(const entry of definitions)if(!rows.some(x=>x.get?.('id')===entry.id||x.get?.('insert')?.items?.some(y=>y.get?.('id')===entry.id))){rows.push(doc.createNode({insert:[entry]}));changed=true;}
  return changed?String(doc):text;
 }
 module.exports={addWorkspaceRuntime};
