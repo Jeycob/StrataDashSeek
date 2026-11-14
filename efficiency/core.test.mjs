@@ -10,7 +10,7 @@ import {focusContext} from './focus.mjs';
 import {sampleBilling,billingWindows} from './billing-sample.mjs';
 import {generateReport} from './report.mjs';
 import {resourceSnapshot} from './resources.mjs';
-import {collectBilling} from './billing-daemon.mjs';
+import {collectBilling,resolveBillingKeyFile} from './billing-daemon.mjs';
 const tick=()=>new Promise(r=>setImmediate(r));
 async function temp(t){const dir=await fs.mkdtemp(path.join(os.tmpdir(),'efficiency-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));return dir;}
 
@@ -109,6 +109,7 @@ test('resource snapshots use fresh scoped telemetry and never treat stale Apps s
   assert.equal((await resourceSnapshot(dir,{now:30000})).apps,null);
 });
 test('continuous billing uses durable observations, counts disk once and exposes unobserved gaps',async t=>{
+  assert.equal(resolveBillingKeyFile({vastApiKeyFile:'/run/harness/vast.key'},{}),'/run/harness/vast.key');assert.equal(resolveBillingKeyFile({},{HARNESS_VAST_KEY_FILE:'/run/shared/vast.key'}),'/run/shared/vast.key');assert.throws(()=>resolveBillingKeyFile({vastApiKeyFile:'not-a-file-key-value'},{}),/absolute path/);
   const directory=await temp(t),base={instanceId:42,status:'running',computeUsdPerHour:.1,storageUsdPerHour:.02,source:'fixture API'},sample=at=>async()=>({...base,at});
   await collectBilling({directory,sample:sample(0)});await collectBilling({directory,sample:sample(60000)});await collectBilling({directory,previous:{...base,at:0},sample:sample(120000)});
   const windows=(await fs.readFile(path.join(directory,'billing-windows.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);assert.deepEqual(windows.map(x=>[x.from,x.to]),[[0,60000],[60000,120000]]);

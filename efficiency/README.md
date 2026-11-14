@@ -98,6 +98,9 @@ The collector does not touch idle timestamps or create a keep-awake lease.
 It re-reads the key for rotation, bounds observations at8MiB and exposes gaps
 after downtime instead of inventing compute uptime. Concurrent copies share the
 flock. No extra package installation or account is required.
+For the coordinated vault migration, set the non-secret absolute file path in
+`HARNESS_VAST_KEY_FILE` or `guard.json`'s `vastApiKeyFile`; the guard and collector
+can share one RAM-materialized key. The legacy root-file path is only a fallback.
 
 `node efficiency/report.mjs EVENTS_JSONL [BILLING_WINDOWS_JSON_OR_JSONL [FROM_MS TO_MS]]` reports allocation
 of each rental interval once, split equally among active root tasks. Delegated

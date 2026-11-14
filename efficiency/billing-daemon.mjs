@@ -3,6 +3,12 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {sampleBilling,billingWindows} from './billing-sample.mjs';
 
+export function resolveBillingKeyFile(guard,env=process.env){
+  const file=env.HARNESS_VAST_KEY_FILE??guard.vastApiKeyFile??'/data/harness/root-secrets/vast-api.key';
+  if(typeof file!=='string'||file.length>4096||file.includes('\0')||!path.isAbsolute(file))throw Error('Vast credential file must be an absolute path.');
+  return file;
+}
+
 export async function collectBilling({directory,instanceId,keyFile,previous,sample=sampleBilling,maxBytes=8*1024*1024,signal}={}){
   await fs.mkdir(directory,{recursive:true});
   if(process.getuid?.()===0){const owner=await fs.stat(path.dirname(directory));await fs.chown(directory,owner.uid,owner.gid);}
@@ -22,7 +28,7 @@ export async function collectBilling({directory,instanceId,keyFile,previous,samp
 async function main(){
   const root='/data/harness',directory=root+'/state/efficiency',controller=new AbortController();let previous,stopped=false;
   for(const signal of ['SIGINT','SIGTERM'])process.once(signal,()=>{stopped=true;controller.abort();});
-  while(!stopped){try{const guard=JSON.parse(await fs.readFile(root+'/root-secrets/guard.json','utf8'));previous=await collectBilling({directory,instanceId:guard.instanceId,keyFile:root+'/root-secrets/vast-api.key',previous,signal:controller.signal});}catch(e){if(!stopped)console.error('Billing measurement unavailable: '+e.message);}
+  while(!stopped){try{const guard=JSON.parse(await fs.readFile(root+'/root-secrets/guard.json','utf8'));previous=await collectBilling({directory,instanceId:guard.instanceId,keyFile:resolveBillingKeyFile(guard),previous,signal:controller.signal});}catch(e){if(!stopped)console.error('Billing measurement unavailable: '+e.message);}
     if(!stopped)await new Promise(r=>{let timer;const finish=()=>{clearTimeout(timer);process.removeListener('SIGTERM',finish);process.removeListener('SIGINT',finish);r();};timer=setTimeout(finish,60000);process.once('SIGTERM',finish);process.once('SIGINT',finish);});
   }
 }
