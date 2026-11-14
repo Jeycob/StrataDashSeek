@@ -117,6 +117,12 @@ The latest `deployments/2026-11-14-budget-result.json` records the verified A400
 
 Monitor telemetry normalizes CPU to the container quota and uses cgroup I/O counters rather than other tenants' host activity. It also exposes elapsed generation time, output budget and whole-turn queue ages. Energy remains an estimate for the GPU only, measured since the telemetry process started.
 
+### Progress-only completion guard
+
+`vast/completion-guard.mjs` uses the supported `agent/turn-stopping` hook. A short progress announcement such as “Now the stylesheet.” after a successful tool can otherwise close a partially completed task with a normal model `stop`. For `strata-vast` only, the guard steers the same turn at most twice. Cancellation, queued user input, tool errors, token-limit stops, ordinary final answers and explicit blockers remain authoritative. This is a narrow heuristic, not a general verifier that all user requirements are complete.
+
+`vast/install-completion-guard.cjs` privately backs up the current profile and adds only the new plugin; profile HMR loads it without restarting active agents. `prepare-homeai-profile.cjs` also includes it for future installations. Regression coverage totals 52 Node and 19 Python tests. The optional Linux `vast/completion-guard-smoke.cjs` exercises an isolated real Harness with a loopback fake model: tool → premature progress text → same-turn steering → tool → final answer. It uses no GPU or cloud model calls. Its fixed loopback ports must be unused.
+
 The dated benchmark in benchmarks/disposable-20261114 records three passing CSV runs (75–112 seconds, versus one 334-second reference), smaller tasks, the failed initial game and the bounded repair attempt. It is historical evidence with fixed deadlines, not an unattended installer. Its report includes all-in trial cost estimates and deletion confirmation. Offer RAM and instance-detail host RAM used different scales in this measurement; do not multiply the reported offer RAM by gpu_frac again. Validate the actual allocation.
 
 

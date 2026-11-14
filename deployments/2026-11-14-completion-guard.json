@@ -1,0 +1,41 @@
+{
+  "date": "2026-11-14",
+  "instanceId": 60637500,
+  "status": "deployed using profile HMR; no Harness restart",
+  "observedFailure": {
+    "step": 95,
+    "assistantText": "Now the stylesheet.",
+    "outputTokens": 5,
+    "requestTotalTokens": 47096,
+    "modelStopReason": "stop",
+    "turnEndReason": "completed",
+    "priorToolExitCode": 0,
+    "cause": "Model emitted only a progress announcement; the standard loop correctly treated its normal stop as final. The requested work was not complete."
+  },
+  "fix": {
+    "module": "vast/completion-guard.mjs",
+    "supportedHook": "agent/turn-stopping",
+    "provider": "strata-vast",
+    "maxAutomaticSteeringPerTurn": 2,
+    "sameTurn": true,
+    "preservesCancellationAndQueue": true,
+    "profileBackupPrivate": true,
+    "loadedInProduction": true,
+    "productionPIDUnchanged": true,
+    "limitations": "Narrow short-progress heuristic, not a semantic completeness guarantee. Token ceilings, blockers and queued human input are not overridden."
+  },
+  "verification": {
+    "nodeTestsPassed": 52,
+    "pythonTestsPassed": 19,
+    "totalPassed": 71,
+    "isolatedRealHarnessFixture": {
+      "passed": true,
+      "modelRequests": 4,
+      "sameTurn": true,
+      "correctionsLogged": 1,
+      "marker": "initialresumed",
+      "realModel": false,
+      "usedGPU": false
+    }
+  }
+}
