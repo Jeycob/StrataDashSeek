@@ -7,5 +7,6 @@ test('Native activation preserves all existing profile settings and is idempoten
  const after=addNativeWorkbench(before,yaml),rows=yaml.parse(after);
  assert.deepEqual(rows.slice(0,-1),yaml.parse(before));assert.match(after,/# retain operator comments/);
  assert.equal(rows.at(-1).insert[0].id,'cloud-native-workbench');assert.equal(rows.at(-1).insert[0].config.appsWorkspaceRoot,'/data/harness/workspaces');
+ assert.equal(rows.at(-1).insert[1].id,'cloud-isolated-native-files');assert.equal(rows.at(-1).insert[1].name,'file:///data/harness/app/workspace/native-files.mjs');
  assert.equal(addNativeWorkbench(after,yaml),after);assert.throws(()=>addNativeWorkbench('invalid: mapping',yaml),/patch sequence/);
 });
