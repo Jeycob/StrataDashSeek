@@ -96,8 +96,21 @@ export class WorkspaceManager {
         await this.ctx.workingDirectory.set(agent, root, signal);
       }
       const ports = await this.allocatePorts(), databasePath = path.join(root, '.harness', 'data', 'app.sqlite');
+      let gitWritableRoots;
+      if (nativeWorktree) {
+        const gitOptions = { cwd: root, timeout: 10000, env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' } };
+        const gitDir = await fs.realpath((await run('git', ['rev-parse', '--absolute-git-dir'], gitOptions)).stdout.trim());
+        const common = await fs.realpath(path.resolve(root, (await run('git', ['rev-parse', '--git-common-dir'], gitOptions)).stdout.trim()));
+        // Commit metadata only; never grant the source checkout, hooks or config.
+        gitWritableRoots = [gitDir];
+        for (const part of ['objects', 'refs', 'logs']) { const candidate = path.join(common, part); try { gitWritableRoots.push(await fs.realpath(candidate)); } catch {} }
+      }
       await fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
-      record = { root, sourceRoot: current, workspaceId: workspace?.id, ports, databasePath, baseCommit, branch, nativeWorktree, at: Date.now(), settings };
+      if (settings.projectMode !== 'continue') {
+        const ignore = path.join(root, '.gitignore'), before = await fs.readFile(ignore, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
+        if (!before.split(/\r?\n/u).includes('.harness/')) await fs.writeFile(ignore, before + (before.endsWith('\n') || !before ? '' : '\n') + '\n# Private Harness runtime state\n.harness/\n');
+      }
+      record = { root, sourceRoot: current, workspaceId: workspace?.id, ports, databasePath, baseCommit, branch, nativeWorktree, gitWritableRoots, at: Date.now(), settings };
       this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save();
       await atomicJSON(path.join(root, '.harness', 'project.json'), { sessionId: agent.id, ports, databasePath, baseCommit, root });
       this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. Use project_exec for shell commands; it confines writes to this checkout and automatically exports PORT, API_PORT, DATABASE_URL and the prepared tool paths. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Validate each milestone; repeated failing checks or an unverified stage exceeding ${settings.maxStageSteps} steps will pause the run for a user strategy decision.`));
@@ -160,6 +173,17 @@ export class WorkspaceManager {
       } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
     }
     record.budget = budget; await this.save();
+    await this.pruneCheckpoints(exec.agent.id);
+  }
+  async pruneCheckpoints(id) {
+    const directory = path.join(this.root, 'checkpoints', id), record = this.data.sessions[id];
+    const keep = new Set([...Object.values(record.checkpoints ?? {}).map(c => c.path), record.beforeRestore].filter(Boolean));
+    // Bound our own superseded cache generations; never touch project files.
+    for (const entry of await fs.readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isDirectory() || !/^(?:best|before-restore)\.[a-f0-9-]{36}$/u.test(entry.name)) continue;
+      const candidate = path.join(directory, entry.name);
+      if (!keep.has(candidate)) await fs.rm(candidate, { recursive: true, force: true });
+    }
   }
   async review(id) {
     const agent = this.ctx.agents.get(id), owner = agent ? this.ownerAgent(agent) : undefined, record = this.data.sessions[owner?.id ?? id];

@@ -29,7 +29,7 @@ function installNotificationMenu(){
   label.textContent='Nastavení Harnessu';item.appendChild(label);
   item.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();byId('settings').hidden=false;byId('close-settings').focus();};
   const wrapper=template.parentElement.cloneNode(false);wrapper.removeAttribute('id');wrapper.appendChild(item);template.parentElement.after(wrapper);
-  const monitorWrapper=wrapper.cloneNode(true),monitorItem=monitorWrapper.querySelector('button');monitorItem.removeAttribute('data-harness-push-menu');monitorItem.dataset.harnessMonitorMenu='true';monitorItem.querySelector('span').textContent='Monitor serveru';monitorItem.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessMonitor();};wrapper.after(monitorWrapper);
+  const monitorWrapper=wrapper.cloneNode(true),monitorItem=monitorWrapper.querySelector('button');monitorItem.removeAttribute('data-harness-push-menu');monitorItem.dataset.harnessMonitorMenu='true';monitorItem.querySelector('span').textContent=window.HarnessI18n?.t('monitor')||'Server monitor';monitorItem.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessMonitor();};wrapper.after(monitorWrapper);
   const appsWrapper=wrapper.cloneNode(true),appsItem=appsWrapper.querySelector('button');appsItem.removeAttribute('data-harness-push-menu');appsItem.dataset.harnessAppsMenu='true';appsItem.querySelector('span').textContent='Aplikace a kontejnery';appsItem.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessApps();};monitorWrapper.after(appsWrapper);
  };
  harnessMenuObserver=new MutationObserver(addMenuItem);

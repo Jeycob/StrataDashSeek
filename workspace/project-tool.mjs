@@ -14,7 +14,7 @@ export function registerProjectTool(ctx, manager) {
       const cwd = path.resolve(project.root, args.workdir ?? '.'); if (!within(project.root, cwd)) throw new WorkbenchError('OUTSIDE_PROJECT', 'Command directory is outside the project.', 403);
       if (ctx.shell.sandboxMode === undefined) throw new WorkbenchError('NO_PROJECT_SANDBOX', 'A filesystem-confining shell is required; refusing unconfined execution.', 503);
       const command = 'exec /data/harness/node/bin/node /data/harness/app/development/project-run.cjs -- bash -o pipefail -c ' + quote(args.command);
-      const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: Math.min(120000, Math.max(1000, Number(args.timeoutMs) || 60000)), dshEnv: ctx.shellEnv.collect(execution), signal: execution.signal, sandboxPolicy: { mode: 'workspace-write', workspaceRoot: project.root } });
+      const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: Math.min(120000, Math.max(1000, Number(args.timeoutMs) || 60000)), dshEnv: ctx.shellEnv.collect(execution), signal: execution.signal, sandboxPolicy: { mode: 'workspace-write', workspaceRoot: project.root, additionalWritableRoots: project.gitWritableRoots ?? [] } });
       const result = await (await ctx.shell.execute(spec)).result();
       if (execution.signal.aborted || result.aborted) throw execution.signal.reason ?? Error('Project command aborted');
       return { cwd, exitCode: result.exitCode, stdout: result.stdout.text, stderr: result.stderr.text, timedOut: result.timedOut };
