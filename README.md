@@ -111,6 +111,8 @@ Official references: [Harness source](https://github.com/deepseek-ai/deepseek-ha
 
 ## Recorded deployment
 
+The latest `deployments/2026-11-14-budget-result.json` records the verified A4000/EPYC migration under a 2,000 CZK monthly target. At the recorded contract rates, 12 active hours/day plus 96 GB storage cost USD 47.36 per 30 days before transfers and tax. The old GPU is stopped; until explicit deletion approval, its retained disk adds USD 10.24/month. The result file records whether that disk has subsequently been removed. The model and HomeAI policy are unchanged. Automatic stop/wake, identity login and all 65 checks passed; one CSV comparison completed in 217 seconds versus the previous 334 seconds. These measurements are observations, not performance or availability guarantees.
+
 `deployments/2026-11-14-homeai-iq3/` contains sanitized settings actually captured from the deployed stack, a checksum manifest and verification results. Take a new sanitized snapshot and push it before changing production configurations or versions. Private backups stay outside Git. Hardware search results are observations, not proof of inference speed; benchmark the same model and tasks before promoting another host.
 
 Monitor telemetry normalizes CPU to the container quota and uses cgroup I/O counters rather than other tenants' host activity. It also exposes elapsed generation time, output budget and whole-turn queue ages. Energy remains an estimate for the GPU only, measured since the telemetry process started.
