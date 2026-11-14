@@ -1,0 +1,17 @@
+{
+  "at": 1794673667619,
+  "passed": true,
+  "pid": 113,
+  "ownerAPI": true,
+  "automaticIsolation": true,
+  "uniquePorts": [
+    21004,
+    21005,
+    21006,
+    21007
+  ],
+  "foreignOriginRefused": true,
+  "realFileCRUD": true,
+  "ownTestConversationTrashed": true,
+  "productionConversations": 45
+}

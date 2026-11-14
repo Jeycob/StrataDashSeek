@@ -1,13 +1,22 @@
 'use strict';
-const SHELL_CACHE='harness-static-shell-v8';
-const SHELL_FILES=['/phone/','/phone/app.js','/phone/boot.js','/phone/monitor.js','/phone/config.json','/phone/icon.png'];
+const SHELL_CACHE='harness-static-shell-v10-workbench';
+const SHELL_FILES=['/phone/ui-copy.js','/phone/localize.js','/phone/i18n.js','/phone/workbench.js','/phone/','/phone/app.js','/phone/boot.js','/phone/monitor.js','/phone/apps.js','/phone/config.json','/phone/icon.png'];
 self.addEventListener('install',event=>event.waitUntil((async()=>{const cache=await caches.open(SHELL_CACHE);await cache.addAll(SHELL_FILES);await self.skipWaiting();})()));
 self.addEventListener('activate',event=>event.waitUntil((async()=>{for(const key of await caches.keys())if(key.startsWith('harness-static-shell-')&&key!==SHELL_CACHE)await caches.delete(key);await self.clients.claim();})()));
 self.addEventListener('fetch',event=>{
  const url=new URL(event.request.url);if(event.request.method!=='GET'||url.origin!==self.location.origin)return;
  const pathname=url.pathname==='/phone/index.html'?'/phone/':url.pathname;
  if(!SHELL_FILES.includes(pathname))return; // Never cache APIs, credentials, iframe content or chat history.
- event.respondWith((async()=>{const cache=await caches.open(SHELL_CACHE),cached=await cache.match(pathname);if(cached){event.waitUntil(fetch(event.request).then(response=>{if(response.ok)return cache.put(pathname,response);}).catch(()=>{}));return cached;}return fetch(event.request);})());
+ event.respondWith((async()=>{
+  const cache=await caches.open(SHELL_CACHE),cached=await cache.match(pathname);
+  // Keep the wake bootstrap immediately available offline. Fetch current UI code
+  // when online so an installed phone does not hide newly deployed controls.
+  if(cached&&['/phone/boot.js','/phone/config.json','/phone/icon.png'].includes(pathname)){event.waitUntil(fetch(event.request).then(response=>{if(response.ok)return cache.put(pathname,response);}).catch(()=>{}));return cached;}
+  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),2000);
+  try{const response=await fetch(event.request,{signal:controller.signal,cache:'no-store'});if(response.ok){await cache.put(pathname,response.clone());return response;}return cached||response;}
+  catch(error){if(cached)return cached;throw error;}
+  finally{clearTimeout(timer);}
+ })());
 });
 function target(value){try{const u=new URL(value||'/phone/',self.location.origin);if(u.origin===self.location.origin||(u.protocol==='https:'&&(u.hostname.endsWith('.ts.net')||u.hostname.endsWith('.workers.dev'))))return u.href;}catch{}return self.location.origin+'/phone/';}
 self.addEventListener('push',event=>{

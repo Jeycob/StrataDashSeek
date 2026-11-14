@@ -1,0 +1,11 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
+const dir='/data/harness/state/development/dotnet-check',dotnet='/data/harness/dev/dotnet/dotnet';
+fs.mkdirSync(dir,{recursive:true,mode:0o700});
+fs.writeFileSync(path.join(dir,'Smoke.csproj'),'<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup></Project>');
+fs.writeFileSync(path.join(dir,'Program.cs'),'Console.WriteLine("HARNESS_DOTNET_OK");');
+fs.writeFileSync(path.join(dir,'NuGet.Config'),'<configuration><packageSources><clear /></packageSources></configuration>');
+const env={...process.env,DOTNET_ROOT:'/data/harness/dev/dotnet',DOTNET_CLI_HOME:dir,DOTNET_CLI_TELEMETRY_OPTOUT:'1',DOTNET_SKIP_FIRST_TIME_EXPERIENCE:'1',NUGET_PACKAGES:path.join(dir,'packages')};
+for(const args of [['restore','--configfile',path.join(dir,'NuGet.Config')],['build','--no-restore','--configuration','Release']])cp.execFileSync(dotnet,args,{cwd:dir,env,timeout:90000,stdio:'pipe'});
+const output=cp.execFileSync(dotnet,['run','--no-build','--no-restore','--configuration','Release'],{cwd:dir,env,timeout:15000,encoding:'utf8'}).trim();
+const result={at:Date.now(),version:cp.execFileSync(dotnet,['--version'],{env,encoding:'utf8'}).trim(),passed:output==='HARNESS_DOTNET_OK',offlineRestore:true,buildExitCode:0,output};fs.writeFileSync('/data/harness/state/development/dotnet-build.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result));if(!result.passed)process.exitCode=1;

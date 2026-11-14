@@ -2,6 +2,7 @@
 // Standard Service Worker Web Push, compatible with iOS Home Screen apps >=16.4.
 // The only public routes are /phone/*. Internal controls remain loopback-only.
 const http=require('http'),fs=require('fs'),path=require('path'),crypto=require('crypto');
+const {callApps}=require('../vast/apps-cli.cjs');
 const ROOT=path.resolve(__dirname,'../..');
 const webpushPath=process.env.HARNESS_WEB_PUSH_MODULE||[path.join(__dirname,'../runtime/node_modules/web-push'),path.join(__dirname,'../../runtime/node_modules/web-push')].find(p=>fs.existsSync(p));
 if(!webpushPath)throw Error('Install the pinned runtime dependencies first.');
@@ -79,8 +80,9 @@ function createPushServer(cfg,adapter=webpush){
     res.writeHead(303,{'Location':'/phone/','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Set-Cookie':cookies.map(x=>/;\s*Secure(?:;|$)/i.test(x)?x:x+'; Secure')});return res.end();
    }
    if(req.method==='GET'){
+    if(u.pathname==='/phone/apps.js'){res.writeHead(200,{'Content-Type':'text/javascript; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return fs.createReadStream(path.join(__dirname,'apps.js')).pipe(res);}
     if(u.pathname==='/phone/manifest.webmanifest')return json(res,200,{id:'/phone/',name:'Strata Harness',short_name:'Harness',start_url:'/phone/',scope:'/phone/',display:'standalone',background_color:'#f6f7fb',theme_color:'#17243b',icons:[{src:'/phone/icon.png',sizes:'256x256',type:'image/png'}]});
-    const staticFiles={'/phone/':['phone.html','text/html; charset=utf-8'],'/phone/index.html':['phone.html','text/html; charset=utf-8'],'/phone/monitor.js':['monitor.js','text/javascript; charset=utf-8'],'/phone/boot.js':['phone-boot.js','text/javascript; charset=utf-8'],'/phone/app.js':['phone.js','text/javascript; charset=utf-8'],'/phone/sw.js':['phone-sw.js','text/javascript; charset=utf-8'],'/phone/icon.png':['phone-icon.png','image/png']};
+    const staticFiles={'/phone/ui-copy.js':['../shared/ui-copy.cjs','text/javascript; charset=utf-8'],'/phone/localize.js':['localize.js','text/javascript; charset=utf-8'],'/phone/i18n.js':['../shared/i18n.cjs','text/javascript; charset=utf-8'],'/phone/workbench.js':['../workspace/client.js','text/javascript; charset=utf-8'],'/phone/':['phone.html','text/html; charset=utf-8'],'/phone/index.html':['phone.html','text/html; charset=utf-8'],'/phone/monitor.js':['monitor.js','text/javascript; charset=utf-8'],'/phone/boot.js':['phone-boot.js','text/javascript; charset=utf-8'],'/phone/app.js':['phone.js','text/javascript; charset=utf-8'],'/phone/sw.js':['phone-sw.js','text/javascript; charset=utf-8'],'/phone/icon.png':['phone-icon.png','image/png']};
     if(staticFiles[u.pathname]){const [file,type]=staticFiles[u.pathname];res.writeHead(200,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer',...(file==='phone-sw.js'?{'Service-Worker-Allowed':'/phone/'}:{})});return fs.createReadStream(path.join(__dirname,file)).pipe(res);}
    }
    if(req.method==='POST'&&req.headers.origin!==origin)return json(res,403,{error:'Origin refused'});
@@ -109,6 +111,12 @@ function createPushServer(cfg,adapter=webpush){
     }finally{pairBusy=false;}
    }
    if(!await authorized(req))return json(res,401,{error:'Tento prohlížeč ještě není propojený s Harness serverem.'});
+   if(u.pathname.startsWith('/phone/api/apps/')){
+    const route=u.pathname.slice('/phone/api/apps'.length),getRoutes=['/state','/job-log','/container-log'],postRoutes=['/register','/project-action','/container-action','/worker-action','/hold','/preview-settings'];
+    if(!(req.method==='GET'&&getRoutes.includes(route)||req.method==='POST'&&postRoutes.includes(route)))return json(res,404,{error:'Not found'});
+    const payload=req.method==='POST'?await body(req):undefined;
+    return json(res,req.method==='POST'&&['/project-action','/worker-action','/preview-settings'].includes(route)?202:200,await callApps(route+(req.method==='GET'?u.search:''),payload,{keyFile:cfg.appsKeyFile||'/data/harness/secrets/apps-internal.key',port:cfg.appsPort||3093}));
+   }
    if(u.pathname==='/phone/api/monitor'&&req.method==='GET')return json(res,200,readJson(cfg.telemetryFile||'/data/harness/state/telemetry.json',{ready:false}));
    if(u.pathname==='/phone/api/wake-config'&&req.method==='GET')return json(res,200,{wakeUrl:cfg.wakeUrl,key:cfg.wakeKeyFile?fs.readFileSync(cfg.wakeKeyFile,'utf8').trim():null});
    if(u.pathname==='/phone/api/state'&&req.method==='GET')return json(res,200,{authorized:true,registered:!!store.installations[u.searchParams.get('installationId')]&&!store.installations[u.searchParams.get('installationId')].retiredAt,vapidPublicKey:keys.publicKey,watcherOnline:Date.now()-watcherAt<30000,...stats});

@@ -1,0 +1,23 @@
+{
+  "at": 1794672582322,
+  "passed": true,
+  "checks": {
+    "automatic-fresh-project": true,
+    "real-confined-project-command-and-completion-guard": true,
+    "source-write-is-denied-by-native-sandbox": true,
+    "file-crud-stale-version-and-path-containment": true,
+    "independent-databases-and-ports": true,
+    "reversible-conversation-delete": true,
+    "workspace-defaults-preserve-explicit-session-choice": true,
+    "native-worktree-pins-commit-and-preserves-dirty-source": true,
+    "hard-repair-pause-after-three-failed-real-checks": true,
+    "real-native-quality-tool-reports-to-shared-budget": true,
+    "quality-nonzero-is-accepted-as-failure": true,
+    "native-quality-browser-screenshot-and-positive-assertion": true,
+    "actual-native-ui-desktop-mobile-en-cs": true
+  },
+  "failures": [],
+  "modelRequests": 18,
+  "usedGPU": false,
+  "dir": "/data/harness/home/.workspace-smoke-1794672568142"
+}

@@ -1,6 +1,28 @@
 import test from 'node:test';import assert from 'node:assert/strict';import worker from './worker.mjs';
+import { Script } from 'node:vm';
+test('wake portal serves English and Czech and executable client JavaScript',async()=>{
+ const settings={HARNESS_URL:'https://harness.example.ts.net/phone/'};
+ const en=await worker.fetch(new Request('https://wake.example.com/?lang=en'),settings);
+ assert.match(await en.text(),/Your remote Harness/u);
+ const cs=await worker.fetch(new Request('https://wake.example.com/?lang=cs'),settings);
+ assert.match(await cs.text(),/Tvůj vzdálený Harness/u);
+ const script=await worker.fetch(new Request('https://wake.example.com/app.js'),settings);
+ assert.equal(script.status,200);const source=await script.text();assert.doesNotThrow(()=>new Script(source));
+});
 const origin='https://wake.example.com',env={WAKE_ACCESS_KEY:'a'.repeat(64),VAST_API_KEY:'test-only',INSTANCE_ID:'42',HARNESS_URL:'https://harness.example.ts.net/phone/'};
 const req=(path,method='GET',body,cookie)=>new Request(origin+path,{method,headers:{Origin:origin,...(cookie?{Cookie:cookie}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});
+test('HTTP 200 provider failure is never reported as a successful wake',async()=>{
+ const saved=globalThis.fetch;let response={success:false,msg:'Required resources are currently unavailable, state change queued.'};
+ globalThis.fetch=async(_url,options)=>Response.json(options.method==='GET'?{instances:{actual_status:'exited',intended_status:'stopped'}}:response);
+ try{const login=await worker.fetch(req('/api/login','POST',{key:env.WAKE_ACCESS_KEY}),env),cookie=login.headers.get('set-cookie').split(';')[0];
+  const queued=await worker.fetch(req('/api/wake','POST',{},cookie),env);assert.equal(queued.status,202);assert.deepEqual(await queued.json(),{ok:false,queued:true,code:'CAPACITY_UNAVAILABLE',retryAfterSeconds:15});
+  response={success:false,msg:'Permission denied'};assert.equal((await worker.fetch(req('/api/wake','POST',{},cookie),env)).status,503);
+ }finally{globalThis.fetch=saved;}
+});
+test('overlapping foreground wakes share one provider transition',async()=>{
+ const saved=globalThis.fetch;let puts=0;globalThis.fetch=async(_url,options)=>{await new Promise(r=>setTimeout(r,10));if(options.method==='PUT'){puts++;return Response.json({success:true});}return Response.json({instances:{intended_status:'stopped'}});};
+ try{const login=await worker.fetch(req('/api/login','POST',{key:env.WAKE_ACCESS_KEY}),env),cookie=login.headers.get('set-cookie').split(';')[0];const responses=await Promise.all([1,2,3].map(()=>worker.fetch(req('/api/wake','POST',{},cookie),env)));assert(responses.every(r=>r.status===200));assert.equal(puts,1);}finally{globalThis.fetch=saved;}
+});
 test('authentication, CSRF, signed cookies, fixed instance and idempotent wake',async()=>{
  let calls=[];const saved=globalThis.fetch;globalThis.fetch=async(url,options)=>{calls.push({url,method:options.method,body:options.body});return Response.json(options.method==='GET'?{instances:{actual_status:'running',intended_status:'running'}}:{success:true});};
  try{

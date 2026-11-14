@@ -1,0 +1,21 @@
+'use strict';
+// Explicitly approved pilot only. Never opens a host block device or overwrites a disk.
+const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto'), cp = require('node:child_process');
+const root = '/data/harness/docker-worker', lab = '/data/harness/workspaces/docker-capability-lab';
+if (process.getuid() !== 0) throw Error('Preparation requires the server owner');
+if (fs.existsSync(root)) throw Error('Worker directory exists; inspect it instead of recreating');
+const stat = fs.statfsSync('/data');
+if (stat.bavail * stat.bsize < 5.5 * 1024 ** 3) throw Error('Less than 5.5 GiB free; preserve the reserve');
+const prior = JSON.parse(fs.readFileSync(path.join(lab, 'manifest.json')));
+const isoHash = crypto.createHash('sha256').update(fs.readFileSync(path.join(lab, 'alpine.iso'))).digest('hex');
+if (isoHash !== prior.sha256 || isoHash !== '157d353f8e54252cad2d9812a0d56bb7fa2231fc154a110e1d180d7480ef8b4f') throw Error('Unexpected Alpine boot image');
+const uid = Number(cp.execFileSync('id', ['-u', 'harness'])), gid = Number(cp.execFileSync('id', ['-g', 'harness']));
+fs.mkdirSync(root, {mode:0o700}); fs.chownSync(root, uid, gid);
+for (const name of ['alpine.iso', 'vmlinuz-virt', 'initramfs-virt']) fs.linkSync(path.join(lab, name), path.join(root, name));
+const disk = fs.openSync(path.join(root, 'volume.raw'), 'wx', 0o600);
+fs.ftruncateSync(disk, 3 * 1024 ** 3);
+cp.execFileSync('fallocate',['--length',String(3*1024**3),'/proc/self/fd/3'],{stdio:['ignore','pipe','pipe',disk]});
+fs.fsyncSync(disk); fs.fchownSync(disk, uid, gid); fs.closeSync(disk);
+const manifest = {version:1, volumeId:crypto.randomBytes(16).toString('hex'), diskBytes:3*1024**3, memoryMiB:2048, vcpus:1, alpineSHA256:isoHash, preparedAt:new Date().toISOString()};
+fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2), {mode:0o644, flag:'wx'});
+console.log(JSON.stringify(manifest));

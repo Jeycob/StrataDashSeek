@@ -26,10 +26,11 @@ function installNotificationMenu(){
   const item=template.cloneNode(false);item.removeAttribute('id');item.removeAttribute('aria-keyshortcuts');item.removeAttribute('data-dsh-automatic-focus');item.dataset.harnessPushMenu='true';
   const label=doc.createElement('span');const originalLabel=template.querySelector('span[class*="itemLabel"]');
   if(originalLabel)label.className=originalLabel.className;else label.style.gridColumn='1 / -1';
-  label.textContent='Oznámení na iPhonu';item.appendChild(label);
+  label.textContent='Nastavení Harnessu';item.appendChild(label);
   item.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();byId('settings').hidden=false;byId('close-settings').focus();};
   const wrapper=template.parentElement.cloneNode(false);wrapper.removeAttribute('id');wrapper.appendChild(item);template.parentElement.after(wrapper);
-  const monitorWrapper=wrapper.cloneNode(true),monitorItem=monitorWrapper.querySelector('button');monitorItem.removeAttribute('data-harness-push-menu');monitorItem.dataset.harnessMonitorMenu='true';monitorItem.querySelector('span').textContent='Monitor serveru';monitorItem.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessMonitor();};wrapper.after(monitorWrapper);
+  const monitorWrapper=wrapper.cloneNode(true),monitorItem=monitorWrapper.querySelector('button');monitorItem.removeAttribute('data-harness-push-menu');monitorItem.dataset.harnessMonitorMenu='true';monitorItem.querySelector('span').textContent=window.HarnessI18n?.t('monitor')||'Server monitor';monitorItem.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessMonitor();};wrapper.after(monitorWrapper);
+  const appsWrapper=wrapper.cloneNode(true),appsItem=appsWrapper.querySelector('button');appsItem.removeAttribute('data-harness-push-menu');appsItem.dataset.harnessAppsMenu='true';appsItem.querySelector('span').textContent='Aplikace a kontejnery';appsItem.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessApps();};monitorWrapper.after(appsWrapper);
  };
  harnessMenuObserver=new MutationObserver(addMenuItem);
  harnessMenuObserver.observe(doc.body,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-expanded']});
@@ -48,6 +49,7 @@ async function refresh(){
  }catch(e){if(e.status===401){state=null;byId('pair').hidden=false;byId('harness').hidden=true;byId('setup-header').hidden=false;document.body.classList.remove('push-enabled');byId('settings').hidden=true;byId('status').textContent='Tento prohlížeč ještě není propojený s Harness serverem';}else byId('status').textContent='Připojení se obnovuje…';}finally{refreshing=false;}
 }
 byId('settings-button').onclick=()=>{byId('settings').hidden=!byId('settings').hidden;};
+byId('open-app-settings').onclick=()=>{byId('settings').hidden=true;window.openHarnessApps({settings:true});};
 byId('close-settings').onclick=()=>{byId('settings').hidden=true;};
 document.addEventListener('keydown',e=>{if(e.key==='Escape')byId('settings').hidden=true;});
 byId('pair-form').onsubmit=async e=>{e.preventDefault();try{await api('pair',{code:byId('pair-code').value.trim()});byId('pair-code').value='';byId('pair-message').textContent='';await refresh();byId('settings').hidden=false;note('Propojeno. Nyní můžeš zapnout oznámení.');}catch(err){byId('pair-message').textContent=err.message;}};
