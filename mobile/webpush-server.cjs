@@ -2,7 +2,7 @@
 // Standard Service Worker Web Push, compatible with iOS Home Screen apps >=16.4.
 // The only public routes are /phone/*. Internal controls remain loopback-only.
 const http=require('http'),fs=require('fs'),path=require('path'),crypto=require('crypto');
-const {callApps}=require('../vast/apps-cli.cjs');
+const {callApps,streamExport}=require('../vast/apps-cli.cjs');
 const ROOT=path.resolve(__dirname,'../..');
 const webpushPath=process.env.HARNESS_WEB_PUSH_MODULE||[path.join(__dirname,'../runtime/node_modules/web-push'),path.join(__dirname,'../../runtime/node_modules/web-push')].find(p=>fs.existsSync(p));
 if(!webpushPath)throw Error('Install the pinned runtime dependencies first.');
@@ -112,7 +112,8 @@ function createPushServer(cfg,adapter=webpush){
    }
    if(!await authorized(req))return json(res,401,{error:'Tento prohlížeč ještě není propojený s Harness serverem.'});
    if(u.pathname.startsWith('/phone/api/apps/')){
-    const route=u.pathname.slice('/phone/api/apps'.length),getRoutes=['/state','/job-log','/container-log'],postRoutes=['/register','/project-action','/container-action','/worker-action','/hold','/preview-settings'];
+    const route=u.pathname.slice('/phone/api/apps'.length),getRoutes=['/state','/job-log','/container-log','/releases'],postRoutes=['/register','/scaffold','/vault-config','/project-settings','/target-settings','/project-action','/container-action','/worker-action','/hold','/preview-settings'];
+    if(req.method==='GET'&&route==='/export-download')return streamExport(u.searchParams.get('id'),res,{keyFile:cfg.appsKeyFile||'/data/harness/secrets/apps-internal.key',port:cfg.appsPort||3093});
     if(!(req.method==='GET'&&getRoutes.includes(route)||req.method==='POST'&&postRoutes.includes(route)))return json(res,404,{error:'Not found'});
     const payload=req.method==='POST'?await body(req):undefined;
     return json(res,req.method==='POST'&&['/project-action','/worker-action','/preview-settings'].includes(route)?202:200,await callApps(route+(req.method==='GET'?u.search:''),payload,{keyFile:cfg.appsKeyFile||'/data/harness/secrets/apps-internal.key',port:cfg.appsPort||3093}));
