@@ -3,7 +3,7 @@
  const I=window.HarnessI18n,C=window.HarnessCopy;if(!I||!C)return;
  const observed=new WeakMap();let scheduled=false;
  function apply(){scheduled=false;const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let n;
-  while((n=walker.nextNode())){if(n.parentElement?.closest('script,style,textarea,pre,code,#workspace-workbench,[data-no-translate]'))continue;
+  while((n=walker.nextNode())){if(n.parentElement?.closest('script,style,textarea,pre,code,#workspace-workbench,.apps-project h4,.apps-project p:first-of-type,#apps-containers td:first-child,[data-no-translate]'))continue;
    const previous=observed.get(n),original=previous&&previous.last===n.nodeValue?previous.original:n.nodeValue,last=C.translate(original,I.language);
    observed.set(n,{original,last});if(n.nodeValue!==last)n.nodeValue=last;
   }

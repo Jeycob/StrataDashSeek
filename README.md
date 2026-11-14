@@ -128,3 +128,21 @@ Monitor telemetry normalizes CPU to the container quota and uses cgroup I/O coun
 The dated benchmark in benchmarks/disposable-20261114 records three passing CSV runs (75–112 seconds, versus one 334-second reference), smaller tasks, the failed initial game and the bounded repair attempt. It is historical evidence with fixed deadlines, not an unattended installer. Its report includes all-in trial cost estimates and deletion confirmation. Offer RAM and instance-detail host RAM used different scales in this measurement; do not multiply the reported offer RAM by gpu_frac again. Validate the actual allocation.
 
 
+
+### Isolated projects and runtime verification
+
+The [project workbench](docs/workspace-runtime.md) adds automatic native Git
+worktrees/fresh projects, per-project ports/database paths, conflict leases,
+Workspace files operations, workspace model defaults, reversible conversation
+Trash and enforced repair/stage limits. Open More → Projects and files or
+Ctrl+Alt+P. The custom panel/shell support EN/CZ. Browser and optional .NET
+runtimes are prepared once and checked locally at startup.
+
+Recorded validation: 13 real native integration checks, 116 Node regressions,
+32 Python regressions, real Chromium screenshots/console/WebGL and a .NET
+compile/run. Six real model probes verified Off versus Low/Medium wire settings
+and actual reasoning blocks; all six small code-analysis answers were correct.
+Cache warmth differed, so these are functional probes rather than a model
+quality ranking. See deployments/workspace-20261114/ for sanitized evidence.
+
+Whole-stack installation simplification is [design only](docs/installation-design.md).

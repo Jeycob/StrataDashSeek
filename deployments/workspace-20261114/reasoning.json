@@ -1,0 +1,278 @@
+{
+  "at": 1794672683708,
+  "complete": true,
+  "results": [
+    {
+      "effort": "off",
+      "task": "binary-search-trace",
+      "sessionId": "session-c37611cf-a99a-4822-8e38-d7b73add6106",
+      "elapsedSeconds": 9.668,
+      "usage": {
+        "inputTokens": 10851,
+        "outputTokens": 13,
+        "totalTokens": 10864
+      },
+      "answerCharacters": 22,
+      "correct": true,
+      "wire": [
+        {
+          "at": 1794672639125,
+          "sessionId": "session-c37611cf-a99a-4822-8e38-d7b73add6106",
+          "reasoningEffort": "none",
+          "thinkingEnabled": false,
+          "thinkingBudget": null,
+          "maxTokens": 8192,
+          "temperature": 0,
+          "topP": 0.95
+        }
+      ],
+      "assistantShape": [
+        "turn",
+        "step",
+        "message",
+        "usage",
+        "stream"
+      ],
+      "contentTypes": [
+        "text"
+      ],
+      "answer": "{\"answer\": [0, 3, -1]}",
+      "reasoningPresent": false,
+      "measured": {
+        "decodeTokensPerSecond": 43.4,
+        "promptMs": 8772.6,
+        "decodeMs": 299.6,
+        "outputTokens": 13,
+        "cachedTokens": 0
+      }
+    },
+    {
+      "effort": "off",
+      "task": "async-order-trace",
+      "sessionId": "session-ddc3ee80-89e5-4301-8252-0474787843f4",
+      "elapsedSeconds": 2.819,
+      "usage": {
+        "inputTokens": 1306,
+        "outputTokens": 16,
+        "totalTokens": 10832,
+        "cacheReadTokens": 9510
+      },
+      "answerCharacters": 24,
+      "correct": true,
+      "wire": [
+        {
+          "at": 1794672648431,
+          "sessionId": "session-ddc3ee80-89e5-4301-8252-0474787843f4",
+          "reasoningEffort": "none",
+          "thinkingEnabled": false,
+          "thinkingBudget": null,
+          "maxTokens": 8192,
+          "temperature": 0,
+          "topP": 0.95
+        }
+      ],
+      "assistantShape": [
+        "turn",
+        "step",
+        "message",
+        "usage",
+        "stream"
+      ],
+      "contentTypes": [
+        "text"
+      ],
+      "answer": "{\"answer\": [1, 2, 3, 4]}",
+      "reasoningPresent": false,
+      "measured": {
+        "decodeTokensPerSecond": 63.8,
+        "promptMs": 2313.9,
+        "decodeMs": 250.9,
+        "outputTokens": 16,
+        "cachedTokens": 9510
+      }
+    },
+    {
+      "effort": "low",
+      "task": "binary-search-trace",
+      "sessionId": "session-5946a504-78d1-476c-9837-73da4c1fe6b2",
+      "elapsedSeconds": 13.779,
+      "usage": {
+        "inputTokens": 10895,
+        "outputTokens": 334,
+        "totalTokens": 11229
+      },
+      "answerCharacters": 22,
+      "correct": true,
+      "wire": [
+        {
+          "at": 1794672651279,
+          "sessionId": "session-5946a504-78d1-476c-9837-73da4c1fe6b2",
+          "reasoningEffort": "low",
+          "thinkingEnabled": true,
+          "thinkingBudget": 2048,
+          "maxTokens": 8192,
+          "temperature": 0,
+          "topP": 0.95
+        }
+      ],
+      "assistantShape": [
+        "turn",
+        "step",
+        "message",
+        "usage",
+        "stream"
+      ],
+      "contentTypes": [
+        "reasoning",
+        "text"
+      ],
+      "answer": "{\"answer\": [0, 3, -1]}",
+      "reasoningPresent": true,
+      "measured": {
+        "decodeTokensPerSecond": 71.7,
+        "promptMs": 8888.8,
+        "decodeMs": 4656.5,
+        "outputTokens": 334,
+        "cachedTokens": 0
+      }
+    },
+    {
+      "effort": "low",
+      "task": "async-order-trace",
+      "sessionId": "session-5aace134-0efa-43ce-8d32-7ed87fc59959",
+      "elapsedSeconds": 5.834,
+      "usage": {
+        "inputTokens": 1284,
+        "outputTokens": 248,
+        "totalTokens": 11068,
+        "cacheReadTokens": 9536
+      },
+      "answerCharacters": 36,
+      "correct": true,
+      "wire": [
+        {
+          "at": 1794672665112,
+          "sessionId": "session-5aace134-0efa-43ce-8d32-7ed87fc59959",
+          "reasoningEffort": "low",
+          "thinkingEnabled": true,
+          "thinkingBudget": 2048,
+          "maxTokens": 8192,
+          "temperature": 0,
+          "topP": 0.95
+        }
+      ],
+      "assistantShape": [
+        "turn",
+        "step",
+        "message",
+        "usage",
+        "stream"
+      ],
+      "contentTypes": [
+        "reasoning",
+        "text"
+      ],
+      "answer": "```json\n{\"answer\": [1, 2, 3, 4]}\n```",
+      "reasoningPresent": true,
+      "measured": {
+        "decodeTokensPerSecond": 72.1,
+        "promptMs": 2252.4,
+        "decodeMs": 3441.6,
+        "outputTokens": 248,
+        "cachedTokens": 9536
+      }
+    },
+    {
+      "effort": "medium",
+      "task": "binary-search-trace",
+      "sessionId": "session-355b5bdf-4379-46e8-ac1d-ba1cd4409dc2",
+      "elapsedSeconds": 6.226,
+      "usage": {
+        "inputTokens": 1339,
+        "outputTokens": 312,
+        "totalTokens": 11161,
+        "cacheReadTokens": 9510
+      },
+      "answerCharacters": 34,
+      "correct": true,
+      "wire": [
+        {
+          "at": 1794672670995,
+          "sessionId": "session-355b5bdf-4379-46e8-ac1d-ba1cd4409dc2",
+          "reasoningEffort": "medium",
+          "thinkingEnabled": true,
+          "thinkingBudget": 4096,
+          "maxTokens": 8192,
+          "temperature": 0,
+          "topP": 0.95
+        }
+      ],
+      "assistantShape": [
+        "turn",
+        "step",
+        "message",
+        "usage",
+        "stream"
+      ],
+      "contentTypes": [
+        "reasoning",
+        "text"
+      ],
+      "answer": "```json\n{\"answer\": [0, 3, -1]}\n```",
+      "reasoningPresent": true,
+      "measured": {
+        "decodeTokensPerSecond": 86,
+        "promptMs": 2457.6,
+        "decodeMs": 3626.6,
+        "outputTokens": 312,
+        "cachedTokens": 9510
+      }
+    },
+    {
+      "effort": "medium",
+      "task": "async-order-trace",
+      "sessionId": "session-9eb0b460-1f90-4306-8f55-d8dd6fc7b713",
+      "elapsedSeconds": 6.52,
+      "usage": {
+        "inputTokens": 1299,
+        "outputTokens": 230,
+        "totalTokens": 11039,
+        "cacheReadTokens": 9510
+      },
+      "answerCharacters": 36,
+      "correct": true,
+      "wire": [
+        {
+          "at": 1794672677265,
+          "sessionId": "session-9eb0b460-1f90-4306-8f55-d8dd6fc7b713",
+          "reasoningEffort": "medium",
+          "thinkingEnabled": true,
+          "thinkingBudget": 4096,
+          "maxTokens": 8192,
+          "temperature": 0,
+          "topP": 0.95
+        }
+      ],
+      "assistantShape": [
+        "turn",
+        "step",
+        "message",
+        "usage",
+        "stream"
+      ],
+      "contentTypes": [
+        "reasoning",
+        "text"
+      ],
+      "answer": "```json\n{\"answer\": [1, 2, 3, 4]}\n```",
+      "reasoningPresent": true,
+      "measured": {
+        "decodeTokensPerSecond": 56.6,
+        "promptMs": 2286.7,
+        "decodeMs": 4066.4,
+        "outputTokens": 230,
+        "cachedTokens": 9510
+      }
+    }
+  ]
+}

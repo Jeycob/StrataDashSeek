@@ -258,6 +258,7 @@ export class WorkspaceManager {
   async withFiles(id, action, write = false) {
     const project = await this.projectFor(id), root = await fs.realpath(project.root), owner = '@files:' + crypto.randomUUID();
     if (write) {
+      if (!project.live) throw new WorkbenchError('SESSION_NOT_LIVE', 'Open this conversation before editing its files.', 403);
       await this.releaseIfIdle(id);
       if (project.live && this.ctx.sandboxPolicy.resolve({ session: project.live }).mode === 'read-only') throw new WorkbenchError('READ_ONLY', 'The selected conversation is read-only.', 403);
       await this.locks.acquire(root, owner);

@@ -82,6 +82,8 @@ export async function sourceManifest(root, { maxFiles = 5000, maxBytes = 32 * 10
   await walk(root); return { files, bytes, sha256: hash(JSON.stringify(Object.entries(files).sort())) };
 }
 export async function saveCheckpoint(root, destination, manifest) {
+  const capacity = await fs.statfs(root);
+  if (Number(capacity.bavail) * Number(capacity.bsize) - manifest.bytes < 2 * 1024 ** 3) throw new WorkbenchError('CHECKPOINT_DISK_RESERVE', 'Keeping 2 GiB free; previous best checkpoint is retained.');
   const staging = destination + '.' + crypto.randomUUID(); await fs.mkdir(staging, { recursive: true, mode: 0o700 });
   for (const [relative, expected] of Object.entries(manifest.files)) {
     const source = await canonicalInside(root, relative), data = await fs.readFile(source);
