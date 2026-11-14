@@ -20,6 +20,7 @@ function migrate(profileText,presetTexts,yaml){
  const queueId='cloud-homeai-turn-queue-v1';
  if(!rows.some(x=>x.get?.('id')===queueId||x.get?.('insert')?.items?.some(child=>child.get?.('id')===queueId)))rows.push(doc.createNode({insert:[{id:queueId,name:'file:///data/harness/app/vast/turn-queue/plugin.mjs',config:{providers:['strata-vast'],maxTokens:32768,statusPath:'/data/harness/state/turn-queue.json',compactionMaxTokens:8192}}]}));
  const recoveryId='cloud-homeai-request-recovery';if(!rows.some(x=>x.get?.('insert')?.items?.some(child=>child.get?.('id')===recoveryId)))rows.push(doc.createNode({insert:[{id:recoveryId,name:'file:///data/harness/app/vast/homeai-reliability.mjs',config:{providers:['strata-vast']}}]}));
+ const completionId='cloud-homeai-completion-guard';if(!rows.some(x=>x.get?.('insert')?.items?.some(child=>child.get?.('id')===completionId)))rows.push(doc.createNode({insert:[{id:completionId,name:'file:///data/harness/app/vast/completion-guard.mjs',config:{providers:['strata-vast'],maxContinuations:2,statusPath:'/data/harness/state/completion-guard.json'}}]}));
  const changed=[];
  function walk(node,visit){if(yaml.isMap(node)){visit(node);for(const pair of node.items)walk(pair.value,visit);}else if(yaml.isSeq(node))for(const child of node.items)walk(child,visit);}
  for(const [name,text] of Object.entries(presetTexts)){
