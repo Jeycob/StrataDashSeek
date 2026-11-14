@@ -15,14 +15,14 @@ async function launch(){
  if(launching)return;launching=true;
  $('login').hidden=true;$('control').hidden=false;$('wake').disabled=true;$('open').hidden=true;
  try{
-  $('status').textContent=t('Připravuji Harness…');await api('wake',{});const deadline=Date.now()+240000;let attempt=0;
+  $('status').textContent=t('Připravuji Harness…');let wake=await api('wake',{}),lastWake=Date.now();const deadline=Date.now()+360000;let attempt=0;
   while(Date.now()<deadline){
-   const state=await api(statusPath);$('open').href=state.applicationUrl||state.harnessUrl;
-   $('status').textContent=t(state.status==='running'?(state.applicationUrl?'Připravuji připojení k aplikaci…':'Čekám na bezpečné připojení k Harnessu…'):'Probouzím server…');
+   const state=await api(statusPath);if(wake.queued&&Date.now()-lastWake>=15000){wake=await api('wake',{});lastWake=Date.now();}$('open').href=state.applicationUrl||state.harnessUrl;
+   $('status').textContent=t(wake.queued?'Čekám na volnou kapacitu původního serveru.':state.status==='running'?(state.applicationUrl?'Připravuji připojení k aplikaci…':'Čekám na bezpečné připojení k Harnessu…'):'Probouzím server…');
    if(state.status==='running'&&await imageReady(state.harnessUrl)){location.replace(state.applicationUrl||state.harnessUrl);return;}
    await new Promise(r=>setTimeout(r,Math.min(5000,1000*Math.pow(1.3,attempt++))+Math.random()*250));
   }
-  throw Error('Připojení trvá déle. Zkontroluj Tailscale a zkus pokračovat odkazem.');
+  throw Error(wake.queued?'Vast zatím nemá volnou kapacitu původního serveru. Data zůstávají uložená. Zkus to později.':'Připojení trvá déle. Zkontroluj Tailscale a zkus pokračovat odkazem.');
  }catch(e){$('message').textContent=t(e.message);$('open').hidden=!$('open').href;}
  finally{launching=false;$('wake').disabled=false;}
 }
