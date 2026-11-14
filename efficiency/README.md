@@ -85,7 +85,21 @@ windows only between matching price/state observations; gaps and transitions
 remain unknown. These are hourly-rate estimates, not invoice reconciliation;
 network and unrecorded external API charges are explicitly excluded.
 
-`node efficiency/report.mjs EVENTS_JSONL BILLING_WINDOWS_JSON` reports allocation
+`billing-daemon.mjs` is a separate root-only reader of the existing idle guard's
+Vast key, not a new credential copy. It samples once per minute and writes only
+sanitized observations/windows readable by Harness. Coordinate this supervisor
+entry with HomeAI (no supervisor restart during active work):
+
+```js
+launch('efficiency-billing','/usr/bin/flock',['-n',R+'/root-secrets/efficiency-billing.lock',R+'/node/bin/node',R+'/app/efficiency/billing-daemon.mjs'],true);
+```
+
+The collector does not touch idle timestamps or create a keep-awake lease.
+It re-reads the key for rotation, bounds observations at8MiB and exposes gaps
+after downtime instead of inventing compute uptime. Concurrent copies share the
+flock. No extra package installation or account is required.
+
+`node efficiency/report.mjs EVENTS_JSONL [BILLING_WINDOWS_JSON_OR_JSONL [FROM_MS TO_MS]]` reports allocation
 of each rental interval once, split equally among active root tasks. Delegated
 children do not create an extra share or user attempt. Idle time remains visible
 as unattributed cost. Failed attempts contribute to cost; only the latest attempt

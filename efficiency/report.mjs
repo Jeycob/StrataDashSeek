@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {costReport} from './ledger.mjs';
 
@@ -13,9 +14,10 @@ export function summarizeRequests(events){
 export async function generateReport({eventsFile,billingFile,from,to}){
   const text=await fs.readFile(eventsFile,'utf8'),events=[];let invalidLines=0;
   for(const line of text.split('\n').filter(Boolean))try{const e=JSON.parse(line);if(typeof e.id!=='string'||typeof e.type!=='string'||!Number.isFinite(e.at)||e.at<0)throw Error('Invalid event');events.push(e);}catch{invalidLines++;}
-  const billing=billingFile?JSON.parse(await fs.readFile(billingFile,'utf8')):[];
+  let billing=[];const selectedBilling=billingFile??path.join(path.dirname(eventsFile),'billing-windows.jsonl');
+  try{const text=await fs.readFile(selectedBilling,'utf8');billing=text.trim().startsWith('[')?JSON.parse(text):text.split('\n').filter(Boolean).map(line=>JSON.parse(line));}catch(e){if(billingFile||e.code!=='ENOENT')throw e;}
   let stopped;try{stopped=JSON.parse(await fs.readFile(eventsFile+'.stopped.json','utf8'));}catch{}
-  const report=costReport(events,billing,{from,to}),measurementComplete=!stopped&&!invalidLines,window=events.filter(e=>e.at>=report.from&&e.at<=report.to);
+  const report=costReport(events,billing,{from,to:to??Date.now()}),measurementComplete=!stopped&&!invalidLines,window=events.filter(e=>e.at>=report.from&&e.at<=report.to);
   return{...report,tasks:report.tasks.map(task=>({...task,inference:summarizeRequests(window.filter(e=>e.taskId===task.taskId))})),measurementComplete,invalidLines,...(stopped?{stopped}:{}),...summarizeRequests(window),costPerAcceptedTaskUsd:measurementComplete?report.costPerAcceptedTaskUsd:null,acceptanceDefinition:'Latest attempt passed the declared verification contract and its source hash still matched at turn end; not independent proof of every natural-language requirement.'};
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){try{console.log(JSON.stringify(await generateReport({eventsFile:process.argv[2],billingFile:process.argv[3]}),null,2));}catch(e){console.error(e.message);process.exitCode=1;}}
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){try{console.log(JSON.stringify(await generateReport({eventsFile:process.argv[2],billingFile:process.argv[3],...(process.argv[4]?{from:Number(process.argv[4])}:{}),...(process.argv[5]?{to:Number(process.argv[5])}:{})}),null,2));}catch(e){console.error(e.message);process.exitCode=1;}}
