@@ -1,0 +1,26 @@
+{
+  "at": 1794686574.0002983,
+  "activation": {
+    "at": 1794685446.5120704,
+    "billingPids": [
+      12685
+    ],
+    "sameRamKeyAsGuard": true,
+    "samplerIntervalSeconds": 60,
+    "enabledForNextSupervisorStartup": true,
+    "modelAndHarnessRestarted": false,
+    "backupCreated": true
+  },
+  "status": {
+    "at": 1794686542513,
+    "pid": 12685,
+    "lastObservationAt": 1794686542512,
+    "source": "Vast instance API dph_total minus storage_total_cost; storage counted once"
+  },
+  "observations": 19,
+  "windows": 18,
+  "lastSampleAgeSeconds": 31.48829936981201,
+  "rootOnlyCredential": true,
+  "singleCollector": true,
+  "reportedBy": "HomeAI"
+}

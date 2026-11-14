@@ -341,9 +341,9 @@
     ]
   },
   "deployment": {
-    "status": "scheduler-deployed-billing-pending",
+    "status": "deployed-awaiting-cold-cycle",
     "liveReleaseVerified": false,
-    "reason": "Production scheduler activated through HMR with no model or Harness restart. HomeAI owns separate billing activation.",
+    "reason": "Production efficiency scheduler and single billing collector are active. HomeAI is completing the final VM cold-cycle verification; its Apps development branch remains active and excluded.",
     "wake": {
       "at": 1794678450185,
       "instanceId": 60637500,
@@ -357,8 +357,8 @@
       "available": false
     },
     "pending": [
-      "HomeAI to activate and verify the separate root-only billing collector in its supervisor/vault maintenance.",
-      "Confirm billing observations and final production health before marking the entire release verified."
+      "HomeAI to finish and report final VM cold-cycle verification.",
+      "Keep active feat/container-workbench excluded until its owner declares development complete."
     ],
     "postwake": {
       "evidence": "postwake-readonly.json",
@@ -371,6 +371,15 @@
       "dockerPersistenceReportedPassedByHomeAI": true
     },
     "efficiencyFixture": "efficiency-native.json",
-    "efficiencyActivation": "efficiency-activation.json"
+    "efficiencyActivation": "efficiency-activation.json",
+    "billing": {
+      "evidence": "billing-final-proof.json",
+      "activated": true,
+      "singleCollector": true,
+      "observations": 19,
+      "windows": 18,
+      "nativeHarnessPID": 139,
+      "reportedBy": "HomeAI"
+    }
   }
 }
