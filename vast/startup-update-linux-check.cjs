@@ -3,6 +3,7 @@
 'use strict';
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),cp=require('node:child_process');
 const {activate,restoreTransaction,releaseDigest}=require('./startup-update.cjs');
+const {install}=require('./startup-install.cjs');
 if(process.platform!=='linux'||process.getuid()!==0)throw Error('Run these checks as root in an isolated Linux test environment');
 function temporary(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'harness-update-linux-'));t.after(()=>{if(path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep+'harness-update-linux-'))fs.rmSync(root,{recursive:true,force:true});});for(const directory of['root-secrets','releases','app','workspaces'])fs.mkdirSync(path.join(root,directory));return root;}
 test('activation failure restores the previous app and preserves project data',t=>{
@@ -25,4 +26,10 @@ test('release trees refuse links and detect code tampering',t=>{
 });
 test('a writable candidate root is rejected even when all existing children are protected',t=>{
  const root=temporary(t),candidate=path.join(root,'releases/writable');fs.mkdirSync(candidate,{mode:0o755});fs.writeFileSync(path.join(candidate,'protected'),'source',{mode:0o644});fs.chmodSync(candidate,0o777);assert.throws(()=>releaseDigest(candidate),/writable outside root/);assert.throws(()=>activate(root,candidate,'c'.repeat(40)),/writable outside root/);assert.equal(fs.lstatSync(path.join(root,'app')).isDirectory(),true);
+});
+test('installer preserves unrelated startup work and supports the production nohup line idempotently',t=>{
+ const root=temporary(t);fs.mkdirSync(path.join(root,'state'));const onstart=path.join(root,'onstart.sh'),keyring=path.join(root,'public.gpg');fs.writeFileSync(keyring,'public test key');const prefix='#!/bin/bash\necho preserved\n',line='nohup bash '+root+'/app/vast/start.sh > '+root+'/logs/supervisor.log 2>&1 < /dev/null &\n';fs.writeFileSync(onstart,prefix+line,{mode:0o755});const options={root,keyring,signers:['A'.repeat(40)],onstart};assert.equal(install(options).startsOnNextBoot,true);const updated=fs.readFileSync(onstart,'utf8');assert.equal(updated,prefix+line.replace('/app/vast/start.sh','/bootstrap/start.sh'));assert.equal(install(options).installed,true);assert.equal(fs.readFileSync(onstart,'utf8'),updated);assert.match(fs.readFileSync(path.join(root,'bootstrap/startup-update.cjs'),'utf8'),/use strict/);
+});
+test('installer refuses an unrecognized startup command without changing it',t=>{
+ const root=temporary(t),onstart=path.join(root,'onstart.sh'),keyring=path.join(root,'public.gpg');fs.writeFileSync(onstart,'custom-launch --options\n',{mode:0o755});fs.writeFileSync(keyring,'public');assert.throws(()=>install({root,keyring,signers:['A'.repeat(40)],onstart}),/recognized/);assert.equal(fs.readFileSync(onstart,'utf8'),'custom-launch --options\n');assert.equal(fs.existsSync(path.join(root,'bootstrap/start.sh')),false);
 });
