@@ -1,5 +1,5 @@
 {
-  "status": "tested-awaiting-owner-production-update",
+  "status": "deployed-services-verified",
   "baseCommit": "f34e0ab2a7d91e37caf6bf1eae1a17ca95cb0f20",
   "node": {
     "startedAt": 1794694213979,
@@ -469,13 +469,28 @@
       "Runtime parent is used for stable service data"
     ],
     "platform": "Windows Node, real filesystem junction",
-    "linuxSymlinkRecheck": "Pending owner; same portable test uses a directory symlink on Linux. No production billing daemon or provider API is executed by the test."
+    "linuxSymlinkRecheck": {
+      "repeatedFromWindowsSuite": true,
+      "additionalUniqueTestCases": 0,
+      "passed": 6,
+      "skipped": 0,
+      "platform": "Linux Node v24.21.0, actual directory symlink",
+      "failed": 0
+    }
   },
   "deployment": {
-    "performedByThisTask": false,
-    "serverCloudflareOrWakeRequestsPerformed": false,
-    "owner": "HomeAI",
-    "nativeAndModelRestartedByThisTask": false,
-    "requires": "Owner verifies signed update, waits for service retry and checks Linux symlink/binding and production health."
+    "signatureVerified": true,
+    "profileUnchanged": true,
+    "protectedServicesRestarted": false,
+    "appliedCommit": "a7df02aea034d9fbf99e597b08112bb217f5bf1d",
+    "servicesRecovered": [
+      "applications",
+      "push",
+      "efficiency-billing"
+    ],
+    "note": "A real cold start exposed the runtime binding regression; the signed hotfix restored retrying services without restarting the model or Native Harness. Whole-instance sleep was not forced again because provider capacity is unreliable.",
+    "performedBy": "HomeAI owner task",
+    "furtherWholeInstanceColdStartAfterFix": false,
+    "proof": "production-proof.json"
   }
 }

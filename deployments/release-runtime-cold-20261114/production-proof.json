@@ -1,0 +1,64 @@
+{
+  "at": "2026-11-14T22:12:48.563Z",
+  "commit": "a7df02aea034d9fbf99e597b08112bb217f5bf1d",
+  "applied": {
+    "version": 1,
+    "enabled": true,
+    "phase": "ready",
+    "checkedAt": "2026-11-14T22:12:40.522Z",
+    "appliedCommit": "a7df02aea034d9fbf99e597b08112bb217f5bf1d",
+    "targetCommit": "a7df02aea034d9fbf99e597b08112bb217f5bf1d",
+    "error": null,
+    "signatureVerified": true
+  },
+  "previousColdGate": {
+    "version": 1,
+    "enabled": true,
+    "phase": "ready",
+    "checkedAt": "2026-11-14T21:57:43.890Z",
+    "appliedCommit": "f34e0ab2a7d91e37caf6bf1eae1a17ca95cb0f20",
+    "targetCommit": "f34e0ab2a7d91e37caf6bf1eae1a17ca95cb0f20",
+    "error": null,
+    "signatureVerified": true
+  },
+  "harnessStartedAt": "2026-11-14T21:57:47.940Z",
+  "coldGateBeforeHarness": true,
+  "unchangedProtectedServices": {
+    "strata": true,
+    "harness": true,
+    "tailscaled": true,
+    "model-proxy": true
+  },
+  "recoveredStableServices": {
+    "applications": true,
+    "push": true,
+    "efficiency-billing": true
+  },
+  "billingFresh": true,
+  "profileUnchanged": true,
+  "modelLoaded": true,
+  "sessions": 48,
+  "passed": true,
+  "billingFollowup": {
+    "at": "2026-11-14T22:19:14.895Z",
+    "observationsSinceRecovery": 7,
+    "lastTimes": [
+      1794694606449,
+      1794694667300,
+      1794694728259
+    ],
+    "status": {
+      "at": 1794694728260,
+      "pid": 10120,
+      "lastObservationAt": 1794694728259,
+      "source": "Vast instance API dph_total minus storage_total_cost; storage counted once"
+    }
+  },
+  "linuxRuntimeTests": {
+    "file": "vast/runtime-release.test.cjs",
+    "passed": 6,
+    "failed": 0,
+    "skipped": 0,
+    "repeatedFromWindowsSuite": true
+  }
+}
