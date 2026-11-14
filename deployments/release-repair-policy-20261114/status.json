@@ -1,0 +1,387 @@
+{
+  "originalCommit": "3632aed",
+  "integratedCommit": "573bede38d009fb91342ffcaf429cc04a40f469c",
+  "repairPolicyVersion": 2,
+  "change": "Unrelated setup errors do not consume the failed-verification repair budget; repeated identical tool errors remain bounded.",
+  "node": {
+    "startedAt": 1794689555994,
+    "finishedAt": 1794689571940,
+    "platform": "win32",
+    "node": "v24.21.0",
+    "source": {
+      "sha256": "ffabffe55d733d2a3f611e72ef83622665365146ce50c92dc7f41785a7850da5",
+      "files": 213,
+      "definition": "Sorted tracked JS/Python/config/UI paths and LF-normalized UTF-8 content; release evidence excluded."
+    },
+    "stale": false,
+    "passed": true,
+    "files": 31,
+    "passedTests": 190,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "results": [
+      {
+        "file": "cloudflare/application-target.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "cloudflare/benchmark-cleanup.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "cloudflare/instance-control.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "cloudflare/worker.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 7,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "desktop/open-harness.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "efficiency/core.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 18,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "efficiency/plugin.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 7,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "efficiency/sdk.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/notifications.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/phone-boot.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 3,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/phone-shell.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/polling.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "quality/browser.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "quality/core.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 19,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps-power.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 14,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps-scaffold.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps-workflow.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 12,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 23,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/cgroup.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/completion-guard.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/homeai-profile.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/homeai-reliability.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/lifecycle.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/model-proxy.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/telemetry.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/turn-queue/queue.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 25,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/vault-migrate.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 3,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/http.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/install.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/owner-api.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/policy.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 9,
+          "failed": 0
+        },
+        "skipped": 0
+      }
+    ]
+  },
+  "python": {
+    "platform": "Ubuntu WSL",
+    "passed": true,
+    "tests": 32,
+    "files": [
+      "vast/test-idle-guard.py",
+      "vast/test-preview-settings.py",
+      "vast/test-session-migration.py"
+    ]
+  },
+  "liveVerification": {
+    "reportedBy": "HomeAI",
+    "repairPolicyVersion": 2,
+    "harnessPIDBefore": 143,
+    "harnessPIDAfter": 1671,
+    "modelPID": 112,
+    "modelInterrupted": false,
+    "sessionsPreserved": 48,
+    "note": "Owner-reported live verification before cherry-pick. This integration performed Git and local tests only."
+  },
+  "remoteServerOrCloudflareActionsPerformedByThisIntegration": false
+}
