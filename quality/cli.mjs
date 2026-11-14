@@ -1,4 +1,4 @@
-import { pathToFileURL } from 'node:url';
+import {isMain} from '../runtime/require.cjs';
 import { verifyProject, compactReport } from './core.mjs';
 
 export function argumentsOf(argv) {
@@ -20,4 +20,4 @@ export async function main(argv) {
   catch (e) { console.log(JSON.stringify({ passed: false, complete: false, stale: false, checks: [], code: e.code ?? 'VERIFICATION_FAILED', error: e.message })); return 1; }
   finally { process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort); }
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) process.exitCode = await main(process.argv.slice(2));
+if (isMain(import.meta.url)) process.exitCode = await main(process.argv.slice(2));

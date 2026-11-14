@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {isMain} from '../runtime/require.cjs';
 import {confined,digest,runProgram} from '../quality/core.mjs';
 
 export async function focusContext(workspace, request={}) {
@@ -27,7 +27,7 @@ export async function focusContext(workspace, request={}) {
   const git=await runProgram(['git','--no-optional-locks','--no-pager','-c','core.fsmonitor=false','diff','--no-ext-diff','--no-textconv','--stat','--no-renames','HEAD','--','.'],{cwd:root,timeoutMs:3000,outputLimit:2500});
   return {workspace:root,excerpts,changedFiles,changes:git.exitCode===0?git.stdout.trim():'No committed Git baseline available.',note:'Snapshot only. Use the file hash for a justified large rewrite; read more explicit ranges when needed.'};
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
+if(isMain(import.meta.url)){
   try{console.log(JSON.stringify(await focusContext(process.argv[2],JSON.parse(process.argv[3]??'{}'))));}
   catch(error){console.log(JSON.stringify({error:error.message}));process.exitCode=1;}
 }

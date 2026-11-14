@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import {pathToFileURL} from 'node:url';
+import {isMain} from '../runtime/require.cjs';
 import {digest} from '../quality/core.mjs';
 
 export async function cacheProbe({baseURL='http://127.0.0.1:8080',fetcher=fetch}={}){
@@ -26,4 +26,4 @@ export async function cacheProbe({baseURL='http://127.0.0.1:8080',fetcher=fetch}
   }
   return{at:Date.now(),synthetic:true,model:initial.engine?.model,engineVersion:initial.engine?.version,configurationChanged:false,results};
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){try{const r=await cacheProbe();if(process.argv[2])await fs.writeFile(process.argv[2],JSON.stringify(r,null,2),{mode:0o600});console.log(JSON.stringify(r));if(r.results.some(x=>!x.answerCorrect))process.exitCode=1;}catch(e){console.error(e.message);process.exitCode=1;}}
+if(isMain(import.meta.url)){try{const r=await cacheProbe();if(process.argv[2])await fs.writeFile(process.argv[2],JSON.stringify(r,null,2),{mode:0o600});console.log(JSON.stringify(r));if(r.results.some(x=>!x.answerCorrect))process.exitCode=1;}catch(e){console.error(e.message);process.exitCode=1;}}

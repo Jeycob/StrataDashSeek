@@ -1,5 +1,5 @@
 'use strict';
-const YAML=require('yaml'),path=require('node:path');
+const YAML=require('../runtime/require.cjs').runtimeRequire('yaml'),path=require('node:path');
 const {LABEL}=require('./apps-engine.cjs');
 const id=/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$/;
 function relative(value){return typeof value==='string'&&value.length<=300&&!path.isAbsolute(value)&&!value.split(/[\\/]/).includes('..')&&!value.includes('\0');}

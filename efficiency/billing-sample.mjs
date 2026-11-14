@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import {pathToFileURL} from 'node:url';
+import {isMain} from '../runtime/require.cjs';
 
 export async function sampleBilling({instanceId,keyFile,fetcher=fetch,now=Date.now,signal}={}){
   if(!/^\d+$/u.test(String(instanceId)))throw Error('Numeric instance id required.');
@@ -21,4 +21,4 @@ export function billingWindows(observations,{maxGapMs=120000}={}){
   }
   return windows;
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){try{const value=await sampleBilling({instanceId:process.argv[2],keyFile:process.argv[3]});if(process.argv[4])await fs.appendFile(process.argv[4],JSON.stringify(value)+'\n',{mode:0o600});console.log(JSON.stringify(value));}catch(e){console.error(e.message);process.exitCode=1;}}
+if(isMain(import.meta.url)){try{const value=await sampleBilling({instanceId:process.argv[2],keyFile:process.argv[3]});if(process.argv[4])await fs.appendFile(process.argv[4],JSON.stringify(value)+'\n',{mode:0o600});console.log(JSON.stringify(value));}catch(e){console.error(e.message);process.exitCode=1;}}

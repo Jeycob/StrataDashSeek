@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import {pathToFileURL} from 'node:url';
+import {isMain} from '../runtime/require.cjs';
 import {sampleBilling,billingWindows} from './billing-sample.mjs';
 
 export function resolveBillingKeyFile(guard,env=process.env){
@@ -32,4 +32,4 @@ async function main(){
     if(!stopped)await new Promise(r=>{let timer;const finish=()=>{clearTimeout(timer);process.removeListener('SIGTERM',finish);process.removeListener('SIGINT',finish);r();};timer=setTimeout(finish,60000);process.once('SIGTERM',finish);process.once('SIGINT',finish);});
   }
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)await main();
+if(isMain(import.meta.url))await main();

@@ -3,13 +3,14 @@
 // The only public routes are /phone/*. Internal controls remain loopback-only.
 const http=require('http'),fs=require('fs'),path=require('path'),crypto=require('crypto');
 const {callApps,streamExport}=require('../vast/apps-cli.cjs');
+const {runtimeRequire,serviceDataRoot}=require('../runtime/require.cjs');
 const ROOT=path.resolve(__dirname,'../..');
-const webpushPath=process.env.HARNESS_WEB_PUSH_MODULE||[path.join(__dirname,'../runtime/node_modules/web-push'),path.join(__dirname,'../../runtime/node_modules/web-push')].find(p=>fs.existsSync(p));
-if(!webpushPath)throw Error('Install the pinned runtime dependencies first.');
-const webpush=require(webpushPath);
+const webpush=process.env.HARNESS_WEB_PUSH_MODULE?require(process.env.HARNESS_WEB_PUSH_MODULE):runtimeRequire('web-push');
 function atomicJson(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const tmp=file+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
 function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'))}catch(e){if(e.code==='ENOENT')return fallback;throw e;}}
 function createPushServer(cfg,adapter=webpush){
+ const dataRoot=serviceDataRoot();
+ cfg={...cfg,secretDir:cfg.secretDir||(dataRoot?path.join(dataRoot,'secrets'):path.join(ROOT,'work/.secrets')),desktopLog:cfg.desktopLog||(dataRoot?path.join(dataRoot,'logs/harness.log'):path.join(ROOT,'work/.secrets/desktop-web.stdout.log'))};
  const origin='https://'+cfg.publicHost;
  if(!/^[a-z0-9.-]+\.ts\.net$/i.test(cfg.publicHost))throw Error('Invalid private HTTPS host');
  const secretDir=cfg.secretDir||path.join(ROOT,'work/.secrets');

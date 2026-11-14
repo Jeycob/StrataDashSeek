@@ -71,6 +71,13 @@ It contains no credentials, keyring paths, cookies or raw command output.
 `ready` describes verified source activation, not completion of model loading.
 Existing model health and application lifecycle checks remain separate.
 
+Service packages are loaded from the persistent runtime, independently of the
+release pointer (`HOMEAI_RUNTIME`, or `/data/harness/runtime`). No global module
+path is added to project processes. Push data defaults use `HOMEAI_ROOT`, the
+parent of an explicit runtime, or the existing `/data/harness` installation;
+explicit push configuration paths retain priority. ESM command entry checks
+compare real file paths so a launch through `app` still executes its main code.
+
 ## Verification
 
 The portable Node regression checks use a real signed public commit and public

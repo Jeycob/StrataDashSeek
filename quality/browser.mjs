@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import {isMain} from '../runtime/require.cjs';
 import { confined, readJson, digest, QualityError } from './core.mjs';
 
 const ID = /^[a-z][a-z0-9_-]{0,63}$/u;
@@ -158,6 +158,6 @@ async function main(argv) {
   if (Object.keys(opts).length !== 4) throw Error('Expected workspace, plan, output and run-id.');
   const report = await verifyBrowser(opts); console.log(JSON.stringify({ passed: report.passed, failed: report.failed, screenshots: report.screenshots.length })); return report.failed || !report.passed ? 1 : 0;
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMain(import.meta.url)) {
   try { process.exitCode = await main(process.argv.slice(2)); } catch (e) { console.error(e.message); process.exitCode = 1; }
 }
