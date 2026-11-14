@@ -16,6 +16,19 @@ test('three failed repairs pause even when files change; a lower failure score i
   b.observe({ kind: 'test', exitCode: 0, text: 'all passed' }); assert.equal(b.steps, 0); assert.equal(b.blocked, null);
 });
 test('stage step budget is enforced even without recognizable checks', () => { const b = new RepairBudget(); for (let i = 0; i < 10; i++) assert.equal(b.step(10), true); assert.equal(b.step(10), false); });
+test('setup errors are not combined into failed repairs before implementation', () => {
+  const b = new RepairBudget(); b.step(60);
+  b.observe({ isError: true, text: 'Use project_exec instead of bash' });
+  b.observe({ isError: true, text: 'Use project_exec instead of bash' });
+  b.observe({ exitCode: 1, text: 'Documentation search: permission denied' });
+  assert.equal(b.blocked, null); assert.equal(b.stalled, 0); assert.equal(b.steps, 1); assert.deepEqual(b.checks, {});
+});
+test('a repeated tool failure still pauses and a verified stage starts a fresh error budget', () => {
+  const b = new RepairBudget(); for (let i = 0; i < 2; i++) b.observe({ isError: true, text: 'same failed tool' });
+  b.observe({ kind: 'test', exitCode: 0, text: 'passed' });
+  for (let i = 0; i < 2; i++) b.observe({ isError: true, text: 'same failed tool' });
+  assert.equal(b.blocked, null); b.observe({ isError: true, text: 'same failed tool' }); assert.equal(b.blocked.code, 'REPEATED_TOOL_ERROR');
+});
 test('same error ignores timings and generated absolute paths', () => assert.equal(errorFingerprint('/tmp/a.js error in 20ms'), errorFingerprint('/tmp/b.js error in 99ms')));
 test('file paths reject absolute, traversal and VCS writes', () => { for (const p of ['../x', '/etc/passwd', 'a/../../b', '.git/config', 'a\\b', './x']) assert.throws(() => relativeFile(p)); assert.equal(relativeFile('src/app.cs'), 'src/app.cs'); });
 test('leases serialize competing runs, allow siblings and block overlapping roots', async t => {

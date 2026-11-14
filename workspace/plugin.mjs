@@ -50,7 +50,7 @@ export async function apply(ctx, config = {}) {
   async function state() {
     const workspaces = ctx.workspaceRegistry.list().map(w => ({ id: w.id, title: w.title, path: w.path, sessionIds: w.sessionIds, settings: manager.data.workspaces[w.id]?.settings }));
     const projects = Object.fromEntries(Object.entries(manager.data.sessions).map(([id, p]) => [id, { root: p.root, ports: p.ports, databasePath: p.databasePath, baseCommit: p.baseCommit, nativeWorktree: p.nativeWorktree, legacy: p.legacy, budget: p.budget, checkpoints: Object.fromEntries(Object.entries(p.checkpoints ?? {}).map(([k, c]) => [k, { score: c.score, at: c.at, files: c.files }])), checkpointError: p.checkpointError }]));
-    return { defaults: DEFAULTS, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
+    return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
   }
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench', methods: ['GET', 'POST'], requestBody: 'buffered', fetch: async request => {
     try {
