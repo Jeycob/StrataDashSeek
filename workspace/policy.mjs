@@ -1,5 +1,6 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { classifyToolOutcome } from './tool-recovery.mjs';
 
 export class WorkbenchError extends Error {
   constructor(code, message, status = 409) { super(message); this.code = code; this.status = status; }
@@ -41,23 +42,25 @@ export function checkScore(exitCode, text) {
   const matches = [...String(text).matchAll(/(?:\b(\d+)\s+(?:failed|failures?|errors?)\b|\bfail\s+(\d+)\b|\berrors?\s*:\s*(\d+))/giu)];
   return matches.length ? Math.max(1, ...matches.map(x => Number(x[1] ?? x[2] ?? x[3]))) : 1e9;
 }
-export const REPAIR_POLICY_VERSION = 2;
+export const REPAIR_POLICY_VERSION = 3;
 export class RepairBudget {
   constructor(saved = {}) { Object.assign(this, { stage: 1, steps: 0, stalled: 0, errors: {}, checks: {}, blocked: null }, saved); }
   step(limit) { if (this.blocked) return false; if (++this.steps > limit) this.blocked = { code: 'STAGE_BUDGET', message: 'A verified stage is required before continuing.' }; return !this.blocked; }
-  observe({ kind, exitCode, text, isError, manifestHash }, limit = 3) {
+  observe({ kind, exitCode, text, isError, manifestHash, timedOut, aborted, recovery }, limit = 3) {
     if (this.blocked) return { improved: false };
-    const failed = isError || (Number.isInteger(exitCode) && exitCode !== 0);
+    const classification = recovery ?? classifyToolOutcome({ kind, exitCode, text, isError, timedOut, aborted });
+    const failed = classification.failed;
+    if (classification.category === 'cancelled') return { improved: false, key: 'cancelled', category: classification.category };
     if (!kind && !failed) return { improved: false };
     // Setup/usage failures are not failed verification or attempted repairs.
     // Still stop a genuinely repeated tool error, without combining unrelated errors.
-    if (!kind) {
-      const fingerprint = errorFingerprint(text);
+    if (!kind || !classification.verification) {
+      const fingerprint = classification.category + ':' + errorFingerprint(text);
       this.errors[fingerprint] = (this.errors[fingerprint] ?? 0) + 1;
       if (this.errors[fingerprint] >= limit) this.blocked = { code: 'REPEATED_TOOL_ERROR', message: 'The same tool error repeated without resolution. Review the error and choose a different approach.' };
-      return { improved: false, key: 'tool-error', blocked: this.blocked };
+      return { improved: false, key: 'tool-error', category: classification.category, blocked: this.blocked };
     }
-    const key = kind ?? 'tool-error', previous = this.checks[key], score = failed ? checkScore(exitCode, text) : 0;
+    const key = kind ?? 'tool-error', previous = this.checks[key], score = failed ? checkScore(exitCode === 0 ? 1 : exitCode, text) : 0;
     const fingerprint = failed ? errorFingerprint(text) : null;
     if (fingerprint) this.errors[fingerprint] = (this.errors[fingerprint] ?? 0) + 1;
     const improved = !previous || score < previous.bestScore;

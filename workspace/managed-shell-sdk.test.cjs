@@ -84,3 +84,14 @@ test('a future seeded session admits the managed definition before its first pro
  const f=await fixture(t),a=f.agent('future',{record:false,seeded:true,createdAt:new Date(2000).toISOString()});f.managed.install(a);assert.notEqual(f.ctx.tools.get('bash',a),f.native);
  const toolSet=await f.admit(a);t.after(()=>toolSet.dispose());f.manager.data.sessions[a.id]={root:'/managed/future',legacy:false};assert.equal(f.managed.handles({name:'bash',agent:a,toolSet}),true);const result=await f.call(a,undefined,{toolSet});assert.equal(result.isError,false,JSON.stringify(result));assert.equal(f.calls.length,1);
 });
+
+test('the actual SDK final observer covers admission failures and final policy blocks without changing outcomes',async t=>{
+ const f=await fixture(t),a=f.agent('one');f.managed.install(a);const seen=[];
+ f.ctx.on('tools/result',(exec,result)=>{seen.push({exec,result});assert(Object.isFrozen(exec));assert(Object.isFrozen(result));},{global:true});
+ f.ctx.tools.guard(exec=>exec.arguments.command==='denied'?{reason:'Independent admission refusal'}:undefined);
+ const invalid=await f.call(a,{command:'denied',description:'Admission fixture'});
+ assert.equal(invalid.isError,true);assert.equal(seen.length,1);assert.equal(seen[0].result,invalid);assert.equal(f.calls.length,0);
+ f.ctx.on('tools/post-execute',async()=>({kind:'block',feedback:[{type:'text',text:'Independent final policy block'}]}),{global:true});
+ const blocked=await f.call(a);assert.equal(blocked.isError,true);assert.match(blocked.content[0].text,/Independent final policy block/);
+ assert.equal(seen.length,2);assert.equal(seen[1].result,blocked);assert.equal(f.calls.length,1);
+});

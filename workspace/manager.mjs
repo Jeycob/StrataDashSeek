@@ -6,6 +6,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY_VERSION, validationKind, relativeFile, within } from './policy.mjs';
 import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash } from './storage.mjs';
+import { LiveChanges } from './changes.mjs';
+import { classifyToolOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
 const run = promisify(execFile);
 const notice = text => ({ id: crypto.randomUUID(), role: 'user', source: { kind: 'workspace-runtime' }, content: [{ type: 'text', text }] });
 
@@ -14,7 +16,8 @@ export class WorkspaceManager {
     this.ctx = ctx; this.config = config; this.repairPolicyVersion = REPAIR_POLICY_VERSION;
     this.root = config.stateRoot ?? '/data/harness/state/workbench'; this.projectsRoot = config.projectsRoot ?? '/data/harness/workspaces/projects';
     this.file = path.join(this.root, 'registry.json'); this.locks = new ProjectLocks(path.join(this.root, 'leases'));
-    this.serial = Promise.resolve(); this.persistQueue = Promise.resolve(); this.running = new Map(); this.grants = new Map(); this.budgets = new Map(); this.frozenSettings = new Map(); this.pendingNotices = new Map();
+    this.changes = new LiveChanges({ ...config.changes, stateRoot: path.join(this.root, 'changes') });
+    this.serial = Promise.resolve(); this.persistQueue = Promise.resolve(); this.running = new Map(); this.grants = new Map(); this.budgets = new Map(); this.frozenSettings = new Map(); this.pendingNotices = new Map(); this.pendingDiagnostics = new Map(); this.resultWork = new Map();
   }
   async initialize() {
     await fs.mkdir(this.root, { recursive: true, mode: 0o700 }); await fs.mkdir(this.projectsRoot, { recursive: true, mode: 0o700 });
@@ -113,12 +116,17 @@ export class WorkspaceManager {
       record = { root, sourceRoot: current, workspaceId: workspace?.id, ports, databasePath, baseCommit, branch, nativeWorktree, gitWritableRoots, at: Date.now(), settings };
       this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save();
       await atomicJSON(path.join(root, '.harness', 'project.json'), { sessionId: agent.id, ports, databasePath, baseCommit, root });
+      // Change tracking is optional: a full source baseline must never prevent
+      // the user's project from starting when disk reserve is unavailable.
+      try { await this.changes.initialize(agent.id, record, { projectCreated: true, signal }); }
+      catch (error) { this.ctx.logger?.warn('Change baseline unavailable: ' + (error.code ?? 'CHANGES_UNAVAILABLE')); }
       this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec use the same confined foreground project executor and export PORT, API_PORT, DATABASE_URL and the prepared tool paths. Read-only permissions stay read-only. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs; quality contract documentation: /data/harness/app/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Validate each milestone; repeated failing checks or an unverified stage exceeding ${settings.maxStageSteps} steps will pause the run for a user strategy decision.`));
       return record;
     });
   }
   async preStep({ agent, signal, turn, step }) {
     const initiator = agent.id; agent = this.ownerAgent(agent);
+    await this.drainToolResults(agent.id);
     if (this.data.trash[agent.id]) throw new WorkbenchError('SESSION_IN_TRASH', 'Restore this conversation before continuing.');
     const record = await this.ensureProject(agent, signal);
     if (!record.legacy && this.environmentReady) {
@@ -156,21 +164,45 @@ export class WorkspaceManager {
       if (exec.name === 'apply_patch' && typeof patch === 'string') for (const line of patch.split('\n')) { const match = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/u.exec(line); if (match && !within(record.root, path.resolve(record.root, match[1]))) return { reason: 'Patch target is outside this isolated project.' }; }
     }
   }
+  // The SDK final observer sees every outcome, including schema/guard failures
+  // and post-execute policy decisions. It cannot alter the authoritative result.
+  // Serialize bookkeeping per project and drain it before the next model step.
+  observeToolResult(exec, result) {
+    const id = exec.agent?.id; if (!id) return;
+    const work = (this.resultWork.get(id) ?? Promise.resolve()).then(() => this.toolResult(exec, result)).catch(error => {
+      this.ctx.logger?.warn('Tool diagnostic bookkeeping unavailable: ' + (error.code ?? 'DIAGNOSTIC_UNAVAILABLE'));
+    });
+    this.resultWork.set(id, work);
+    void work.then(() => { if (this.resultWork.get(id) === work) this.resultWork.delete(id); });
+  }
+  async drainToolResults(id) { await this.resultWork.get(id); }
   async toolResult(exec, result, verificationKind) {
-    const record = this.data.sessions[exec.agent?.id]; if (!record || exec.signal.aborted) return;
+    const record = this.data.sessions[exec.agent?.id]; if (!record || exec.signal?.aborted) return;
     const command = exec.arguments?.command, kind = verificationKind ?? (exec.name === 'stage_check' ? 'test' : validationKind(command));
     const exitCode = result.value?.exitCode;
-    if (!kind && !result.isError && !(Number.isInteger(exitCode) && exitCode !== 0)) return;
-    // A shell pipeline can hide the real check exit code. It cannot earn a pass.
-    if (kind && exitCode === 0 && (exec.name === 'project_exec' ? /\|\||;\s*(?:true|exit\s+0)\b/u : /\||;|\$\(/u).test(command ?? '')) return;
     const text = result.content?.filter(x => x.type === 'text').map(x => x.text).join('\n') ?? result.error?.message ?? '';
+    const recovery = classifyToolOutcome({ kind, exitCode, text, isError: result.isError, timedOut: result.value?.timedOut, aborted: result.value?.aborted, errorCode: result.error?.info?.code });
+    if (recovery.category === 'cancelled') return;
+    if (recovery.failed) {
+      const diagnostics = this.pendingDiagnostics.get(exec.agent.id) ?? new Map();
+      diagnostics.set(recovery.code, recoveryContext(recovery));
+      while (diagnostics.size > 4) diagnostics.delete(diagnostics.keys().next().value);
+      this.pendingDiagnostics.set(exec.agent.id, diagnostics);
+      record.lastDiagnostic = { code: recovery.code, category: recovery.category, at: Date.now() };
+    }
+    if (!kind && !recovery.failed) return;
+    // A shell pipeline can hide the real check exit code. It cannot earn a pass.
+    const managedCommand = exec.name === 'project_exec' || exec.managedProjectShell;
+    const observedCommand = managedCommand ? normalizeVerificationCommand(command).command : command;
+    if (kind && exitCode === 0 && /\||;|\$\(/u.test(observedCommand ?? '')) return;
     if (!kind) {
       const budget = this.budgets.get(exec.agent.id);
-      budget.observe({ exitCode, text, isError: result.isError }, this.settings(exec.agent.session).noProgressLimit);
+      budget.observe({ exitCode, text, isError: result.isError, recovery }, this.settings(exec.agent.session).noProgressLimit);
       record.budget = budget; await this.save(); return;
     }
-    let manifest; try { manifest = await sourceManifest(record.root, { signal: exec.signal }); } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
-    const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, manifestHash: manifest?.sha256 }, this.settings(exec.agent.session).noProgressLimit);
+    let manifest;
+    if (recovery.verification) try { manifest = await sourceManifest(record.root, { signal: exec.signal }); } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
+    const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, recovery, manifestHash: manifest?.sha256 }, this.settings(exec.agent.session).noProgressLimit);
     if (decision.improved && manifest) {
       try {
         const saved = await saveCheckpoint(record.root, path.join(this.root, 'checkpoints', exec.agent.id, 'best'), manifest);
@@ -205,6 +237,7 @@ export class WorkspaceManager {
     record.lastVerification = { kind: report.kind, exitCode: report.exitCode, at: Date.now(), sourceHash: report.sourceHash, checksPassed: report.checksPassed, checksTotal: report.checksTotal }; await this.save();
   }
   async releaseIfIdle(id) {
+    await this.drainToolResults(id);
     if (this.ctx.agents.get(id)?.status === 'running') return;
     const activity = await this.ctx.waterfall('workspace/session-activity', { sessionId: id }, () => Promise.resolve([]));
     if (activity.length) return;
@@ -306,6 +339,16 @@ export class WorkspaceManager {
       }
       throw new WorkbenchError('UNKNOWN_OPERATION', 'Unknown file operation.', 400);
     }, !['list', 'read', 'stat', 'download'].includes(operation));
+  }
+  async projectChanges(id, operation = 'list', args = {}, signal) {
+    if (this.data.trash[id]) throw new WorkbenchError('SESSION_IN_TRASH', 'Restore the conversation before viewing its changes.', 403);
+    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !['path', 'revision', 'diffRevision'].includes(key))) throw new WorkbenchError('INVALID_CHANGES_REQUEST', 'Invalid change request.', 400);
+    for (const key of ['revision', 'diffRevision']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !/^[a-f0-9]{64}$/u.test(args[key]))) throw new WorkbenchError('INVALID_CHANGES_REQUEST', 'Invalid change revision.', 400);
+    const project = await this.projectFor(id), record = this.data.sessions[id] ?? { root: project.root, sourceRoot: project.root, legacy: true };
+    const input = { ...record, root: project.root }, options = { ...args, signal, running: this.ctx.agents.get(id)?.status === 'running' };
+    if (operation === 'list') return this.changes.list(id, input, options);
+    if (operation === 'diff') return this.changes.diff(id, input, options);
+    throw new WorkbenchError('UNKNOWN_OPERATION', 'Unknown change operation.', 400);
   }
 }
 

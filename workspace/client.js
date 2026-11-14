@@ -12,6 +12,8 @@
  style.textContent+='#'+prefix+'root textarea.wb-editor{min-height:45dvh}';
  dialog.innerHTML=dialog.innerHTML.replace(/id="([^"]+)"/g,(_,id)=>'id="'+prefix+id+'"');
  const el=id=>dialog.querySelector('#'+prefix+id),node=(tag,text)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;return e;},button=(label,fn)=>{const e=node('button',label);e.type='button';e.onclick=fn;return e;};
+ let toolsMenu,toolsTitle;
+ if(embedded&&options.section!=='settings'&&window.HarnessNativeTheme){toolsMenu=node('details');toolsMenu.className='wb-tools';toolsTitle=node('summary',t('workspaceTools'));const nav=el('wb-tabs');nav.before(toolsMenu);toolsMenu.append(toolsTitle,nav);}
  let state=null,catalog=null,sessionRows=[],tab=options.section||'files',selectedSession=options.sessionId||'',selectedWorkspace=options.workspaceId||'',directory='',file=null,dirty=false,loading=false,returnFocus=null,installedDocument=null,observer=null,menu=null;
  const draftKey=options.sessionId&&(options.sessionId+':'+(options.instanceId||'default'));
  const held=draftKey&&(drafts.has(draftKey)?[draftKey,drafts.get(draftKey)]:[...drafts].reverse().find(([,d])=>d.sessionId===options.sessionId));const draft=held?.[1];if(draft&&tab==='files'){file={...draft.file};directory=draft.directory;dirty=true;drafts.delete(held[0]);}
@@ -31,7 +33,7 @@
  async function refresh(){if(loading)return;loading=true;try{const [s,rows,models]=await Promise.all([api(),native('session/list',{}),native('session/modelCatalog').catch(()=>null)]);state=s;catalog=models;sessionRows=rows.items||[];selectedSession=selectedSession||(embedded?'':selectedFromUI())||'';selectedWorkspace=selectedWorkspace||state.workspaces.find(w=>w.sessionIds.includes(selectedSession))?.id||(tab==='settings'?state.workspaces[0]?.id:'')||'';pickers();await render();if(!embedded)installNative();}catch(e){error(e);}finally{loading=false;}}
  function discardChanges(){if(dirty&&!confirm(t('discard')))return false;dirty=false;file=null;if(draftKey)drafts.delete(draftKey);return true;}
  async function readFile(path){try{return await fileAPI('read',{path});}catch(e){if(!['BINARY_FILE','TOO_LARGE'].includes(e.code))throw e;return {...await fileAPI('stat',{path}),binary:true};}}
- function tabs(){el('wb-tabs').replaceChildren();for(const key of embedded?['files','review','environment','sessions','trash']:['files','settings','sessions','review','environment','trash']){const b=button(t(key),()=>{if(!discardChanges())return;tab=key;tabs();void action(render);});b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===key));el('wb-tabs').append(b);}}
+ function tabs(){if(toolsTitle)toolsTitle.textContent=t('workspaceTools')+(tab==='files'?'':' · '+t(tab));el('wb-tabs').replaceChildren();for(const key of embedded?['files','review','environment','sessions','trash']:['files','settings','sessions','review','environment','trash']){const b=button(t(key),()=>{if(!discardChanges())return;tab=key;if(toolsMenu)toolsMenu.open=false;tabs();void action(render);});b.setAttribute('role','tab');b.setAttribute('aria-selected',String(tab===key));el('wb-tabs').append(b);}}
  async function open(which='files',workspaceId){if(dirty&&!dialog.open&&!confirm(t('discard')))return;tab=which;selectedSession=selectedFromUI()||selectedSession;if(workspaceId)selectedWorkspace=workspaceId;returnFocus=nativeDoc().activeElement;I.apply(dialog.ownerDocument);el('wb-language').value=I.language;tabs();if(!dialog.open)dialog.showModal();await refresh();}
  if(!embedded)window.openHarnessWorkbench=open;
  async function fileAPI(operation,args){return api({op:'file',sessionId:selectedSession,operation,args});}
@@ -78,6 +80,7 @@
  el('wb-workspace').onchange=()=>{if(!discardChanges()){el('wb-workspace').value=selectedWorkspace;return;}selectedWorkspace=el('wb-workspace').value;void action(render);};
  if(!embedded){listen(frame()||window,'load',()=>{void refresh();});listen(document,'click',e=>{if(menu&&!menu.contains(e.target)&&!e.target.closest('[data-workbench-settings]'))menu.remove();});}
  if(embedded&&options.section!=='settings'){style.textContent+='#'+prefix+'wb-tabs{display:flex;margin:0 0 10px}#'+prefix+'wb-tabs button{font-size:12px;padding:6px 8px}';tabs();}
+ if(embedded&&window.HarnessNativeTheme){dialog.classList.add('harness-native-surface');style.textContent=window.HarnessNativeTheme.css(style.textContent,dialog.id);}
  I.apply(dialog.ownerDocument);void refresh();
  const beforeUnload=e=>{if(dirty){e.preventDefault();e.returnValue='';}};listen(window,'beforeunload',beforeUnload);
  return{element:dialog,refresh,reload,notifyChange(){const tree=dialog.querySelector('.wb-tree');if(tab==='files'&&tree)void action(async()=>{await fillTree(tree);if(file)el('wb-message').textContent=t('filesChanged');});},get dirty(){return dirty;},canClose:discardChanges,destroy(){if(draftKey&&dirty&&file)drafts.set(draftKey,{file:{...file},directory,sessionId:options.sessionId});else if(draftKey)drafts.delete(draftKey);lifetime.abort();observer?.disconnect();menu?.remove();dialog.remove();style.remove();}};

@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WorkspaceManager } from './manager.mjs';
 import { WorkbenchError, DEFAULTS } from './policy.mjs';
@@ -15,6 +16,7 @@ const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 export async function apply(ctx, config = {}) {
   const manager = new WorkspaceManager(ctx, config); await manager.initialize();
+  ctx.effect(() => () => manager.changes.dispose());
   // Local, bounded checks only: never install or download during a cold start.
   const environmentReport = config.environmentReport ?? '/data/harness/state/development.json';
   const preflight = doctor({ output: environmentReport, directory: path.join(path.dirname(environmentReport), 'development') }).catch(error => ({ browser: { ok: false, error: error.message }, dotnet: { available: false } }));
@@ -29,16 +31,23 @@ export async function apply(ctx, config = {}) {
   ctx.on('agent/created', async ({ agent, source, signal }) => { await manager.applyDefaults(agent, source); if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal); managedShell.install(agent); }, { global: true });
   ctx.on('agent/pre-step', async (input, next) => {
     await manager.preStep(input); manager.frozenSettings.set(input.agent.id, { ...manager.settings(manager.ownerAgent(input.agent).session) });
-    const decision = await next(), id = manager.ownerAgent(input.agent).id, message = manager.pendingNotices.get(id);
-    if (decision.kind === 'enter' && message) { manager.pendingNotices.delete(id); return { ...decision, messages: [...decision.messages, message] }; }
+    const decision = await next(), id = manager.ownerAgent(input.agent).id, message = manager.pendingNotices.get(id), diagnostics = manager.pendingDiagnostics.get(id);
+    if (decision.kind === 'enter' && (message || diagnostics?.size)) {
+      manager.pendingNotices.delete(id); manager.pendingDiagnostics.delete(id);
+      const messages = message ? [message] : [];
+      if (diagnostics?.size) messages.push({ id: crypto.randomUUID(), role: 'user', source: { kind: 'workspace-runtime' }, content: [{ type: 'text', text: [...diagnostics.values()].join('\n\n') }] });
+      return { ...decision, messages: [...decision.messages, ...messages] };
+    }
     return decision;
   }, { prepend: true, global: true });
   ctx.tools.guard(exec => manager.toolGuard({ ...exec, agent: manager.ownerAgent(exec.agent), managedProjectShell: managedShell.handles(exec) }));
-  ctx.on('tools/post-execute', async (exec, result, next) => { if (exec.name !== 'verify_project') await manager.toolResult({ ...exec, agent: manager.ownerAgent(exec.agent) }, result); return next(); }, { global: true });
+  ctx.on('tools/result', (exec, result) => {
+    if (exec.name !== 'verify_project') manager.observeToolResult({ ...exec, agent: manager.ownerAgent(exec.agent), managedProjectShell: managedShell.handles(exec) }, result);
+  }, { global: true });
   ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
   ctx.on('workspace-runtime/review', async ({ sessionId }, next) => (await manager.review(sessionId)) ?? next());
   ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.releaseIfIdle(session.id).catch(() => {}), 0); });
-  ctx.on('agent/disposed', ({ agent }) => { managedShell.remove(agent); manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
+  ctx.on('agent/disposed', ({ agent }) => { managedShell.remove(agent); manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); manager.pendingDiagnostics.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
   const timer = setInterval(() => { for (const id of manager.running.keys()) void manager.releaseIfIdle(id).catch(() => {}); }, 10000); timer.unref();
   ctx.effect(() => () => clearInterval(timer));
   ctx.on('llm-pi-ai/request-headers', (request, headers, next) => {
@@ -58,7 +67,7 @@ export async function apply(ctx, config = {}) {
     const workspaces = ctx.workspaceRegistry.list().map(w => ({ id: w.id, title: w.title, path: w.path, sessionIds: w.sessionIds, settings: manager.data.workspaces[w.id]?.settings }));
     const projects = Object.fromEntries(Object.entries(manager.data.sessions).map(([id, p]) => [id, { root: p.root, ports: p.ports, databasePath: p.databasePath, baseCommit: p.baseCommit, nativeWorktree: p.nativeWorktree, legacy: p.legacy, budget: p.budget, checkpoints: Object.fromEntries(Object.entries(p.checkpoints ?? {}).map(([k, c]) => [k, { score: c.score, at: c.at, files: c.files }])), checkpointError: p.checkpointError }]));
     const update = await fs.readFile(config.updateReport ?? '/data/harness/state/startup-update.json', 'utf8').then(JSON.parse).then(value => Object.fromEntries(['version','enabled','phase','checkedAt','appliedCommit','targetCommit','error','signatureVerified'].map(key => [key,value[key]]))).catch(() => null);
-    return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, managedShellVersion: 1, update, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
+    return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, managedShellVersion: 1, changesVersion: 1, update, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
   }
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench', methods: ['GET', 'POST'], requestBody: 'buffered', fetch: async request => {
     try {
@@ -68,6 +77,7 @@ export async function apply(ctx, config = {}) {
       if (id !== undefined && (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(id))) throw new WorkbenchError('INVALID_SESSION', 'Invalid conversation.', 400);
       if (data.op === 'settings') return reply(await manager.updateSettings(data.workspaceId, data.settings));
       if (data.op === 'file') return reply(await manager.files(id, data.operation, data.args ?? {}, request.signal));
+      if (data.op === 'changes') return reply(await manager.projectChanges(id, data.operation ?? 'list', data.args ?? {}, request.signal));
       if (data.op === 'trash') return reply(await manager.inOrder(() => manager.trashSession(id)));
       if (data.op === 'restore') return reply(await manager.inOrder(() => manager.restoreSession(id)));
       if (data.op === 'resume') { await manager.reviewResume(id, data.strategy); return reply({ resumed: true }); }

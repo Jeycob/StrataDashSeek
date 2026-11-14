@@ -30,6 +30,47 @@ test('a repeated tool failure still pauses and a verified stage starts a fresh e
   assert.equal(b.blocked, null); b.observe({ isError: true, text: 'same failed tool' }); assert.equal(b.blocked.code, 'REPEATED_TOOL_ERROR');
 });
 test('same error ignores timings and generated absolute paths', () => assert.equal(errorFingerprint('/tmp/a.js error in 20ms'), errorFingerprint('/tmp/b.js error in 99ms')));
+
+test('recognized test setup, invocation, stale edits and timeouts do not consume failed verification repairs', () => {
+  const budget = new RepairBudget(); budget.step(60);
+  for (const observation of [
+    { kind: 'test', exitCode: 1, text: 'Cannot find module /project/test\n# tests 1\n# fail 1' },
+    { kind: 'test', exitCode: 1, text: 'ERR_INVALID_ARG_TYPE: third argument must be object' },
+    { kind: 'test', isError: true, text: 'old_string not found' },
+    { kind: 'test', timedOut: true, text: 'check did not settle' },
+  ]) budget.observe(observation);
+  assert.equal(budget.stalled, 0); assert.deepEqual(budget.checks, {}); assert.equal(budget.blocked, null);
+  assert.equal(budget.steps, 1);
+  budget.observe({ kind: 'test', exitCode: 1, text: 'AssertionError [ERR_ASSERTION]: expected 2' });
+  assert.equal(budget.stalled, 1); assert.ok(budget.checks.test);
+});
+
+test('repeated setup failures still pause separately and cannot bypass the stage budget', () => {
+  const budget = new RepairBudget();
+  for (let i = 0; i < 3; i++) budget.observe({ kind: 'test', exitCode: 1, text: 'Cannot find module /project/test' });
+  assert.equal(budget.blocked.code, 'REPEATED_TOOL_ERROR'); assert.equal(budget.stalled, 0); assert.deepEqual(budget.checks, {});
+  const distinct = new RepairBudget();
+  for (let i = 0; i < 10; i++) { distinct.step(10); distinct.observe({ kind: 'test', exitCode: 1, text: 'missing script: unique-' + i }); }
+  assert.equal(distinct.blocked, null); distinct.step(10); assert.equal(distinct.blocked.code, 'STAGE_BUDGET');
+});
+
+test('zero tests, missing status and masked assertion failures cannot reset a verification stage', () => {
+  for (const observation of [
+    { kind: 'test', exitCode: 0, text: '# tests 0\n# pass 0' },
+    { kind: 'test', exitCode: null, text: 'still running' },
+    { kind: 'test', exitCode: 0, text: 'AssertionError [ERR_ASSERTION]\n# tests 1\n# fail 1' },
+  ]) {
+    const budget = new RepairBudget(); budget.step(60); budget.observe(observation);
+    assert.equal(budget.stage, 1); assert.equal(budget.steps, 1);
+    if (budget.checks.test) assert.ok(budget.checks.test.lastScore > 0);
+  }
+});
+
+test('cancellation is not an attempted repair or a completed verification', () => {
+  const budget = new RepairBudget();
+  for (let i = 0; i < 5; i++) budget.observe({ kind: 'test', aborted: true });
+  assert.equal(budget.blocked, null); assert.equal(budget.stalled, 0); assert.equal(budget.stage, 1); assert.deepEqual(budget.checks, {});
+});
 test('file paths reject absolute, traversal and VCS writes', () => { for (const p of ['../x', '/etc/passwd', 'a/../../b', '.git/config', 'a\\b', './x']) assert.throws(() => relativeFile(p)); assert.equal(relativeFile('src/app.cs'), 'src/app.cs'); });
 test('leases serialize competing runs, allow siblings and block overlapping roots', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'workspace-leases-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));

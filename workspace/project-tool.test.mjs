@@ -78,3 +78,25 @@ test('the trusted managed-shell marker never overrides Trash, repair stops or ou
   manager.data.trash.one = {}; assert.equal(manager.toolGuard(exec).info.code, 'SESSION_IN_TRASH'); delete manager.data.trash.one;
   manager.budgets.set('one', { blocked: { code: 'REPAIR_NO_PROGRESS', message: 'Review a different strategy' } }); assert.equal(manager.toolGuard(exec).info.code, 'REPAIR_NO_PROGRESS');
 });
+
+test('literal verification adaptations preserve admitted arguments, project policy and native status', async t => {
+  const f = await fixture(t), original = Object.freeze({ command: 'cd server && node --test --test-timeout=6000 test/ 2>&1 | tail -70', description: 'Run API tests' });
+  const value = await f.run(original, f.execution), spec = f.calls[0];
+  assert.equal(original.command, 'cd server && node --test --test-timeout=6000 test/ 2>&1 | tail -70');
+  assert.match(spec.command, /test-command\.cjs/); assert(!spec.command.includes('tail -70'));
+  assert(spec.command.includes('cd server &&')); assert.equal(spec.sandboxPolicy.workspaceRoot, f.root);
+  assert.match(value.result.stdout.text, /terminal tail filter removed/); assert.match(value.result.stdout.text, /compatibility helper used/);
+  assert.equal(value.result.exitCode, 0);
+  await f.run({ command: 'cd server && npm test 2>&1 | tail -60', description: 'Run npm lifecycle' }, f.execution);
+  assert(!f.calls[1].command.includes('test-command.cjs')); assert(!f.calls[1].command.includes('tail -60'));
+  assert(f.calls[1].command.includes('cd server && npm test'));
+});
+
+test('arbitrary compound commands and JavaScript source are never rewritten', async t => {
+  const f = await fixture(t);
+  for (const command of ['node -e "e.transform(\'const a=1\',\'{}\',{loader:\'js\'})"', 'npm test && echo ok 2>&1 | tail -60', 'cd "$OTHER" && node --test test/', 'node --test test/*.mjs']) {
+    const value = await f.run({ command, description: 'Keep exact shell semantics' }, f.execution);
+    assert(value.spec.command.endsWith("'" + command.replaceAll("'", "'\\''") + "'"));
+    assert.equal(value.result.stdout.text, 'ok');
+  }
+});

@@ -111,3 +111,51 @@ Harness labels retain their vendor language where no localization hook exists.
 
 Whole-stack installation simplification is a [design proposal](installation-design.md)
 only. No new rental or whole-stack one-click installer is introduced.
+# Live changes and shared tool diagnostics
+
+The Native right sidebar includes **Changes** beside **Workspace files** and
+**Applications and Docker**. Its guide entry uses the same Native card as the
+other tools. The panels use Native fonts, colors and dark-mode tokens; secondary
+file actions remain available under **Workspace tools**.
+
+Changes are captured from files on disk, including saves made by shell commands.
+A new independent project compares against its empty project start; a Git
+worktree compares against its recorded base commit. Existing continued or legacy
+projects receive a bounded snapshot labelled **since tracking started**. Earlier
+unsaved history cannot be reconstructed. The owner-only existing Workbench API
+resolves the conversation's registered root; callers cannot supply another root.
+
+Only the visible Changes tab polls: every two seconds while the conversation is
+running and every fifteen seconds while idle. Hidden tabs stop polling and abort
+outstanding requests. One request includes the file list and selected diff;
+unchanged revisions preserve the selection. Tracking does not call the model or
+wake Docker. Dependency/build folders, conventional secret files and symlinks
+are excluded. Default limits are 1,000 files, 8 MiB source data, 256 KiB per text
+diff and 5,000 displayed diff lines. Partial captures and binary/large files are
+explicitly labelled. Tracking snapshots reserve 2 GiB free disk space.
+
+All final SDK tool results, including future skill tools and admission failures,
+enter the same per-project diagnostic queue. It does not mutate tool outcomes,
+tool arguments, permissions or source. Before the next model step the queue
+distinguishes failed assertions, missing prerequisites, invalid invocation,
+stale edit context, timeout, cancellation and empty test selection. Fixed bounded
+guidance contains no copied command arguments or log secrets. Reading a source
+file containing failure text cannot itself become a failed test.
+
+Repair policy version 3 counts actual failed verification separately from
+launch, usage, stale-edit and timeout errors. Three repetitions of the same tool
+error still pause the run, and the overall stage limit remains enforced. Zero
+tests, all-skipped tests, missing exit status and timed-out commands cannot pass
+a stage. Existing paused runs require a reviewed new strategy; upgrading does
+not silently restart them.
+
+Managed `bash` and `project_exec` share narrow, explicit compatibility rules:
+known literal verification commands may drop a terminal `2>&1 | tail -N` filter
+so the first error remains visible; direct literal `node --test` calls use a
+bounded helper that expands directory operands to actual test files. One literal
+`cd directory &&` prefix is supported. The output states each adaptation and
+the original admitted arguments remain in the audit trail. Unsupported shell
+forms and arbitrary JavaScript are unchanged. npm scripts and lifecycle hooks
+are never silently bypassed or rewritten. A stale edit requires rereading the
+current lines, and hanging tests require fixing cleanup; there is no fuzzy edit,
+automatic side-effect retry or injected force-exit.
