@@ -144,5 +144,7 @@ The production scheduler was then replaced through HMR after two fresh checks
 confirmed no running or queued work. Harness PID139 was preserved, the model was
 not restarted, and the profile was backed up. Exactly one efficiency scheduler
 is configured and loaded; the legacy scheduler is absent. The resumed-session
-32768 output-token ceiling remains in force. HomeAI owns activation of the
-separate billing collector. See `deployments/release-20261114/` for evidence.
+32768 output-token ceiling remains in force. HomeAI also activated the separate
+billing collector and verified one root-only process, a60-second sample interval
+and19 observations forming18 billing windows. The final VM cold-cycle check is
+still owned by HomeAI. See `deployments/release-20261114/` for evidence.
