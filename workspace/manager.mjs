@@ -4,14 +4,14 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, validationKind, relativeFile, within } from './policy.mjs';
+import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY_VERSION, validationKind, relativeFile, within } from './policy.mjs';
 import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash } from './storage.mjs';
 const run = promisify(execFile);
 const notice = text => ({ id: crypto.randomUUID(), role: 'user', source: { kind: 'workspace-runtime' }, content: [{ type: 'text', text }] });
 
 export class WorkspaceManager {
   constructor(ctx, config = {}) {
-    this.ctx = ctx; this.config = config;
+    this.ctx = ctx; this.config = config; this.repairPolicyVersion = REPAIR_POLICY_VERSION;
     this.root = config.stateRoot ?? '/data/harness/state/workbench'; this.projectsRoot = config.projectsRoot ?? '/data/harness/workspaces/projects';
     this.file = path.join(this.root, 'registry.json'); this.locks = new ProjectLocks(path.join(this.root, 'leases'));
     this.serial = Promise.resolve(); this.persistQueue = Promise.resolve(); this.running = new Map(); this.grants = new Map(); this.budgets = new Map(); this.frozenSettings = new Map(); this.pendingNotices = new Map();
@@ -164,6 +164,11 @@ export class WorkspaceManager {
     // A shell pipeline can hide the real check exit code. It cannot earn a pass.
     if (kind && exitCode === 0 && (exec.name === 'project_exec' ? /\|\||;\s*(?:true|exit\s+0)\b/u : /\||;|\$\(/u).test(command ?? '')) return;
     const text = result.content?.filter(x => x.type === 'text').map(x => x.text).join('\n') ?? result.error?.message ?? '';
+    if (!kind) {
+      const budget = this.budgets.get(exec.agent.id);
+      budget.observe({ exitCode, text, isError: result.isError }, this.settings(exec.agent.session).noProgressLimit);
+      record.budget = budget; await this.save(); return;
+    }
     let manifest; try { manifest = await sourceManifest(record.root, { signal: exec.signal }); } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
     const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, manifestHash: manifest?.sha256 }, this.settings(exec.agent.session).noProgressLimit);
     if (decision.improved && manifest) {

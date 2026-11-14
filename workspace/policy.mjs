@@ -41,6 +41,7 @@ export function checkScore(exitCode, text) {
   const matches = [...String(text).matchAll(/(?:\b(\d+)\s+(?:failed|failures?|errors?)\b|\bfail\s+(\d+)\b|\berrors?\s*:\s*(\d+))/giu)];
   return matches.length ? Math.max(1, ...matches.map(x => Number(x[1] ?? x[2] ?? x[3]))) : 1e9;
 }
+export const REPAIR_POLICY_VERSION = 2;
 export class RepairBudget {
   constructor(saved = {}) { Object.assign(this, { stage: 1, steps: 0, stalled: 0, errors: {}, checks: {}, blocked: null }, saved); }
   step(limit) { if (this.blocked) return false; if (++this.steps > limit) this.blocked = { code: 'STAGE_BUDGET', message: 'A verified stage is required before continuing.' }; return !this.blocked; }
@@ -48,12 +49,20 @@ export class RepairBudget {
     if (this.blocked) return { improved: false };
     const failed = isError || (Number.isInteger(exitCode) && exitCode !== 0);
     if (!kind && !failed) return { improved: false };
+    // Setup/usage failures are not failed verification or attempted repairs.
+    // Still stop a genuinely repeated tool error, without combining unrelated errors.
+    if (!kind) {
+      const fingerprint = errorFingerprint(text);
+      this.errors[fingerprint] = (this.errors[fingerprint] ?? 0) + 1;
+      if (this.errors[fingerprint] >= limit) this.blocked = { code: 'REPEATED_TOOL_ERROR', message: 'The same tool error repeated without resolution. Review the error and choose a different approach.' };
+      return { improved: false, key: 'tool-error', blocked: this.blocked };
+    }
     const key = kind ?? 'tool-error', previous = this.checks[key], score = failed ? checkScore(exitCode, text) : 0;
     const fingerprint = failed ? errorFingerprint(text) : null;
     if (fingerprint) this.errors[fingerprint] = (this.errors[fingerprint] ?? 0) + 1;
     const improved = !previous || score < previous.bestScore;
     this.checks[key] = { bestScore: improved ? score : previous.bestScore, lastScore: score, fingerprint, manifestHash };
-    if (!failed) { this.steps = 0; this.stalled = 0; this.stage++; }
+    if (!failed) { this.steps = 0; this.stalled = 0; this.errors = {}; this.stage++; }
     else if (improved && previous) this.stalled = 0;
     else this.stalled++;
     if (failed && (this.stalled >= limit || this.errors[fingerprint] >= limit)) this.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Repeated repairs did not improve verification. Review the checkpoint and choose a different approach.' };
