@@ -341,9 +341,9 @@
     ]
   },
   "deployment": {
-    "status": "partially-deployed",
+    "status": "scheduler-deployed-billing-pending",
     "liveReleaseVerified": false,
-    "reason": "Baseline restored and isolated native efficiency integration passed. Production scheduler and billing await coordinated activation.",
+    "reason": "Production scheduler activated through HMR with no model or Harness restart. HomeAI owns separate billing activation.",
     "wake": {
       "at": 1794678450185,
       "instanceId": 60637500,
@@ -357,9 +357,8 @@
       "available": false
     },
     "pending": [
-      "HomeAI owns server maintenance; coordinate before any production changes.",
-      "Activate exactly one scheduler and separate billing collector only during coordinated maintenance with no running or queued tasks.",
-      "Verify final production configuration before marking the entire release live."
+      "HomeAI to activate and verify the separate root-only billing collector in its supervisor/vault maintenance.",
+      "Confirm billing observations and final production health before marking the entire release verified."
     ],
     "postwake": {
       "evidence": "postwake-readonly.json",
@@ -367,10 +366,11 @@
       "reportedBy": "Vast.AI",
       "baselineVerified": true,
       "pendingThreeAssetsDeployed": true,
-      "efficiencyActivated": false,
+      "efficiencyActivated": true,
       "physicalApplePushTested": false,
       "dockerPersistenceReportedPassedByHomeAI": true
     },
-    "efficiencyFixture": "efficiency-native.json"
+    "efficiencyFixture": "efficiency-native.json",
+    "efficiencyActivation": "efficiency-activation.json"
   }
 }
