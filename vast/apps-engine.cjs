@@ -19,7 +19,7 @@ class DockerEngine {
     res.on('data',chunk=>{if(done)return;total+=chunk.length;if(total>maxBytes){abort(Error('Docker response exceeded limit'));return;}try{if(onChunk)onChunk(chunk);else chunks.push(chunk);}catch(e){abort(e);}});
     res.on('error',fail);res.on('end',()=>{if(done)return;done=true;const raw=Buffer.concat(chunks);if(res.statusCode>=400){let message=raw.toString();try{message=JSON.parse(message).message}catch{}return reject(Error('Docker '+res.statusCode+': '+String(message).slice(0,1000)));}resolve({status:res.statusCode,body:raw});});
    });
-   const timer=setTimeout(()=>abort(Error('Docker operation timed out')),timeout);timer.unref();
+   const timer=setTimeout(()=>abort(Error('Docker operation timed out: '+method+' '+route.split('?')[0])),timeout);timer.unref();
    req.on('error',fail);req.on('close',()=>clearTimeout(timer));
    if(stream){stream.on('error',abort);stream.pipe(req);}else req.end(json?JSON.stringify(json):undefined);
   });

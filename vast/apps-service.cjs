@@ -15,16 +15,23 @@ function createAppsService(cfg={},injected){
   if(req.method==='GET'&&u.pathname==='/state')return json(res,200,await manager.state());
   if(req.method==='GET'&&u.pathname==='/job-log')return json(res,200,{text:manager.jobLog(u.searchParams.get('id'))});
   if(req.method==='GET'&&u.pathname==='/container-log')return json(res,200,{text:await manager.logs(u.searchParams.get('id'))});
+  if(req.method==='GET'&&u.pathname==='/releases')return json(res,200,{releases:await manager.releaseList(u.searchParams.get('id'))});
+  if(req.method==='GET'&&u.pathname==='/release')return json(res,200,{release:await manager.releaseDetail(u.searchParams.get('id'),u.searchParams.get('releaseId'))});
+  if(req.method==='GET'&&u.pathname==='/export-download'){const e=manager.exportFile(u.searchParams.get('id')),s=fs.statSync(e.file),release=manager.beginTransfer();res.once('close',release);res.setTimeout(120000,()=>res.destroy());res.writeHead(200,{'Content-Type':'application/gzip','Content-Length':s.size,'Content-Disposition':'attachment; filename="'+e.filename+'"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});const input=fs.createReadStream(e.file);input.on('error',()=>res.destroy());res.on('close',()=>input.destroy());return input.pipe(res);}
   if(req.method!=='POST')return json(res,404,{error:'Not found'});
   let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>16384)throw Object.assign(Error('Request too large'),{status:413});}let data;try{data=JSON.parse(raw)}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}
   if(u.pathname==='/register')return json(res,200,await manager.register(data.path));
+  if(u.pathname==='/scaffold')return json(res,200,await manager.scaffold(data.path,data.dryRun===true));
+  if(u.pathname==='/vault-config')return json(res,200,await manager.configureVault(data));
+  if(u.pathname==='/project-settings')return json(res,200,manager.projectSettings(data.id,data));
+  if(u.pathname==='/target-settings')return json(res,200,await manager.targetSettings(data));
   if(u.pathname==='/worker-action')return json(res,202,manager.enqueuePower(data.action));
   if(u.pathname==='/hold')return json(res,200,manager.hold(data.minutes));
   if(u.pathname==='/preview-settings')return json(res,202,manager.enqueuePreviewSettings(data.enabled));
   if(u.pathname==='/prepare-sleep')return json(res,200,await manager.prepareSleep());
   if(u.pathname==='/confirm-sleep')return json(res,200,manager.confirmSleep(data.token));
   if(u.pathname==='/cancel-sleep')return json(res,200,manager.cancelSleep(data.token));
-  if(u.pathname==='/project-action')return json(res,202,manager.enqueue(data.id,data.action));
+  if(u.pathname==='/project-action')return json(res,202,manager.enqueue(data.id,data.action,{releaseId:data.releaseId,targetId:data.targetId}));
   if(u.pathname==='/container-action')return json(res,200,await manager.containerAction(data.id,data.action));
   return json(res,404,{error:'Not found'});
  }catch(e){if(!res.headersSent)json(res,e.status||400,{error:e.message});else res.destroy();}});
