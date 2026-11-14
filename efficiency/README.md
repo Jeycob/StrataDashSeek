@@ -122,3 +122,17 @@ prefill4802.4ms/reused0; identical repeat393.0ms/reused5438; changed early syste
 prefix4759.3ms/reused0. All four responses were correct. Reordering two supplied
 tools in this build did not invalidate reuse; no general order-related speedup
 is claimed. These short synthetic results are not a full coding-task benchmark.
+
+At the current checkpoint, 28/28 local tests passed: 24 regressions plus four
+integrations using the actual pinned Cordis/Tools/SystemPrompt SDK and YAML
+parser, not mock replacements for those services. They exercise canonical
+outcomes, monotonic rewrite denial, appended context, stable tool declarations,
+and another task's inference during a heavy tool with max one provider stream.
+Set `EFFICIENCY_SDK_ROOT` to the pinned runtime's `node_modules` and run
+`node --test efficiency/core.test.mjs efficiency/plugin.test.mjs efficiency/sdk.test.mjs`.
+
+The Linux native-Harness fixture and production activation remain uncompleted:
+after the coordinated stop test Vast reported that the original instance's GPU
+resources were unavailable. No replacement was rented and no production scheduler
+was changed. Run `efficiency/smoke.cjs` only after the other chats confirm ready,
+then coordinate one scheduler replacement and the separate billing collector.

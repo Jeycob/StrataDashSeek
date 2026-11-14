@@ -76,12 +76,14 @@ test('shared billing is allocated exactly once including failed attempts and idl
   const e=[{id:'1',at:0,type:'turn-start',taskId:'A',runId:'A1'},{id:'2',at:900000,type:'turn-start',taskId:'B',runId:'B1'},{id:'3',at:1800000,type:'turn-end',taskId:'A',runId:'A1'},{id:'4',at:2700000,type:'turn-end',taskId:'B',runId:'B1'},{id:'5',at:2700000,type:'accepted',taskId:'B',runId:'B1'}];
   const r=costReport(e,bill,{from:0,to:3600000});assert.ok(Math.abs(r.knownCostUsd-1.2)<1e-9);assert.ok(Math.abs(r.unattributedCostUsd-.3)<1e-9);
   assert.ok(Math.abs(r.tasks.reduce((n,t)=>n+t.costUsd,0)+r.unattributedCostUsd-r.knownCostUsd)<1e-9);assert.equal(r.costPerAcceptedTaskUsd,1.2);
+  assert.equal(r.tasks[0].activeWallMs,1800000);assert.equal(r.tasks[0].unclassifiedMs,1800000);
 });
 test('retries count toward the same task; stale or new work invalidates acceptance',()=>{
   const e=[{id:'1',at:0,type:'turn-start',taskId:'A',runId:'1'},{id:'2',at:100,type:'turn-end',taskId:'A',runId:'1'},{id:'3',at:101,type:'turn-start',taskId:'A',runId:'2'},{id:'4',at:200,type:'turn-end',taskId:'A',runId:'2'},{id:'5',at:200,type:'accepted',taskId:'A',runId:'2'}];
   const r=costReport(e,bill,{from:0,to:300});assert.equal(r.tasks[0].attempts,2);assert.equal(r.acceptedTasks,1);
   assert.equal(costReport([...e,{id:'6',at:201,type:'source-changed',taskId:'A'}],bill,{from:0,to:300}).acceptedTasks,0);
   assert.equal(costReport([...e,{id:'7',at:301,type:'source-changed',taskId:'A'}],bill,{from:0,to:300}).acceptedTasks,1);
+  assert.equal(costReport(e,bill,{from:250,to:300}).acceptedTasks,0);
 });
 test('unknown price windows are explicit and never become zero-cost success',()=>{
   const r=costReport([{id:'1',at:0,type:'turn-start',taskId:'A',runId:'1'},{id:'2',at:100,type:'accepted',taskId:'A',runId:'1'}],[],{from:0,to:200});assert.equal(r.unknownCostMs,200);assert.equal(r.costPerAcceptedTaskUsd,null);

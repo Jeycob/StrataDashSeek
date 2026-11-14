@@ -28,7 +28,7 @@ export function costReport(events,billing,{from,to}={}){
     if(e.taskId)task(e.taskId);
     if(e.type==='turn-start'){if(!e.child){task(e.taskId).attempts++;task(e.taskId).accepted=false;task(e.taskId).lastRunId=e.runId;}open.set(e.runId,{taskId:e.taskId,start:e.at});}
     if(e.type==='turn-end'&&open.has(e.runId)){const r=open.get(e.runId);intervals.push({...r,end:e.at});open.delete(e.runId);}
-    if(e.type==='accepted'&&(!e.runId||task(e.taskId).lastRunId===e.runId))task(e.taskId).accepted=true;
+    if(e.type==='accepted'&&(!e.runId||task(e.taskId).lastRunId===e.runId)){task(e.taskId).accepted=true;task(e.taskId).acceptedAt=e.at;}
     if(e.type==='source-changed'||e.type==='verification-failed')task(e.taskId).accepted=false;
     if(e.type==='phase'&&e.start<=to&&e.end>=from){const t=task(e.taskId);(t.phases[e.phase]??=[]).push([Math.max(from,e.start),Math.min(to,e.end)]);}
     if(e.type==='usage'&&e.at>=from&&e.at<=to){const t=task(e.taskId);for(const key of Object.keys(t.usage))if(finite(e[key])){t.usage[key]=(t.usage[key]??0)+e[key];t.usageReported[key]++;}}
@@ -45,8 +45,13 @@ export function costReport(events,billing,{from,to}={}){
     const cost=ms/3600000*(b.computeUsdPerHour+b.storageUsdPerHour);totalCostUsd+=cost;
     if(!active.length)unattributedCostUsd+=cost;else for(const id of active)task(id).costUsd+=cost/active.length;
   }
-  for(const t of tasks.values())for(const [name,ranges]of Object.entries(t.phases))t.phases[name+'Ms']=intervalUnion(ranges);
+  for(const t of tasks.values()){
+    t.activeWallMs=intervalUnion(intervals.filter(r=>r.taskId===t.taskId).map(r=>[Math.max(from,r.start),Math.min(to,r.end)]));
+    const classified=Object.entries(t.phases).filter(([name])=>name!=='repair').flatMap(([,ranges])=>ranges);
+    t.unclassifiedMs=Math.max(0,t.activeWallMs-intervalUnion(classified));
+    for(const [name,ranges]of Object.entries(t.phases))t.phases[name+'Ms']=intervalUnion(ranges);
+  }
   for(const t of tasks.values())for(const key of Object.keys(t.phases))if(!key.endsWith('Ms'))delete t.phases[key];
-  const accepted=[...tasks.values()].filter(t=>t.accepted).length;
+  const accepted=[...tasks.values()].filter(t=>t.accepted&&t.acceptedAt>=from&&t.acceptedAt<=to).length;
   return{from,to,allocation:'equal share among active root tasks; time without a tracked task (idle or unowned services) remains unattributed; phase intervals can overlap',knownCostUsd:totalCostUsd,unattributedCostUsd,unknownCostMs,acceptedTasks:accepted,costPerAcceptedTaskUsd:accepted&&unknownCostMs===0?totalCostUsd/accepted:null,tasks:[...tasks.values()]};
 }
