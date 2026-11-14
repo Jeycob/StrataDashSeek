@@ -48,3 +48,10 @@ Before implementing: prove recovery onto an empty instance, token rotation,
 backup restore, mobile cold launch, queued-task safety and unavailable-capacity
 behavior. Free-tier services provide no guarantee that an account or service
 will remain available forever; the wake adapter must remain replaceable.
+
+Actual validation found a stopped Vast GPU unavailable on resume. Treat this
+as a required product state, not a generic connection timeout. Keep the UI
+and project storage available independently of GPU allocation where possible.
+When the provider returns HTTP 200 with a queued/rejected state transition,
+show it explicitly and bound retries. Do not silently create billable fallback
+rentals. The current whole-stack instance cannot offer guaranteed cold starts.

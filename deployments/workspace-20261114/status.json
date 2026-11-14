@@ -1,0 +1,27 @@
+{
+  "at": "2026-11-14T16:59:55.088Z",
+  "instanceId": 60637500,
+  "coreRuntimeDeployed": true,
+  "coreVerifiedBeforeStop": true,
+  "productionClientDesktopAndMobilePassed": true,
+  "automaticStopObservedAt": 1794674913963,
+  "coldWakeVerified": false,
+  "providerState": "stopped; original GPU resources unavailable",
+  "workerCapacityFixDeployed": true,
+  "workerVersion": "e3691757-1935-4a63-be45-ce5c0b356763",
+  "serverCapacityBootstrapPending": [
+    "mobile/phone-boot.js",
+    "shared/i18n.cjs",
+    "shared/ui-copy.cjs"
+  ],
+  "filesAndHistoryRetained": true,
+  "tests": {
+    "linuxNode": 119,
+    "additionalWake": 4,
+    "python": 32,
+    "nativeIntegration": 13,
+    "productionViewports": 2,
+    "realModelProbes": 6
+  },
+  "noNewRentals": true
+}

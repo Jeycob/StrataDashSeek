@@ -1,10 +1,10 @@
 {
-  "at": 1794674546917,
+  "at": 1794675486239,
   "passed": true,
   "en": true,
   "cs": true,
   "clientSyntax": true,
   "privateApplicationTargetRetained": true,
-  "status": "running",
-  "version": "0c1e20bc-80cf-488e-b5bc-32ee79948023"
+  "status": "stopped",
+  "version": "e3691757-1935-4a63-be45-ce5c0b356763"
 }

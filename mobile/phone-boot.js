@@ -15,10 +15,12 @@ async function prepareBackend(){
  tell(t('waking'));
  try{
   const {wakeUrl}=await config();const origin=new URL(wakeUrl).origin;
+  if(document.hidden)return;
   const wakeRequest=()=>fetch(origin+'/api/wake',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(15000)});
   let response=await wakeRequest();if(!response.ok)throw Error(t('wakeFailed'));let wake=await response.json(),lastWake=Date.now();
   const deadline=Date.now()+360000;let attempt=0;
   while(Date.now()<deadline){
+   if(document.hidden)return; // A hidden client must not wake a newly free GPU.
    if(wake.queued&&Date.now()-lastWake>=15000){response=await wakeRequest();if(!response.ok)throw Error(t('wakeFailed'));wake=await response.json();lastWake=Date.now();}tell(t(wake.queued?'capacityWait':'connecting'));
    try{const r=await fetch('/phone/health',{signal:AbortSignal.timeout(4000),cache:'no-store'});if(r.ok&&(await r.json()).ready){window.harnessBackendReady=true;await provision();return;}}catch{}
    await new Promise(resolve=>setTimeout(resolve,Math.min(5000,800*Math.pow(1.35,attempt++))+Math.random()*250));
