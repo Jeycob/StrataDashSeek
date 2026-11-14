@@ -1,0 +1,16 @@
+{
+  "at": "2026-11-14T21:29:29.652Z",
+  "nativeHarness": "0.2.2-rc.2",
+  "realNativeHost": true,
+  "realFilesystem": true,
+  "adapter": "HomeAI workspace/native-files.mjs 1a23607",
+  "twoSessionRoots": true,
+  "relativeRead": true,
+  "relativeLists": true,
+  "watchAChangesOnlyA": true,
+  "registryRootSwitch": true,
+  "watchReopenedOnNewRoot": true,
+  "clientIdentityCwdUnchanged": true,
+  "jsErrors": [],
+  "productionTouched": false
+}

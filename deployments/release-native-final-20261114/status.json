@@ -1,0 +1,502 @@
+{
+  "status": "integrated-awaiting-owner-production-deployment",
+  "startupCheckpoint": "5df0614",
+  "startupMerge": "e0f232b",
+  "nativeCheckpoint": "acde687",
+  "nativeMerge": "9ba7b05",
+  "node": {
+    "startedAt": 1794692096888,
+    "finishedAt": 1794692120118,
+    "platform": "win32",
+    "node": "v24.21.0",
+    "source": {
+      "sha256": "76dab9f679d405df6d3d36acf86dd904c37f94c44fbfe59e4eeb1a70c382418f",
+      "files": 233,
+      "definition": "Sorted tracked JS/Python/config/UI paths and LF-normalized UTF-8 content; release evidence excluded."
+    },
+    "stale": false,
+    "passed": true,
+    "files": 37,
+    "passedTests": 201,
+    "failedTests": 0,
+    "skippedTests": 0,
+    "results": [
+      {
+        "file": "cloudflare/application-target.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "cloudflare/benchmark-cleanup.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "cloudflare/instance-control.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "cloudflare/worker.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 7,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "desktop/open-harness.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "efficiency/core.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 18,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "efficiency/plugin.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 7,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "efficiency/sdk.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/notifications.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/phone-boot.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 3,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/phone-shell.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "mobile/polling.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "quality/browser.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "quality/core.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 19,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps-power.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 14,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps-scaffold.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps-workflow.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 12,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/apps.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 23,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/cgroup.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/completion-guard.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/homeai-profile.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/homeai-reliability.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/lifecycle.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/model-proxy.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/startup-update.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 4,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/telemetry.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 5,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/turn-queue/queue.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 25,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "vast/vault-migrate.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 3,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/http.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 2,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/install.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/native-files.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 3,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/native-ui/install.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/native-ui/native.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/native-ui/phone.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/native-ui/views.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/owner-api.test.cjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 1,
+          "failed": 0
+        },
+        "skipped": 0
+      },
+      {
+        "file": "workspace/policy.test.mjs",
+        "passed": true,
+        "exitCode": 0,
+        "timedOut": false,
+        "counts": {
+          "passed": 9,
+          "failed": 0
+        },
+        "skipped": 0
+      }
+    ]
+  },
+  "testCounting": "201 unique test cases: 194 previous cases plus 7 new Native cases. The 4 targeted adapter/installer cases are included, not counted again.",
+  "review": {
+    "missingPolicyOrTrustBlocksBootstrap": true,
+    "executableEntryPublishedAfterTrustAndPolicy": true,
+    "automaticBootstrapCodeOverwriteRemoved": true,
+    "candidateRootOwnershipChecked": true,
+    "invalidDiskReserveRejected": true,
+    "nativeBaseAuthorizationPreserved": true,
+    "nativeProfileAdditionExclusiveTemporaryAndCompareBeforeRename": true,
+    "runtimeManifestHashesVerified": 12,
+    "generatedNativeBundleMatchesCanonicalSources": true,
+    "visualReview": [
+      "Native file browser contains the session file and editable content",
+      "Native Settings retains the original shell with added sections"
+    ]
+  },
+  "localPython": {
+    "platform": "Ubuntu WSL",
+    "tests": 7,
+    "passed": true,
+    "file": "vast/startup-extract-tests.py"
+  },
+  "ownerLinux": {
+    "reportedBy": "HomeAI",
+    "checkpoint": "5df0614",
+    "rootNodeTests": 10,
+    "passed": true,
+    "isolatedTemporaryFixture": true,
+    "productionDataChanged": false,
+    "modelRestarted": false
+  },
+  "ownerNativeFilesystem": {
+    "reportedBy": "Native UI chat via HomeAI",
+    "evidence": "native-lookup-owner-proof.json",
+    "realNativeHost": true,
+    "realFilesystem": true,
+    "twoSessions": true,
+    "listReadWatchAndRootChangePassed": true,
+    "productionTouched": false
+  },
+  "screenshots": {
+    "generatedLocally": true,
+    "notCommitted": true,
+    "files": [
+      {
+        "file": "native-docker-mobile.png",
+        "sha256": "84b61f3c6d5c391c52df30ae5509f0ae7e662b1f170f1817bfc3d51d77a4357c"
+      },
+      {
+        "file": "native-docker.png",
+        "sha256": "46f7dc70d18c1552c0e511dc778c65fff62802fe41dbc393d4f83a0c3d4d6aa7"
+      },
+      {
+        "file": "native-files.png",
+        "sha256": "9075355f2d3fcca6624e9880afa11e98fe8d315b967619fa0d9e741f19e12942"
+      },
+      {
+        "file": "native-settings.png",
+        "sha256": "99d48630955e5ab54b044b9c67f5b58dc3b210564c85bb2bc24ac2eca7f37ea7"
+      }
+    ]
+  },
+  "deployment": {
+    "serverOrCloudflareActionsPerformedByThisIntegration": false,
+    "productionDeploymentPerformed": false,
+    "owner": "HomeAI",
+    "mainFrozenAfterPush": true,
+    "requires": "Owner all-idle fence, coordinated deployment and live production proof; external project repair work must not be killed."
+  }
+}
