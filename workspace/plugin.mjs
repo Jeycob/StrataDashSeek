@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { WorkspaceManager } from './manager.mjs';
 import { WorkbenchError, DEFAULTS } from './policy.mjs';
 import { registerProjectTool } from './project-tool.mjs';
+import { sameRequestOrigin, boundedJSON } from './http.mjs';
 
 export const name = 'workspace-runtime';
 export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees'];
@@ -24,7 +25,7 @@ export async function apply(ctx, config = {}) {
   ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
   ctx.on('workspace-runtime/review', async ({ sessionId }, next) => (await manager.review(sessionId)) ?? next());
   ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.releaseIfIdle(session.id).catch(() => {}), 0); });
-  ctx.on('agent/disposed', ({ agent }) => { manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
+  ctx.on('agent/disposed', ({ agent }) => { manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
   const timer = setInterval(() => { for (const id of manager.running.keys()) void manager.releaseIfIdle(id).catch(() => {}); }, 10000); timer.unref();
   ctx.effect(() => () => clearInterval(timer));
   ctx.on('llm-pi-ai/request-headers', (request, headers, next) => {
@@ -48,10 +49,8 @@ export async function apply(ctx, config = {}) {
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench', methods: ['GET', 'POST'], requestBody: 'buffered', fetch: async request => {
     try {
       if (request.method === 'GET') return reply(await state());
-      const origin = request.headers.get('origin');
-      if (!origin || new URL(origin).host !== new URL(request.url).host) return reply({ code: 'ORIGIN_REFUSED', error: 'Same-origin request required.' }, 403);
-      const raw = await request.text(); if (Buffer.byteLength(raw) > 6 * 1024 * 1024) return reply({ error: 'Request too large.' }, 413);
-      const data = JSON.parse(raw), id = data.sessionId;
+      if (!sameRequestOrigin(request)) return reply({ code: 'ORIGIN_REFUSED', error: 'Same-origin request required.' }, 403);
+      const data = await boundedJSON(request), id = data.sessionId;
       if (id !== undefined && (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(id))) throw new WorkbenchError('INVALID_SESSION', 'Invalid conversation.', 400);
       if (data.op === 'settings') return reply(await manager.updateSettings(data.workspaceId, data.settings));
       if (data.op === 'file') return reply(await manager.files(id, data.operation, data.args ?? {}, request.signal));

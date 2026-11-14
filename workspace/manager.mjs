@@ -64,7 +64,7 @@ export class WorkspaceManager {
     return this.inOrder(async () => {
       let record = this.data.sessions[agent.id];
       if (record) {
-        if (!this.grants.has(agent.id) && !within(agent.session.header.cwd, record.root)) this.grants.set(agent.id, agent.ctx.sandboxPolicy.registerWritableRoot(agent.session, record.root));
+        if (!this.grants.has(agent.id) && !within(agent.session.header.cwd, record.root)) this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, record.root));
         if (current !== record.root) await this.ctx.workingDirectory.set(agent, record.root, signal);
         return record;
       }
@@ -92,7 +92,7 @@ export class WorkspaceManager {
       else {
         root = path.join(this.projectsRoot, agent.id.replace(/[^a-zA-Z0-9_-]/gu, '_'));
         await fs.mkdir(root, { mode: 0o700 });
-        this.grants.set(agent.id, agent.ctx.sandboxPolicy.registerWritableRoot(agent.session, root));
+        this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, root));
         await this.ctx.workingDirectory.set(agent, root, signal);
       }
       const ports = await this.allocatePorts(), databasePath = path.join(root, '.harness', 'data', 'app.sqlite');
@@ -161,7 +161,7 @@ export class WorkspaceManager {
     const agent = this.ctx.agents.get(id), owner = agent ? this.ownerAgent(agent) : undefined, record = this.data.sessions[owner?.id ?? id];
     if (!record) return undefined;
     const manifest = await sourceManifest(record.root);
-    return { root: record.root, sourceHash: manifest.sha256, budget: record.budget, checkpoints: record.checkpoints, ports: record.ports, databasePath: record.databasePath };
+    return { root: record.root, legacy: Boolean(record.legacy), sourceHash: manifest.sha256, budget: record.budget, checkpoints: record.checkpoints, ports: record.ports, databasePath: record.databasePath };
   }
   async reportVerification(report) {
     const agent = this.ctx.agents.get(report.sessionId); if (!agent) throw new WorkbenchError('SESSION_NOT_LIVE', 'A live conversation is required to record verification.');
@@ -272,3 +272,4 @@ export class WorkspaceManager {
     }, !['list', 'read', 'stat', 'download'].includes(operation));
   }
 }
+
