@@ -341,9 +341,9 @@
     ]
   },
   "deployment": {
-    "status": "blocked",
+    "status": "partially-deployed",
     "liveReleaseVerified": false,
-    "reason": "Existing Vast instance has no available provider resources.",
+    "reason": "Provider capacity recovered. Baseline and pending UI assets verified; container persistence and efficiency activation remain pending.",
     "wake": {
       "at": 1794678450185,
       "instanceId": 60637500,
@@ -357,11 +357,20 @@
       "available": false
     },
     "pending": [
-      "Wait for existing instance capacity; do not rent a replacement automatically.",
-      "Upload pending mobile/phone-boot.js, shared/i18n.cjs and shared/ui-copy.cjs from main.",
-      "Verify native mobile, Apple workflow and container persistence.",
-      "Verify efficiency on isolated Linux fixtures before activating scheduler or billing.",
-      "Deploy merged main only after server-side checks pass."
-    ]
+      "HomeAI owns current server maintenance; coordinate before any server changes.",
+      "Complete Docker persistence verification with HomeAI.",
+      "Run isolated Linux efficiency fixtures on ports 3197 and 18897 after explicit handoff.",
+      "Activate exactly one scheduler and separate billing collector only after fixture validation and coordinated maintenance.",
+      "Verify final production configuration before marking the entire release live."
+    ],
+    "postwake": {
+      "evidence": "postwake-readonly.json",
+      "at": "2026-11-14T19:17:20.576Z",
+      "reportedBy": "Vast.AI",
+      "baselineVerified": true,
+      "pendingThreeAssetsDeployed": true,
+      "efficiencyActivated": false,
+      "physicalApplePushTested": false
+    }
   }
 }
