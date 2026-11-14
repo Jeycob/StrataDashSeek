@@ -1,0 +1,26 @@
+{
+  "status": "preparing; source still authoritative",
+  "budgetMonthlyCZK": 2000,
+  "planningActiveHoursPerDay": 12,
+  "planningDays": 30,
+  "planningUSDCZK": 22.101,
+  "reserveFactor": 1.25,
+  "sourceInstanceId": 60529418,
+  "rejectedTarget": {"id": 60634370, "deleted": true, "reason": "Disk 96 USD/month rejected by user; no cutover occurred"},
+  "candidate": {
+    "offerId": 45433710,
+    "gpu": "RTX A4000 16 GB",
+    "cpu": "AMD EPYC 7713",
+    "ramAsReported": 256498,
+    "gpuHourlyUSD": 0.096,
+    "diskGB": 96,
+    "diskMonthlyUSD": 12.8,
+    "activeHourlyTotalUSD": 0.11377777777777776,
+    "monthly12HoursUSD": 47.36,
+    "monthly12HoursCZKBeforeReserve": 1046.70336,
+    "monthly12HoursCZKWithReserve": 1308.3792
+  },
+  "rentGuards": {"diskMonthlyMaxUSD": 13, "gpuHourlyMaxUSD": 0.10, "totalHourlyMaxUSD": 0.12, "downloadPerGBMaxUSD": 0.0041, "verifyActualContractAfterCreate": true},
+  "promotion": "Require loaded identical model, preserved private state and successful task checks before moving clients.",
+  "idle": "Fix detached preview processes preventing safe idle; live agent turns and actual builds must continue to block sleep."
+}
