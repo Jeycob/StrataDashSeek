@@ -98,7 +98,8 @@ export async function apply(ctx,config={}){
   ctx.on('llm/stream',function(options,next){
     if(!providers.has(options.provider))return next();
     const normalized=normalizeCompaction(options);if(normalized)return this.stream(normalized);
-    const agent=options.sessionId?ctx.agents.get(String(options.sessionId)):undefined;
+    let agent=options.sessionId?ctx.agents.get(String(options.sessionId)):undefined;
+    if(!agent)try{const candidate=ctx.agents.currentInitiator?.();if(candidate&&ctx.agents.get(candidate.id)===candidate)agent=candidate;}catch{}
     const id=agent?idOf(agent):String(options.sessionId??'@maintenance'),requestId=crypto.randomUUID();
     return(async function*(){
       const queued=Date.now();let permit,started,firstToken,usage,finish,before;
@@ -124,9 +125,10 @@ export async function apply(ctx,config={}){
 
   ctx.on('session/event',(session,event)=>{
     const agent=ctx.agents.get(session.id),id=agent?idOf(agent):session.id,child=id!==session.id;
-    if(event.type==='turn/start'){const runId=`${session.id}:${event.data.turn}`;if(!child){runs.set(id,runId);pendingAccepted.delete(id);}emit('turn-start',{taskId:id,runId,child});}
+    if(event.type==='turn/start'){const runId=`${session.id}:${event.data.turn}`;if(!child){runs.set(id,runId);pendingAccepted.delete(id);if(cards.get(id)?.issues.has('verification'))repairStarts.set(id,Date.now());}emit('turn-start',{taskId:id,runId,child});}
     if(event.type==='turn/end'){
       const runId=`${session.id}:${event.data.turn}`,at=Date.now(),candidate=child?undefined:pendingAccepted.get(id);if(!child)pendingAccepted.delete(id);emit('turn-end',{taskId:id,runId});
+      if(!child&&repairStarts.has(id)){phase(id,'repair',repairStarts.get(id),at);repairStarts.delete(id);}
       if(candidate?.runId===runId)void review(id).then(current=>{if(current?.sourceHash===candidate.hash)emit('accepted',{taskId:id,runId,at,sourceHash:candidate.hash});else emit('source-changed',{taskId:id,at});}).catch(()=>{});
     }
   });
