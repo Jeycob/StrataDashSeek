@@ -1,0 +1,231 @@
+{
+  "date": "2026-11-14",
+  "productionUninterrupted": true,
+  "productionId": 60529418,
+  "trialInstanceId": 60570656,
+  "trialGpu": "RTX PRO 4500",
+  "trialDeleted": true,
+  "trialLimitAllInUSD": 1,
+  "trialRuntimeSeconds": 1469.751,
+  "trialCostEstimatedAllInUSD": 0.4030472014661458,
+  "costMethod": "Contract hourly rate including disk over creation-to-deletion time + observed container RX with 2GB image/setup reserve + 2GB outbound reserve. Provider billing endpoint returned HTTP 401; not a final invoice.",
+  "originalConservativeBudgetUSD": 0.7723958333333334,
+  "cpuRamInterpretationCorrection": "Offer cpu_ram was already prorated in the measured trial: offer=257808, instance detail=515617, gpu_frac=0.5. Do not multiply offer cpu_ram by gpu_frac again. Validate per-instance cgroups; the hard limit can include borrowed RAM.",
+  "csv": {
+    "seconds": [
+      110.539,
+      75.246,
+      111.735
+    ],
+    "medianSeconds": 110.539,
+    "reference4060Seconds": 333.844,
+    "speedupVsSingle4060Reference": 3.020146735541302,
+    "allTestsUnchanged": true,
+    "allRegressionTestsPassed": true,
+    "independentChecksPassed": [
+      14,
+      14,
+      14
+    ],
+    "decodeTokensPerSecond": [
+      166.18624561705423,
+      159.93245127505963,
+      159.47620595296758
+    ]
+  },
+  "smallProjects": [
+    {
+      "task": "lru",
+      "seconds": 6.2792104989999995,
+      "usage": {
+        "prompt_tokens": 140,
+        "completion_tokens": 1024,
+        "total_tokens": 1164,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "finish": "stop",
+      "decodeTokensPerSecond": 211.6,
+      "validation": {
+        "passed": true,
+        "checks": "capacity, eviction, recency, false/zero/undefined, object/NaN keys"
+      }
+    },
+    {
+      "task": "semaphore",
+      "seconds": 12.022791278999998,
+      "usage": {
+        "prompt_tokens": 175,
+        "completion_tokens": 2184,
+        "total_tokens": 2359,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "finish": "stop",
+      "decodeTokensPerSecond": 187.9,
+      "validation": {
+        "passed": true,
+        "peakConcurrency": 3,
+        "jobs": 40,
+        "checks": "FIFO, hard cap, rejection, synchronous throw, return values"
+      }
+    }
+  ],
+  "marioInitial": {
+    "task": "mario",
+    "seconds": 22.399555113999998,
+    "usage": {
+      "prompt_tokens": 126,
+      "completion_tokens": 4125,
+      "total_tokens": 4251,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "finish": "stop",
+    "decodeTokensPerSecond": 188.1,
+    "syntax": true,
+    "playability": "pending separate simulation/review"
+  },
+  "marioInitialFunctionalValidation": {
+    "scope": "VM simulation of canvas game logic and keyboard events; no visual browser validation",
+    "passed": false,
+    "passedChecks": 2,
+    "checkCount": 5,
+    "checks": [
+      {
+        "name": "lands on starting ground and remains alive",
+        "passed": false,
+        "error": "Expected values to be strictly equal:\n\n'dead' !== 'play'\n"
+      },
+      {
+        "name": "keyboard moves player and jump rises from ground",
+        "passed": false,
+        "error": "The expression evaluated to a falsy value:\n\n  assert(g.state().P.x>s.P.x)\n"
+      },
+      {
+        "name": "coin collection increments score",
+        "passed": true
+      },
+      {
+        "name": "falling shows death and R restarts",
+        "passed": true
+      },
+      {
+        "name": "level can be completed by keyboard without teleporting",
+        "passed": false,
+        "error": "Ended dead at x=150\n\n'dead' !== 'win'\n"
+      }
+    ]
+  },
+  "marioRepair": {
+    "completed": false,
+    "termination": "Own benchmark cancelled after 120 seconds",
+    "wallSeconds": 120.763,
+    "stats": {
+      "turns": 1,
+      "steps": 19,
+      "llmMs": 119428,
+      "toolMs": 904,
+      "ttftMs": 10651,
+      "ttftSteps": 19,
+      "decodeMs": 87623,
+      "decodeTokens": 13140
+    },
+    "usage": {
+      "uncachedInputTokens": 7220,
+      "outputTokens": 13140,
+      "cacheReadTokens": 333054,
+      "cacheWriteTokens": 0
+    },
+    "testsUnchanged": true,
+    "strictTestExit": 1,
+    "strictValidation": {
+      "scope": "VM simulation of canvas game logic and keyboard events; no visual browser validation",
+      "passed": false,
+      "passedChecks": 4,
+      "checkCount": 5,
+      "checks": [
+        {
+          "name": "lands on starting ground and remains alive",
+          "passed": true
+        },
+        {
+          "name": "keyboard moves player and jump rises from ground",
+          "passed": true
+        },
+        {
+          "name": "coin collection increments score",
+          "passed": true
+        },
+        {
+          "name": "falling shows death and R restarts",
+          "passed": true
+        },
+        {
+          "name": "level can be completed by keyboard without teleporting",
+          "passed": false,
+          "error": "Ended dead at x=1324\n\n'dead' !== 'win'\n"
+        }
+      ]
+    },
+    "toolCalls": 20,
+    "toolErrors": 2,
+    "limitation": "The strict fifth test required holding right and jump continuously. A separate keyboard-route planner and replay evaluate actual level reachability instead; see exported report."
+  },
+  "marioReachableByReplayedKeys": true,
+  "monthlyCostModel": {
+    "days": 30,
+    "referenceActiveHoursPerDay": 12,
+    "referenceRunningUSDPerHour": 0.14755555555555555,
+    "referenceComputeUSDPerHour": 0.13333333333333333,
+    "referenceDiskUSDPerMonth": 10.24,
+    "referenceMonthlyUSD": 58.24,
+    "trialRunningUSDPerHour": 0.4,
+    "trialComputeUSDPerHour": 0.37333333333333335,
+    "trialDiskUSDPerMonth": 19.2,
+    "trialSame12HoursMonthlyUSD": 153.6,
+    "trialSameCsvWorkloadMonthlyUSD": 63.70114903967122,
+    "note": "Excludes normal-use network, tax and idle/cold-start overhead; workload scaling is based on one reference run versus three candidate runs, not a general guarantee."
+  },
+  "cheaperUntestedOffer": {
+    "id": 49591219,
+    "machine_id": 145559,
+    "gpu_name": "RTX A4000",
+    "num_gpus": 1,
+    "gpu_ram": 15352,
+    "cpu_name": "13th Gen Core™ i7-13700",
+    "cpu_ram": 128483,
+    "cpu_cores_effective": 16,
+    "cpu_cores": 16,
+    "gpu_frac": 1,
+    "gpu_total_ram": 15352,
+    "gpu_mem_bw": 322.8,
+    "cpu_ghz": 5.2,
+    "pcie_bw": 18.7,
+    "pci_gen": 4,
+    "disk_bw": 494,
+    "disk_space": 1770,
+    "dph_base": 0.09333333333333334,
+    "dph_total": 0.1111111111111111,
+    "storage_cost": 0.1333333333333333,
+    "storage_total_cost": 0.017777777777777774,
+    "reliability2": 0.9954774,
+    "geolocation": "Japan, JP",
+    "inet_down": 5040.4,
+    "inet_up": 555.2,
+    "inet_down_cost": 0.004,
+    "inet_up_cost": 0.005333333333333333,
+    "cuda_max_good": 13.2,
+    "duration": 21044571.69915104
+  },
+  "limitations": [
+    "Same model, engine SHA, Harness version and policy; different hardware, cache capacity and adaptive runtime draft window. This is a complete-stack comparison, not isolated GPU causality.",
+    "One original 4060 run and three candidate runs are a small sample.",
+    "Mario initial generation failed physics; the repair made the game reachable but its agent turn hit a 120s test deadline. The overly strict hold-jump route test was kept and separately supplemented by a keyboard-only route replay.",
+    "No real browser visual or human play test of the game.",
+    "No production stop, restart, migration or paid second rental performed. The production idle timeout remains 300 seconds."
+  ]
+}

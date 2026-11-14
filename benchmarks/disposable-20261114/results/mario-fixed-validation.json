@@ -1,0 +1,29 @@
+{
+  "scope": "VM simulation of canvas game logic and keyboard events; no visual browser validation",
+  "passed": false,
+  "passedChecks": 4,
+  "checkCount": 5,
+  "checks": [
+    {
+      "name": "lands on starting ground and remains alive",
+      "passed": true
+    },
+    {
+      "name": "keyboard moves player and jump rises from ground",
+      "passed": true
+    },
+    {
+      "name": "coin collection increments score",
+      "passed": true
+    },
+    {
+      "name": "falling shows death and R restarts",
+      "passed": true
+    },
+    {
+      "name": "level can be completed by keyboard without teleporting",
+      "passed": false,
+      "error": "Ended dead at x=1324\n\n'dead' !== 'win'\n"
+    }
+  ]
+}

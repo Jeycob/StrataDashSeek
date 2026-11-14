@@ -1,3 +1,7 @@
+OPRAVA PO TESTU: nabídka API již v měřeném případě vracela podílovou RAM.
+Nenásobit nabídkové cpu_ram podruhé gpu_frac. Původní tvrzení níže je
+překonané pozorováním v results/summary.json. Skutečný test použil PRO 4500.
+
 Plán omezeného porovnání hardwaru – 14. 11. 2026
 
 Produkce zůstává na Vast 60529418: RTX 4060 Ti 16 GB, 96 GB disk,

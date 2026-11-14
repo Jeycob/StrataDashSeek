@@ -1,0 +1,63 @@
+{
+  "passed": true,
+  "passedChecks": 14,
+  "checkCount": 14,
+  "checks": [
+    {
+      "name": "supplied fixture numeric oracle",
+      "passed": true
+    },
+    {
+      "name": "BOM CRLF leap year quoted commas",
+      "passed": true
+    },
+    {
+      "name": "refunds pending deduplication",
+      "passed": true
+    },
+    {
+      "name": "normalized category",
+      "passed": true
+    },
+    {
+      "name": "malformed rows",
+      "passed": true
+    },
+    {
+      "name": "empty report",
+      "passed": true
+    },
+    {
+      "name": "reject extra columns 1",
+      "passed": true
+    },
+    {
+      "name": "reject extra columns 2",
+      "passed": true
+    },
+    {
+      "name": "reject extra columns 3",
+      "passed": true
+    },
+    {
+      "name": "trailing delimiter header with LF",
+      "passed": true
+    },
+    {
+      "name": "quoted final field EOF accepted",
+      "passed": true
+    },
+    {
+      "name": "negative category subtotal cannot hide in positive category",
+      "passed": true
+    },
+    {
+      "name": "negative month subtotal cannot hide in other month",
+      "passed": true
+    },
+    {
+      "name": "unsafe intermediate total rejected despite later cancellation",
+      "passed": true
+    }
+  ]
+}

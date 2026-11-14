@@ -1,0 +1,26 @@
+✔ trailing empty sixth column at EOF is rejected (1.330053ms)
+✔ trailing empty sixth header field at EOF is rejected (0.156576ms)
+✔ category subtotal overflow cannot silently round cents (0.352166ms)
+✔ month subtotal overflow cannot hide behind another month refund (0.172325ms)
+✔ empty data (0.667561ms)
+✔ empty input, BOM only and blank lines produce an empty report (0.242117ms)
+✔ quoted fields, escaped quotes, embedded newlines, CRLF, BOM, duplicates and pending rows (0.386611ms)
+✔ duplicate ids count once, conflicting duplicates throw (0.326287ms)
+✔ pending rows are validated but never create buckets (3.399523ms)
+✔ integer cents avoid binary float drift (1.353778ms)
+✔ amounts must be signed decimals with exactly two fractional digits (0.578002ms)
+✔ dates must be real calendar dates (0.429632ms)
+✔ status must be posted or pending (0.221108ms)
+✔ ids and categories must be non-empty; categories are trimmed and NFC-normalized (0.262285ms)
+✔ column counts and headers are strict (0.241737ms)
+✔ malformed quoting is rejected (0.160674ms)
+✔ buckets sort by month and by JS code-unit string order (0.180451ms)
+✔ non-string input is a TypeError (0.154642ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 23.171441

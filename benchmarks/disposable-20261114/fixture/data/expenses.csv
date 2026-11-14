@@ -1,0 +1,11 @@
+id,date,category,amount_czk,status
+a,2026-09-30,Energy,1234.56,posted
+b,2026-10-01,"Food, home",250.10,posted
+c,2026-10-02,Energy,-34.56,posted
+d,2026-10-03,Energy,999.00,pending
+e,2026-10-04,"Děti ""výlet""",0.10,posted
+e,2026-10-04,"Děti ""výlet""",0.10,posted
+f,2026-11-01,"Multi
+line",10.00,posted
+g,2026-11-02,Energy,0.20,posted
+h,2026-11-03,Energy,0.10,posted

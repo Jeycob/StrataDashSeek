@@ -1,0 +1,16 @@
+{
+  "task": "mario",
+  "seconds": 22.399555113999998,
+  "usage": {
+    "prompt_tokens": 126,
+    "completion_tokens": 4125,
+    "total_tokens": 4251,
+    "prompt_tokens_details": {
+      "cached_tokens": 0
+    }
+  },
+  "finish": "stop",
+  "decodeTokensPerSecond": 188.1,
+  "syntax": true,
+  "playability": "pending separate simulation/review"
+}

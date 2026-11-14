@@ -1,0 +1,61 @@
+Vast – výkon, náklady a doporučení, 14. 11. 2026
+
+Produkce 60529418 zůstala zapnutá a její úlohy nebyly zastaveny.
+Dočasný test 60570656 (RTX PRO 4500 Blackwell 32 GB) je odstraněný i s diskem.
+Původně dostupná RTX 8000 byla API odmítnuta jako nedostupná; A5000 pak zmizela.
+Proběhl jediný skutečný placený pronájem.
+
+Náklady testu včetně disku a přenosů: odhad 0.40 USD.
+Doba pronájmu 24.5 min při 0,40 USD/h včetně 96 GB disku.
+Naměřený RX kontejneru 87.06 GB; odhad přidává 2 GB na image/přípravu
+a 2 GB odchozích dat. Původní konzervativní rozpočtová rezerva byla
+0.77 USD, schválený celkový limit 1 USD.
+Billing API neposkytlo konečnou fakturu (HTTP 401), proto částku nevydávám
+za finální zaúčtování. Cloudflare cron a lokální hlídač chránily časový limit.
+Po odstranění byl ověřen nulový nález testovací instance a běžící produkce.
+Testovací cron byl poté z Cloudflare odebrán.
+
+Shodný CSV projekt se stejnými nezměněnými testy:
+Současná 4060 Ti: 333,844 s (jediný dřívější referenční běh).
+PRO 4500: 110.539, 75.246, 111.735 s; medián 110.539 s.
+Medián tedy 3.02× rychlejší. Ve všech třech bězích prošlo 18 původních
+testů a 14 nezávislých kontrol. Decode: 166.2, 159.9, 159.5 tok/s.
+Stejný IQ3_S, engine se shodným SHA, Harness 0.2.2-rc.2 a HomeAI profil.
+Rozdíly zahrnují CPU, RAM, PCIe, VRAM cache a adaptivní draftování, nikoliv
+pouze GPU. Měřený stroj měl Threadripper PRO 3975WX, 30,72 vCPU a hard limit
+RAM asi 341,8 GiB (část může být půjčená). Expert cache asi 24 GB oproti 8 GB.
+
+Malé projekty:
+LRU: 6,28 s, 211,6 tok/s decode, prošly kontroly kapacity, LRU pořadí,
+undefined/false/zero hodnot a objektových/NaN klíčů.
+Semafor: 12,02 s, 187,9 tok/s decode, FIFO, 40 úloh, limit 3 a zotavení z chyb.
+Mario: generování 22,40 s, 188,1 tok/s, ale první hra propadávala zemí (2/5).
+Harness opravil kolize. Opravný běh byl po 120 s ukončen, když zbýval příliš
+přísný test trvale drženého skoku (4/5). Původní test se nezměnil.
+Samostatný plánovač následně našel a znovu přehrál skutečnou trasu jen přes
+klávesnici, bez teleportů: 656 snímků, výhra a skóre 140.
+To dokládá průchodnost opravené hry, nikoliv úspěšné autonomní dokončení
+původního opravného běhu. Vizuální test v reálném prohlížeči neproběhl.
+
+Volba HW:
+Pro rychlou odezvu je PRO 4500 prokazatelně lepší kandidát: 75–112 s místo
+334 s. Neswitchoval jsem produkci a nezanechal druhý trvalý placený disk.
+Hodinově stojí 0,40 místo 0,14756 USD, není automaticky levnější za měsíc.
+Při 12 h/den provozu: současný stroj asi 58,24 USD/měsíc; PRO 4500 153,60 USD.
+Při stejném množství CSV práce a měřeném mediánu: PRO asi
+63.70 USD/měsíc včetně trvale uloženého disku.
+Časová úspora je velká, měsíční finanční úspora se tímto testem neprokázala.
+Současnou instanci proto ponechávám jako ověřený úsporný provoz.
+Levnější neotestovaný kandidát v 01:17 UTC: RTX A4000 + i7-13700,
+RAM v nabídce 128483, gpu_frac 1, 96GB disk, 0,11111 USD/h (offer 49591219).
+Má ale disk jen asi 494 MB/s; probuzení může být pomalejší. Rychlost LLM ani
+skutečná dostupnost pronájmu nejsou ověřené. Žádný další pronájem neproběhl.
+
+Pozor na RAM: dřívější plán chybně aplikoval gpu_frac ještě na RAM nabídky.
+V tomto POC už byla nabídková RAM přepočtená: 257808 v nabídce versus 515617
+v detailu hostu, podíl GPU 1/2. Nenásobit ji podruhé. Rozhodující je kontrola
+konkrétní nabídky, přidělení a skutečného cgroup limitu, ne pouze host RAM.
+
+Konfigurace je zálohovaná na https://github.com/Jeycob/StrataDashSeek
+Podrobné výsledky a kontrolní součty jsou v HW-POC-20261114/summary.json.
+Opravená hra: HW-POC-20261114/mario-fixed.html.

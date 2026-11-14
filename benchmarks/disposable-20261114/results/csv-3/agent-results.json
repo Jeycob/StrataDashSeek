@@ -1,0 +1,42 @@
+{
+  "backend": "vast",
+  "sessionId": "session-0572e611-0a31-4e60-b395-b657af0d436e",
+  "started": "2026-11-14T01:04:58.879Z",
+  "completed": true,
+  "wallSeconds": 111.735,
+  "turnEnd": {
+    "turn": 1,
+    "reason": {
+      "kind": "completed"
+    }
+  },
+  "stats": {
+    "turns": 1,
+    "steps": 30,
+    "llmMs": 110078,
+    "toolMs": 1073,
+    "ttftMs": 14697,
+    "ttftSteps": 30,
+    "decodeMs": 95381,
+    "decodeTokens": 15211
+  },
+  "usage": {
+    "uncachedInputTokens": 15447,
+    "outputTokens": 15211,
+    "cacheReadTokens": 800275,
+    "cacheWriteTokens": 0
+  },
+  "toolCalls": 29,
+  "toolErrors": 2,
+  "testExit": 0,
+  "initialHashes": {
+    "test/public.test.mjs": "315871ed82367677171353fd5e58967cf867a69ac0a3319b889391e7bedf0e6f",
+    "test/edge-cases.test.mjs": "0cd833ba2459ffb0c2ce64811d0a0c2404c2db23922b28f09dc7469a97a42334"
+  },
+  "finalHashes": {
+    "test/public.test.mjs": "315871ed82367677171353fd5e58967cf867a69ac0a3319b889391e7bedf0e6f",
+    "test/edge-cases.test.mjs": "0cd833ba2459ffb0c2ce64811d0a0c2404c2db23922b28f09dc7469a97a42334"
+  },
+  "testsUnchanged": true,
+  "pageHasMore": false
+}

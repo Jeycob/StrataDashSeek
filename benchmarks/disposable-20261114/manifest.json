@@ -14,10 +14,13 @@
     "diskGB": 96
   },
   "productionMutationsAllowed": false,
-  "status": "preparing",
+  "status": "completed and deleted",
   "cleanup": {
     "cloudflareCron": "every minute after expiry",
     "localWatchdog": "10 second polling",
     "deadlineMinutes": 50
-  }
+  },
+  "destroyedAt": "2026-11-14T01:14:24.013Z",
+  "sourceCommit": "1c84cf9",
+  "cpuRamInterpretationCorrection": "Offer cpu_ram was already prorated in the measured trial: offer=257808, instance detail=515617, gpu_frac=0.5. Do not multiply offer cpu_ram by gpu_frac again. Validate per-instance cgroups; the hard limit can include borrowed RAM."
 }

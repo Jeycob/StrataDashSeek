@@ -1,0 +1,40 @@
+[
+  {
+    "task": "lru",
+    "seconds": 6.2792104989999995,
+    "usage": {
+      "prompt_tokens": 140,
+      "completion_tokens": 1024,
+      "total_tokens": 1164,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "finish": "stop",
+    "decodeTokensPerSecond": 211.6,
+    "validation": {
+      "passed": true,
+      "checks": "capacity, eviction, recency, false/zero/undefined, object/NaN keys"
+    }
+  },
+  {
+    "task": "semaphore",
+    "seconds": 12.022791278999998,
+    "usage": {
+      "prompt_tokens": 175,
+      "completion_tokens": 2184,
+      "total_tokens": 2359,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    },
+    "finish": "stop",
+    "decodeTokensPerSecond": 187.9,
+    "validation": {
+      "passed": true,
+      "peakConcurrency": 3,
+      "jobs": 40,
+      "checks": "FIFO, hard cap, rejection, synchronous throw, return values"
+    }
+  }
+]

@@ -1,0 +1,1 @@
+{"at": 1794618003.8764074, "health": {"status": "ok", "max_context": 131072, "model": "qwen3.8-flash-next-iq3_s", "images": true, "api_key": false, "image_generation": false, "loaded": true, "service": "strata"}, "engineSHA256": "0ba914b28df1c8e09c0b5209c2ca6040c75fb650a7408ff3d9ef3ad159a13eb9"}

@@ -1,0 +1,71 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>Mini Platformer</title>
+<style>body{margin:0;background:#222;display:flex;flex-direction:column;align-items:center;font-family:sans-serif;color:#fff}canvas{background:#5c94fc;margin-top:8px;border:3px solid #000}</style></head>
+<body><h3 style="margin:8px">Mini Mario-Style Platformer</h3><canvas id="c" width="800" height="600"></canvas>
+<p style="margin:6px">Arrows or A/D = move &middot; Space / W / Up = jump &middot; R = restart</p>
+<script>
+const cv=document.getElementById('c'),x=cv.getContext('2d');
+const plats=[[0,560,600,40],[720,560,500,40],[1360,560,1400,40],[250,440,120,20],[450,340,120,20],[800,420,140,20],[1000,320,120,20],[1500,430,140,20],[1750,330,120,20],[2100,420,120,20],[2350,330,140,20]].map(([x,y,w,h])=>({x,y,w,h}));
+const LEVELW=2760,GOAL=2650;
+let coins,foes,P,cam=0,state='play',score=0,keys={};
+function reset(){
+ coins=[[300,400],[500,300],[860,380],[1060,280],[1560,390],[1810,290],[2160,380],[2420,290],[660,505],[1290,505]].map(c=>({x:c[0],y:c[1],got:false}));
+ foes=[{x:900,y:530,w:30,h:30,d:1,min:730,max:1210},{x:1600,y:530,w:30,h:30,d:-1,min:1370,max:2000},{x:2200,y:530,w:30,h:30,d:1,min:2050,max:2740}];
+ P={x:50,y:480,w:28,h:36,vx:0,vy:0,ground:false};score=0;state='play';}
+function hit(a,b){return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y}
+function update(){
+ if(state!='play')return;
+ P.vx=(keys.r?4:0)-(keys.l?4:0);
+ if(keys.j&&P.ground){P.vy=-11;P.ground=false;}
+ P.vy=Math.min(P.vy+0.5,12);
+ P.x+=P.vx;
+ for(const p of plats)if(hit(P,p)){if(P.vx>0)P.x=p.x-P.w;else if(P.vx<0)P.x=p.x+p.w;}
+ if(P.x<0)P.x=0;
+ P.y+=P.vy;P.ground=false;
+ for(const p of plats)if(hit(P,p)){if(P.vy>0){P.y=p.y-P.h;P.vy=0;P.ground=true;}else if(P.vy<0){P.y=p.y+p.h;P.vy=0;}}
+ for(const c of coins)if(!c.got&&hit(P,{x:c.x-8,y:c.y-8,w:16,h:16})){c.got=true;score+=10;}
+ for(const f of foes){if(f.dead)continue;
+  f.x+=f.d;if(f.x<f.min||f.x+f.w>f.max)f.d*=-1;
+  if(hit(P,f)){if(P.vy>0&&P.y+P.h<f.y+20){f.dead=true;P.vy=-7;score+=20;}else state='dead';}}
+ if(P.y>650)state='dead';
+ if(P.x+P.w>GOAL){state='win';score+=100;}
+ cam=Math.max(0,Math.min(P.x-380,LEVELW-800));}
+function draw(){
+ x.fillStyle='#5c94fc';x.fillRect(0,0,800,600);
+ x.save();x.translate(-cam*0.4,0);x.fillStyle='#3b8f3b';
+ for(let i=0;i<9;i++){x.beginPath();x.moveTo(i*400,600);x.lineTo(i*400+150,400);x.lineTo(i*400+300,600);x.fill();}
+ x.restore();
+ x.save();x.translate(-cam,0);
+ for(const p of plats){x.fillStyle=p.h>20?'#8b5a2b':'#b22222';x.fillRect(p.x,p.y,p.w,p.h);
+  x.fillStyle=p.h>20?'#3b8f3b':'#e8b04a';x.fillRect(p.x,p.y,p.w,6);}
+ for(const c of coins)if(!c.got){x.fillStyle='#ffd700';x.beginPath();x.arc(c.x,c.y,8,0,7);x.fill();x.strokeStyle='#b8860b';x.stroke();}
+ for(const f of foes){if(f.dead)continue;
+  x.fillStyle='#a0522d';x.fillRect(f.x,f.y,f.w,f.h);
+  x.fillStyle='#fff';x.fillRect(f.x+5,f.y+7,7,7);x.fillRect(f.x+18,f.y+7,7,7);
+  x.fillStyle='#000';x.fillRect(f.x+7,f.y+9,3,3);x.fillRect(f.x+20,f.y+9,3,3);}
+ x.fillStyle='#666';x.fillRect(GOAL,360,6,200);
+ x.fillStyle='#e33';x.beginPath();x.moveTo(GOAL+6,360);x.lineTo(GOAL+56,380);x.lineTo(GOAL+6,400);x.fill();
+ x.fillStyle='#e52521';x.fillRect(P.x,P.y,P.w,P.h);
+ x.fillStyle='#fff';x.fillRect(P.x+16,P.y+8,7,7);x.fillRect(P.x+4,P.y+8,7,7);
+ x.fillStyle='#000';x.fillRect(P.x+(P.vx<0?5:18),P.y+10,3,3);
+ x.restore();
+ x.fillStyle='#000';x.font='20px sans-serif';x.fillText('Score: '+score,12,28);
+ if(state=='dead'){x.fillStyle='rgba(0,0,0,.6)';x.fillRect(0,220,800,160);
+  x.fillStyle='#fff';x.font='32px sans-serif';x.textAlign='center';
+  x.fillText('You died! Press R to restart',400,290);x.textAlign='left';}
+ if(state=='win'){x.fillStyle='rgba(0,0,0,.6)';x.fillRect(0,220,800,160);
+  x.fillStyle='#ffd700';x.font='32px sans-serif';x.textAlign='center';
+  x.fillText('You reached the goal! Score '+score,400,280);
+  x.fillStyle='#fff';x.font='20px sans-serif';x.fillText('Press R to play again',400,330);x.textAlign='left';}}
+addEventListener('keydown',e=>{const k=e.key.toLowerCase();
+ if(k=='arrowleft'||k=='a')keys.l=1;
+ if(k=='arrowright'||k=='d')keys.r=1;
+ if(k==' '||k=='w'||k=='arrowup')keys.j=1;
+ if(k=='r')reset();
+ if([' ','arrowup','arrowleft','arrowright'].includes(e.key.toLowerCase())||e.key==' ')e.preventDefault();});
+addEventListener('keyup',e=>{const k=e.key.toLowerCase();
+ if(k=='arrowleft'||k=='a')keys.l=0;
+ if(k=='arrowright'||k=='d')keys.r=0;
+ if(k==' '||k=='w'||k=='arrowup')keys.j=0;});
+reset();
+(function loop(){update();draw();requestAnimationFrame(loop);})();
+</script></body></html>

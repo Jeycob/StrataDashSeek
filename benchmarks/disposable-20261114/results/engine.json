@@ -1,0 +1,13 @@
+{
+  "model": "qwen3.8-flash-next-iq3_s",
+  "max_context": 131072,
+  "kv": "int8",
+  "kv_resident": 32768,
+  "expert_slots": 12442,
+  "expert_cache_mib": 24178,
+  "spec": 6,
+  "spec_min_p": "0.00",
+  "drafting": "dflash2",
+  "conversation_cache_mib": 4096,
+  "conversation_cache_slots": 8
+}

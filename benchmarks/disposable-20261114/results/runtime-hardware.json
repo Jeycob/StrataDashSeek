@@ -1,0 +1,8 @@
+{
+  "at": 1794618809.4826503,
+  "cpuModel": "AMD Ryzen Threadripper PRO 3975WX 32-Cores",
+  "cpuMax": "3071999 100000",
+  "memoryMaxBytes": 367013134336,
+  "harnessVersion": "0.2.2-rc.2",
+  "nodeVersion": "v24.21.0"
+}

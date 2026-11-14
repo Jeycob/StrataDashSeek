@@ -1,0 +1,55 @@
+{
+  "completed": false,
+  "termination": "Own benchmark cancelled after 120 seconds",
+  "wallSeconds": 120.763,
+  "stats": {
+    "turns": 1,
+    "steps": 19,
+    "llmMs": 119428,
+    "toolMs": 904,
+    "ttftMs": 10651,
+    "ttftSteps": 19,
+    "decodeMs": 87623,
+    "decodeTokens": 13140
+  },
+  "usage": {
+    "uncachedInputTokens": 7220,
+    "outputTokens": 13140,
+    "cacheReadTokens": 333054,
+    "cacheWriteTokens": 0
+  },
+  "testsUnchanged": true,
+  "strictTestExit": 1,
+  "strictValidation": {
+    "scope": "VM simulation of canvas game logic and keyboard events; no visual browser validation",
+    "passed": false,
+    "passedChecks": 4,
+    "checkCount": 5,
+    "checks": [
+      {
+        "name": "lands on starting ground and remains alive",
+        "passed": true
+      },
+      {
+        "name": "keyboard moves player and jump rises from ground",
+        "passed": true
+      },
+      {
+        "name": "coin collection increments score",
+        "passed": true
+      },
+      {
+        "name": "falling shows death and R restarts",
+        "passed": true
+      },
+      {
+        "name": "level can be completed by keyboard without teleporting",
+        "passed": false,
+        "error": "Ended dead at x=1324\n\n'dead' !== 'win'\n"
+      }
+    ]
+  },
+  "toolCalls": 20,
+  "toolErrors": 2,
+  "limitation": "The strict fifth test required holding right and jump continuously. A separate keyboard-route planner and replay evaluate actual level reachability instead; see exported report."
+}
