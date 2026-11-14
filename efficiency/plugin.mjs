@@ -4,9 +4,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {confined,digest} from '../quality/core.mjs';
-import {POLICY,WorkCard,archiveLog,summarizeLog,rewriteRisk,prefixFingerprint} from './context.mjs';
+import {POLICY,WorkCard,archiveLog,summarizeLog,rewriteRisk,patchRemovals,prefixFingerprint} from './context.mjs';
 import {EventLedger,uniqueEngineRecord} from './ledger.mjs';
 import {FairGate,heavyTool,normalizeCompaction} from './gate.mjs';
+import {resourceSnapshot} from './resources.mjs';
 
 export const name='qwen-efficiency';
 export const inject=['agents','tools','systemPrompt','shell','shellEnv','llm'];
@@ -59,21 +60,30 @@ export async function apply(ctx,config={}){
   },{global:true});
 
   async function overwrite(exec){
-    const args=exec.arguments;if(!['write','edit'].includes(exec.name)||typeof fileArg(args)!=='string')return null;
+    const args=exec.arguments;if(!['write','edit','apply_patch'].includes(exec.name))return null;
+    const operations=exec.name==='apply_patch'?patchRemovals(args?.patch??args?.input):(typeof fileArg(args)==='string'?[{path:fileArg(args)}]:[]);
+    if(!operations.length)return null;
     const {id}=activeFor(exec.agent),project=await projectFor(id);if(!project||project.legacy)return null;
     const c=card(id);if(!c.verified&&!Object.keys(project.checkpoints??{}).length)return null;
-    const relative=path.isAbsolute(fileArg(args))?path.relative(project.root,fileArg(args)):fileArg(args);
-    let name,before;try{name=await confined(project.root,relative);const stat=await fs.stat(name);if(!stat.isFile()||stat.size>1024*1024)return null;before=await fs.readFile(name,'utf8');}catch(error){if(error.code==='ENOENT')return null;throw error;}
+    const authorized=[];
+    for(const operation of operations){
+    const relative=path.isAbsolute(operation.path)?path.relative(project.root,operation.path):operation.path;
+    let name,before;try{name=await confined(project.root,relative);const stat=await fs.stat(name);if(!stat.isFile()||stat.size>1024*1024)continue;before=await fs.readFile(name,'utf8');}catch(error){if(error.code==='ENOENT')continue;throw error;}
     let after=args.content;
     if(exec.name==='edit'){
       const old=args.old_string??args.oldText,replacement=args.new_string??args.newText;
-      if(typeof old!=='string'||typeof replacement!=='string'||!before.includes(old))return null;
+      if(typeof old!=='string'||typeof replacement!=='string'||!before.includes(old))continue;
       after=args.replace_all&&old?before.split(old).join(replacement):before.replace(old,replacement);
     }
-    if(typeof after!=='string'||!rewriteRisk(before,after).large)return null;
+    const lines=before.split(/\r?\n/u).length,removed=operation.deleted?lines:operation.removed;
+    const large=exec.name==='apply_patch'?removed>=40&&removed/lines>.45:typeof after==='string'&&rewriteRisk(before,after).large;
+    if(!large)continue;
     const hash=digest(before),key=`${id}:${name}`,grant=grants.get(key);
-    if(grant?.hash===hash){grants.delete(key);emit('large-rewrite-justified',{taskId:id,path:path.relative(project.root,name),hash,reason:grant.reason,validationPlan:grant.validationPlan});return null;}
-    return{reason:'Large overwrite after a working milestone. Prefer a focused edit, or call explain_rewrite with this file hash, the concrete cause and regression-check plan: '+hash,info:{code:'REWRITE_EXPLANATION_REQUIRED'}};
+    if(grant?.hash!==hash)return{reason:`Large overwrite after a working milestone: ${relative}. Prefer a focused edit, or call explain_rewrite with this file hash, the concrete cause and regression-check plan: ${hash}`,info:{code:'REWRITE_EXPLANATION_REQUIRED'}};
+    authorized.push({key,name,hash,grant});
+    }
+    for(const {key,name,hash,grant}of authorized){grants.delete(key);emit('large-rewrite-justified',{taskId:id,path:path.relative(project.root,name),hash,reason:grant.reason,validationPlan:grant.validationPlan});}
+    return null;
   }
   ctx.on('tools/pre-execute',async(exec,next)=>{const decision=await next();if(decision.kind==='allow'&&exec.agent){const denial=await overwrite(exec);if(denial){rewriteDenials.set(exec.token,denial);return{kind:'deny',...denial};}}return decision;},{global:true});
   // Native guards are synchronous. The async precheck supplies a final monotonic denial.
@@ -105,8 +115,8 @@ export async function apply(ctx,config={}){
       const queued=Date.now();let permit,started,firstToken,usage,finish,before;
       try{
         if(config.schedule!==false)permit=await modelGate.acquire({rootId:id,sessionId:String(options.sessionId??id),signal:options.signal});
-        phase(id,'model-queue',queued,Date.now());before=await metrics();started=Date.now();
-        emit('request-start',{taskId:id,requestId,provider:options.provider,model:options.model,purpose:options.purpose??'conversation',...prefixFingerprint(options)});
+        phase(id,'model-queue',queued,Date.now());const observed=await Promise.all([metrics(),resourceSnapshot(path.dirname(directory))]);before=observed[0];started=Date.now();
+        emit('request-start',{taskId:id,requestId,provider:options.provider,model:options.model,purpose:options.purpose??'conversation',resources:observed[1],...prefixFingerprint(options)});
         for await(const chunk of await next()){
           if(firstToken===undefined&&['text-delta','reasoning-delta','tool-call-delta'].includes(chunk.type))firstToken=Date.now();
           if(chunk.type==='usage')usage=chunk.usage;if(chunk.type==='finish')finish=chunk.reason.kind;

@@ -30,6 +30,14 @@ test('small edits remain allowed and existing denial is never overridden',async 
   assert.equal((await f.call('tools/pre-execute',f.exec('write',{file_path:'small.js',content:'const total=2;'}),async()=>({kind:'allow'}))).kind,'allow');
   const denied={kind:'deny',reason:'original policy'};assert.equal(await f.call('tools/pre-execute',f.exec('write',{}),async()=>denied),denied);
 });
+test('a large apply_patch cannot bypass explanation and multi-file grants are consumed together',async t=>{
+  const f=await fixture(t),before=Array.from({length:100},(_,i)=>'line'+i).join('\n');
+  for(const file of ['a.js','b.js'])await fs.writeFile(path.join(f.directory,file),before);
+  const patch='*** Begin Patch\n'+['a.js','b.js'].map(file=>'*** Update File: '+file+'\n@@\n'+before.split('\n').map(s=>'-'+s).join('\n')+'\n+replacement').join('\n')+'\n*** End Patch';
+  const grant=file=>f.tools.get('explain_rewrite').execute({path:file,sha256:digest(before),reason:'A synthetic broad patch tests that every affected file requires its own explanation.',validationPlan:'Rerun the focused regression checks and then the full project verification contract.'},f.exec('explain_rewrite',{}));
+  await grant('a.js');assert.equal((await f.call('tools/pre-execute',f.exec('apply_patch',{patch}),async()=>({kind:'allow'}))).kind,'deny');
+  await grant('b.js');assert.equal((await f.call('tools/pre-execute',f.exec('apply_patch',{patch}),async()=>({kind:'allow'}))).kind,'allow');
+});
 test('log compaction preserves failure exit status, images and the immutable canonical result',async t=>{
   const f=await fixture(t),result=Object.freeze({isError:false,value:Object.freeze({exitCode:7,timedOut:false}),content:Object.freeze([{type:'text',text:'noise '.repeat(3000)},{type:'image',attachment:{id:'fixture'}}])});
   const e=f.exec('project_exec',{command:'npm test'}),r=await f.call('tools/post-execute',e,result,async()=>({kind:'accept'}));

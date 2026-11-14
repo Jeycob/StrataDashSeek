@@ -42,7 +42,7 @@ facts. Native Harness already orders declarations canonically; this plugin
 observes system/tool fingerprints and does not rewrite adapter-owned messages or
 tool order. Compaction keeps the existing factual bounded handoff policy.
 
-After a successful verification milestone, native `write` and `edit` large
+After a successful verification milestone, native `write`, `edit` and common `apply_patch` large
 overwrites are checked. A replacement removing over45% and at least40 lines (or
 most of a large minified file) needs `explain_rewrite`: exact current file hash,
 concrete cause and regression-check plan. The explanation is one-use and is not

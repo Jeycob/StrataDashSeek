@@ -22,7 +22,7 @@ export function costReport(events,billing,{from,to}={}){
   from??=Math.min(...unique.map(e=>e.at));to??=Math.max(...unique.map(e=>e.at));
   if(!finite(from)||!finite(to)||to<from)throw Error('Explicit valid report interval required.');
   const tasks=new Map(),open=new Map(),intervals=[];
-  const task=id=>{if(!tasks.has(id))tasks.set(id,{taskId:id,costUsd:0,attempts:0,accepted:false,phases:{},usage:{inputTokens:0,outputTokens:0,cacheReadTokens:0,cacheWriteTokens:0},unknownCostMs:0});return tasks.get(id);};
+  const task=id=>{if(!tasks.has(id))tasks.set(id,{taskId:id,costUsd:0,attempts:0,accepted:false,phases:{},usage:{inputTokens:null,outputTokens:null,cacheReadTokens:null,cacheWriteTokens:null},usageReported:{inputTokens:0,outputTokens:0,cacheReadTokens:0,cacheWriteTokens:0},unknownCostMs:0});return tasks.get(id);};
   for(const e of unique){
     if(e.at>to)continue;
     if(e.taskId)task(e.taskId);
@@ -31,7 +31,7 @@ export function costReport(events,billing,{from,to}={}){
     if(e.type==='accepted'&&(!e.runId||task(e.taskId).lastRunId===e.runId))task(e.taskId).accepted=true;
     if(e.type==='source-changed'||e.type==='verification-failed')task(e.taskId).accepted=false;
     if(e.type==='phase'&&e.start<=to&&e.end>=from){const t=task(e.taskId);(t.phases[e.phase]??=[]).push([Math.max(from,e.start),Math.min(to,e.end)]);}
-    if(e.type==='usage'&&e.at>=from&&e.at<=to){const t=task(e.taskId);for(const key of Object.keys(t.usage))if(finite(e[key]))t.usage[key]+=e[key];}
+    if(e.type==='usage'&&e.at>=from&&e.at<=to){const t=task(e.taskId);for(const key of Object.keys(t.usage))if(finite(e[key])){t.usage[key]=(t.usage[key]??0)+e[key];t.usageReported[key]++;}}
   }
   for(const r of open.values())intervals.push({...r,end:to});
   const periods=[...billing].sort((a,b)=>a.from-b.from);
@@ -48,5 +48,5 @@ export function costReport(events,billing,{from,to}={}){
   for(const t of tasks.values())for(const [name,ranges]of Object.entries(t.phases))t.phases[name+'Ms']=intervalUnion(ranges);
   for(const t of tasks.values())for(const key of Object.keys(t.phases))if(!key.endsWith('Ms'))delete t.phases[key];
   const accepted=[...tasks.values()].filter(t=>t.accepted).length;
-  return{from,to,allocation:'equal share among active root tasks; idle remains unattributed; phase intervals can overlap',knownCostUsd:totalCostUsd,unattributedCostUsd,unknownCostMs,acceptedTasks:accepted,costPerAcceptedTaskUsd:accepted&&unknownCostMs===0?totalCostUsd/accepted:null,tasks:[...tasks.values()]};
+  return{from,to,allocation:'equal share among active root tasks; time without a tracked task (idle or unowned services) remains unattributed; phase intervals can overlap',knownCostUsd:totalCostUsd,unattributedCostUsd,unknownCostMs,acceptedTasks:accepted,costPerAcceptedTaskUsd:accepted&&unknownCostMs===0?totalCostUsd/accepted:null,tasks:[...tasks.values()]};
 }

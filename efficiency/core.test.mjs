@@ -9,6 +9,7 @@ import {EventLedger,costReport,uniqueEngineRecord,intervalUnion} from './ledger.
 import {focusContext} from './focus.mjs';
 import {sampleBilling,billingWindows} from './billing-sample.mjs';
 import {generateReport} from './report.mjs';
+import {resourceSnapshot} from './resources.mjs';
 const tick=()=>new Promise(r=>setImmediate(r));
 async function temp(t){const dir=await fs.mkdtemp(path.join(os.tmpdir(),'efficiency-'));t.after(()=>fs.rm(dir,{recursive:true,force:true}));return dir;}
 
@@ -32,6 +33,7 @@ test('work card changes only for semantic facts; complete verification clears ol
   assert.equal(c.render(),c.render());assert.deepEqual(c.changes,['cart.ts']);
   c.verification({passed:true,complete:false},'one');assert.equal(c.verified,true);assert.equal(c.issues.size,1);
   c.verification({passed:true,complete:true},'two');assert.equal(c.issues.size,0);
+  c.setTask('Continue, keeping the keyboard constraint.');assert.match(c.snapshot().task,/checkout/);assert.match(c.snapshot().latestRequest,/Continue/);
 });
 test('prefix fingerprints ignore dynamic user context but detect system/schema changes',()=>{
   const a={messages:[{role:'system',content:[{type:'text',text:POLICY}]},{role:'user',content:[{type:'text',text:'taskA'}]}],tools:[{name:'read',parameters:{type:'object'}}]};
@@ -97,4 +99,9 @@ test('billing sampler never exposes credentials or double counts storage',async 
 test('journal capacity and corrupt trailing lines make reports explicitly incomplete',async t=>{
   const dir=await temp(t),file=path.join(dir,'events.jsonl'),ledger=new EventLedger(file,{clock:()=>1,maxBytes:250});ledger.record('turn-start',{taskId:'A',runId:'A1'});assert.throws(()=>ledger.record('x',{data:'x'.repeat(500)}),/capacity/);
   const report=await generateReport({eventsFile:file,from:0,to:10});assert.equal(report.measurementComplete,false);assert.equal(report.costPerAcceptedTaskUsd,null);
+});
+test('resource snapshots use fresh scoped telemetry and never treat stale Apps state as idle',async t=>{
+  const dir=await temp(t);await fs.mkdir(path.join(dir,'applications'));await fs.writeFile(path.join(dir,'telemetry.json'),JSON.stringify({at:100,cpu:{scope:'container',effectiveCores:15.36,percent:40},ram:{available:1234}}));await fs.writeFile(path.join(dir,'applications/activity.json'),JSON.stringify({at:100,active:1,worker:{phase:'building'},holdUntil:999999}));
+  const snapshot=await resourceSnapshot(dir,{now:110});assert.equal(snapshot.apps.active,1);assert.equal(snapshot.host.effectiveCores,15.36);assert.equal(snapshot.apps.holdUntil,undefined);
+  assert.equal((await resourceSnapshot(dir,{now:30000})).apps,null);
 });
