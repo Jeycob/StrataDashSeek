@@ -11,7 +11,7 @@ export async function executeVerification(ctx, args, execution, config = {}) {
   if (!['all','build','test','browser','acceptance'].includes(args.kind ?? 'all')) return errorResult('INVALID_KIND', 'Unknown verification kind.');
   const sessionId = execution.agent.session.id;
   const review = await ctx.waterfall('workspace-runtime/review', { sessionId }, () => undefined);
-  if (!review?.root || !review.sourceHash) return errorResult('NO_MANAGED_PROJECT', 'Start an isolated managed project before verification.');
+  if (!review?.root || !review.sourceHash || review.legacy === true) return errorResult('NO_MANAGED_PROJECT', 'Start an isolated managed project before verification.');
   if (ctx.shell.sandboxMode === undefined) return errorResult('NO_PROJECT_SANDBOX', 'A filesystem-confining shell is required.');
   const root = path.resolve(review.root), kind = args.kind ?? 'all';
   const runner = config.runnerPath ?? path.join(DIR, 'cli.mjs');
@@ -19,7 +19,9 @@ export async function executeVerification(ctx, args, execution, config = {}) {
   const wrapper = config.wrapperPath ?? '/data/harness/app/development/project-run.cjs';
   if (![runner,node,wrapper].every(p => path.isAbsolute(p))) return errorResult('INVALID_RUNTIME_CONFIG', 'Runtime paths must be absolute.');
   const command = 'exec ' + [node, wrapper, '--', node, runner, 'verify', '--workspace', root, '--kind', kind].map(quote).join(' ');
-  const values = { ...ctx.shellEnv.collect(execution), HARNESS_QUALITY_ALLOWED_PORTS: (review.ports ?? []).join(',') };
+  // Native dshEnv accepts only DSH_* keys. project-run exports standard runtime
+  // variables, including HARNESS_QUALITY_ALLOWED_PORTS, from project metadata.
+  const values = ctx.shellEnv.collect(execution);
   let result, report;
   try {
     const spec = ctx.shell.resolve({ command, workdir: root, timeoutMs: 120000, dshEnv: values, signal: execution.signal, sandboxPolicy: { mode: 'workspace-write', workspaceRoot: root } });
@@ -56,7 +58,7 @@ export function apply(ctx, config = {}) {
     name: 'verify_project',
     description: 'Verify the current isolated project against .harness-quality.json. Declare build/test/browser/acceptance checks early, then verify a small working slice before expanding. Uses real exit codes and real Chromium, rejects zero-test or stale success, saves compact evidence under .harness/quality/, and reports to the single workspace repair budget. A passing stage is not full completion: require complete:true for all required stages. Missing browser is BLOCKED, never a simulated pass. This does not install dependencies or change model settings.',
     parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['all','build','test','browser','acceptance'] } }, additionalProperties: false },
-    isConcurrencySafe: false,
+    isConcurrencySafe: () => false,
     output: {
       schema: { type: 'object', properties: { passed: { type: 'boolean' }, complete: { type: 'boolean' }, stale: { type: 'boolean' }, checks: { type: 'array', items: {} } }, required: ['passed','complete','stale','checks'], additionalProperties: true },
       render: (_args, report) => [{ type: 'text', text: JSON.stringify(report) }],

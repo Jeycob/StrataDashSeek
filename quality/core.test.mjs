@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {verifyProject, runProgram, validateContract, confined, parseTestCounts} from './core.mjs';
 import {validatePlan, resolveBaseURL, verifyBrowser} from './browser.mjs';
-import {executeVerification} from './plugin.mjs';
+import {executeVerification, apply} from './plugin.mjs';
 
 const command = code => [process.execPath, '-e', code];
 async function project(t, checks, requiredKinds = ['test']) {
@@ -84,20 +84,28 @@ test('browser plan cannot silently ignore misspelled expectations or use foreign
 function pluginContext({stale=false,exitCode=0}={}) {
   const root=path.resolve('managed-project'), events=[], specs=[]; let reviews=0;
   const report={passed:true,complete:true,stale:false,checks:[{passed:true,checksPassed:4,checksTotal:4,artifactPaths:[]}]};
-  const ctx={waterfall:async()=>({root,sourceHash:stale && reviews++ ? 'new' : 'original',ports:[4000]}),serial:async(name,value)=>events.push({name,value}),shellEnv:{collect:()=>({PORT:'4000'})},shell:{sandboxMode:'workspace-write',resolve:s=>{specs.push(s);return s;},execute:async()=>({result:async()=>({exitCode,stdout:{text:JSON.stringify(report)}})})}};
+  const ctx={waterfall:async()=>({root,sourceHash:stale && reviews++ ? 'new' : 'original',ports:[4000]}),serial:async(name,value)=>events.push({name,value}),shellEnv:{collect:()=>({DSH_APP_PORT:'4000'})},shell:{sandboxMode:'workspace-write',resolve:s=>{specs.push(s);return s;},execute:async()=>({result:async()=>({exitCode,stdout:{text:JSON.stringify(report)}})})}};
   return {ctx,root,events,specs,execution:{agent:{session:{id:'fixture'}},signal:new AbortController().signal}};
 }
 test('plugin uses managed root and native confinement and reports once',async()=>{
   const f=pluginContext(); const r=await executeVerification(f.ctx,{},f.execution);
   assert.equal(r.complete,true); assert.deepEqual(f.specs[0].sandboxPolicy,{mode:'workspace-write',workspaceRoot:f.root});
-  assert.equal(f.specs[0].workdir,f.root); assert.equal(f.specs[0].dshEnv.HARNESS_QUALITY_ALLOWED_PORTS,'4000');
+  assert.equal(f.specs[0].workdir,f.root); assert.deepEqual(f.specs[0].dshEnv,{DSH_APP_PORT:'4000'});
   assert.equal(f.events.length,1); assert.equal(f.events[0].value.sourceHash,'original'); assert.equal(f.events[0].value.checksTotal,4);
+});
+test('native tool definition uses a concurrency callback',()=>{
+  let definition;apply({tools:{register:tool=>{definition=tool;}}});
+  assert.equal(definition.name,'verify_project');assert.equal(definition.isConcurrencySafe({}),false);
 });
 test('plugin invalidates changed source and nonzero native exits',async()=>{
   for(const options of [{stale:true},{exitCode:7}]) {const f=pluginContext(options);const r=await executeVerification(f.ctx,{},f.execution);assert.equal(r.passed,false);assert.equal(r.complete,false);assert.equal(f.events[0].value.exitCode,1);}
 });
 test('plugin refuses unmanaged projects without executing commands',async()=>{
   const f=pluginContext();f.ctx.waterfall=async()=>undefined;
+  assert.equal((await executeVerification(f.ctx,{},f.execution)).code,'NO_MANAGED_PROJECT');assert.equal(f.specs.length,0);
+});
+test('plugin refuses legacy shared projects without executing commands',async()=>{
+  const f=pluginContext();const original=f.ctx.waterfall;f.ctx.waterfall=async(...args)=>({...await original(...args),legacy:true});
   assert.equal((await executeVerification(f.ctx,{},f.execution)).code,'NO_MANAGED_PROJECT');assert.equal(f.specs.length,0);
 });
 test('manager rejection is returned as failed evidence, never a pass',async()=>{

@@ -10,7 +10,7 @@ import {verifyProject} from './core.mjs';
 
 function shop(bug) {
   return `<!doctype html><html lang="cs"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
-  body{font:18px system-ui;margin:24px;max-width:900px}button{padding:12px}button:focus{outline:3px solid blue}.product{width:${bug==='overflow'?'1200px':'100%'}}svg{width:120px;height:80px}</style>
+  body{font:18px system-ui;margin:24px;max-width:900px}button{padding:12px}button:focus{outline:3px solid blue}.product{width:${bug==='overflow'?'2000px':'100%'}}svg{width:120px;height:80px}</style>
   <h1>Papírna – ověřovací příklad</h1><article class="product"><h2>Sešit</h2>${bug==='images'?'':'<svg role="img" aria-label="Sešit" viewBox="0 0 120 80"><rect width="120" height="80" fill="#95b5a1"/></svg>'}<p>120 Kč</p><button id="add">Přidat</button></article>
   <p id="total">Košík je prázdný</p><script>document.querySelector('#add').onclick=()=>{document.querySelector('#total').textContent='Celkem: ${bug==='nan'?'NaN':'120'} Kč'};${bug==='console'?"console.error('fixture rendering failure')":''}</script></html>`;
 }
@@ -30,7 +30,7 @@ test('real Chromium distinguishes working shop from four known UI regressions', 
     await fs.writeFile(path.join(root,'plan.json'),JSON.stringify(plan));
     const r=await verifyBrowser({workspace:root,planPath:'plan.json',outputPath:`.harness/quality/${bug}.json`,runId:bug,env:{...process.env,HARNESS_QUALITY_ALLOWED_PORTS:String(server.address().port)}});
     if(bug==='fixed') {assert.equal(r.failed,0,JSON.stringify(r.results.filter(x=>!x.passed)));assert.ok(r.passed>=12);}
-    else {const expected={nan:'INVALID_VISIBLE_TEXT',images:'MISSING_OR_BROKEN_IMAGES',overflow:'HORIZONTAL_OVERFLOW',console:'BROWSER_ERRORS'}[bug];assert.ok(r.results.some(x=>!x.passed && x.code===expected),JSON.stringify(r));}
+    else {const expected={nan:'INVALID_VISIBLE_TEXT',images:'MISSING_OR_BROKEN_IMAGES',overflow:'HORIZONTAL_OVERFLOW',console:'BROWSER_ERRORS'}[bug];assert.equal(r.results.filter(x=>!x.passed && x.code===expected).length,2,JSON.stringify(r));}
     assert.equal(r.screenshots.length,2);
     for(const shot of r.screenshots) {const png=await fs.readFile(path.join(root,shot.path));assert.equal(png.subarray(0,8).toString('hex'),'89504e470d0a1a0a');assert.equal(png.readUInt32BE(16),shot.width);assert.equal(png.readUInt32BE(20),shot.height);}
   }
