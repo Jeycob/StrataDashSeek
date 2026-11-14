@@ -1,0 +1,7 @@
+{
+  "kind": "synthetic regression fixture",
+  "purpose": "Quoted CSV, embedded newline, duplicate ID, pending row, refunds and decimal rounding tests",
+  "matchesHardcodedUnitTestLiteral": true,
+  "realUserFinancialRecords": false,
+  "normalizedSHA256": "b1b34de5cc67cbbafd975613e34e1e48e761029bd3ae8e9d0a7b6e0a95b7fc3c"
+}
