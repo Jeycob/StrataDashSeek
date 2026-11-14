@@ -26,6 +26,11 @@ class Safety(unittest.TestCase):
     def test_external_server_is_not_workspace_preview(self):
         p={10:{'args':['node','apps/api/src/server.js'],'cwd':'/srv/important','ppid':1}}
         self.assertEqual(guard.preview_processes(p),set())
+    def test_verified_home_server_can_idle_but_unknown_script_cannot(self):
+        p={10:{'args':['node','src/index.js'],'cwd':'/data/harness/home/HomeAI/server','ppid':1}}
+        self.assertEqual(guard.preview_processes(p),{10})
+        p[10]['args']=['node','src/build.js']
+        self.assertEqual(guard.preview_processes(p),set())
     def test_shell_preview_wrapper_requires_no_other_job(self):
         shell={'args':['bash','-c','node /x/vite/bin/vite.js --host 127.0.0.1'],'cwd':'/data/harness/workspaces/app','ppid':1}
         p={9:shell,10:{'args':['node','/x/vite/bin/vite.js'],'cwd':'/data/harness/workspaces/app','ppid':9}}

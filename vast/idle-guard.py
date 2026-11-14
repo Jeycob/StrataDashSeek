@@ -1,5 +1,5 @@
 """Root watchdog: never stop across a live turn, build, unknown model state or stale heartbeat."""
-import json, pathlib, time, urllib.request, os, pwd
+import json, pathlib, time, urllib.request, os, pwd, subprocess
 ROOT=pathlib.Path('/data/harness')
 def load(path): return json.loads(path.read_text())
 def decide(now, last, lifecycle, model, jobs, lease_until, idle_seconds=300):
@@ -15,13 +15,15 @@ def preview_processes(processes):
     ignored=set()
     for pid,proc in processes.items():
         a=proc.get('args',[])
-        if not a or not pathlib.PurePosixPath(proc.get('cwd','/')).is_relative_to(ROOT/'workspaces'):continue
+        cwd=pathlib.PurePosixPath(proc.get('cwd','/'))
+        known_home_server=cwd==ROOT/'home/HomeAI/server' and len(a)==2 and a[1]=='src/index.js'
+        if not a or not (cwd.is_relative_to(ROOT/'workspaces') or known_home_server):continue
         exe=pathlib.PurePosixPath(a[0]).name
         if exe in ('node','nodejs') and len(a)>1:
             vite=a[1].endswith('/vite/bin/vite.js') and 'build' not in a[2:]
             nextdev=a[1].endswith('/next/dist/bin/next') and any(x in ('dev','start') for x in a[2:])
             api=a[1]=='apps/api/src/server.js' or a[1].endswith('/apps/api/src/server.js')
-            if vite or nextdev or api:ignored.add(pid)
+            if vite or nextdev or api or known_home_server:ignored.add(pid)
         if exe.startswith('python') and a[1:3]==['-m','http.server']:ignored.add(pid)
     changed=True
     while changed:
@@ -46,7 +48,10 @@ def jobs_running(ignore_previews=False):
             status=(entry/'stat').read_text().rsplit(') ',1)[1]
             if status.startswith('Z'):continue
             if not ignore_previews:return True
-            processes[int(entry.name)]={'ppid':int(status.split()[1]),'args':[x.decode(errors='replace') for x in (entry/'cmdline').read_bytes().split(b'\0') if x],'cwd':os.readlink(entry/'cwd')}
+            try:cwd=os.readlink(entry/'cwd')
+            except PermissionError:
+                cwd=subprocess.check_output(['runuser','-u','harness','--','readlink',str(entry/'cwd')],text=True,timeout=3).strip()
+            processes[int(entry.name)]={'ppid':int(status.split()[1]),'args':[x.decode(errors='replace') for x in (entry/'cmdline').read_bytes().split(b'\0') if x],'cwd':cwd}
         except (FileNotFoundError,ProcessLookupError):continue
         except OSError:return True
     return bool(set(processes)-preview_processes(processes))
