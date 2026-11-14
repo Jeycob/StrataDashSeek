@@ -1,0 +1,16 @@
+{
+  "sourceInstanceId": 60529418,
+  "targetGpu": "RTX PRO 4500 32 GB",
+  "targetOfferId": 59273284,
+  "targetCpu": "AMD Ryzen 9 9950X",
+  "targetHourlyTotalUSD": 0.5066666666666667,
+  "targetDiskGB": 96,
+  "publicHarnessUrlPreserved": "https://vast-harness.tail9a42c6.ts.net/phone/",
+  "model": "qwen3.8-flash-next-iq3_s",
+  "harnessVersion": "0.2.2-rc.2",
+  "backupPolicy": "Encrypted local archive of the actual private stack and final quiesced user state; public Git contains configuration and checksums only.",
+  "cutoverPolicy": "Prepare target privately. Require healthy model, readable history and preserved workspace hashes. Stop old Tailscale identity before starting its migrated copy. Update fixed Cloudflare instance ID only after target readiness.",
+  "sourceRetirement": "Stop source after successful cutover; retain its disk as explicit rollback pending later retirement.",
+  "backgroundPreviewPolicy": "Preserve project files and state. Do not blindly restore detached tool preview servers that were preventing automatic sleep.",
+  "secrets": "Preserve credentials, browser authentication, Tailscale state and Web Push registrations only in encrypted transfer/private root-owned storage, never Git."
+}
