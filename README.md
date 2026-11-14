@@ -4,6 +4,12 @@ Optional application builds and container UI: see [Applications](docs/applicatio
 
 Run DeepSeek Harness, Strata and a local model together on one stoppable Vast.ai instance. Wake it from a free Cloudflare Worker, connect privately through Tailscale and receive iOS Web Push when work finishes.
 
+Start with the [installation and operation overview](docs/installation-overview.md)
+to distinguish first installation, ordinary wake and optional Apps. The
+[request budget](docs/request-budget.md) separates Worker traffic from direct
+Vast billing reads and private monitoring. A [read-only disk review](docs/disk-plan-20261114.md)
+identifies specific migration artifacts for review; it authorizes no deletion.
+
 ```mermaid
 flowchart LR
   Phone[iPhone / browser] -->|authenticated wake| Worker[Cloudflare Worker]
