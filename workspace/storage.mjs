@@ -35,7 +35,7 @@ export class ProjectLocks {
       const lock = path.join(this.directory, 'allocation.lock'); let handle;
       for (let i = 0; i < 100; i++) {
         try { handle = await fs.open(lock, 'wx', 0o600); await handle.writeFile(JSON.stringify({ pid: process.pid, identity: await ownerIdentity() })); break; }
-        catch (e) { if (e.code !== 'EEXIST') throw e; const held = await readJSON(lock, {}); if (held.pid && await ownerIdentity(held.pid) !== held.identity) { await fs.unlink(lock).catch(() => {}); continue; } await new Promise(r => setTimeout(r, 20)); }
+        catch (e) { if (e.code !== 'EEXIST') throw e; let held; try { held = await readJSON(lock, {}); } catch (error) { if (!(error instanceof SyntaxError)) throw error; held = {}; } if (held.pid && await ownerIdentity(held.pid) !== held.identity) { await fs.unlink(lock).catch(() => {}); continue; } await new Promise(r => setTimeout(r, 20)); }
       }
       if (!handle) throw new WorkbenchError('LOCK_BUSY', 'Another workspace operation is in progress.');
       try { return await fn(); } finally { await handle.close(); await fs.unlink(lock).catch(() => {}); }
@@ -86,7 +86,7 @@ export async function saveCheckpoint(root, destination, manifest) {
   for (const [relative, expected] of Object.entries(manifest.files)) {
     const source = await canonicalInside(root, relative), data = await fs.readFile(source);
     if (hash(data) !== expected.sha256) throw new WorkbenchError('CHECKPOINT_CHANGED', 'Source changed while checkpointing; previous checkpoint is retained.');
-    const target = path.join(staging, relative); await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }); await fs.writeFile(target, data, { mode: 0o600 });
+    const target = path.join(staging, 'files', relative); await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }); await fs.writeFile(target, data, { mode: 0o600 });
   }
   await atomicJSON(path.join(staging, 'checkpoint-manifest.json'), manifest);
   // Versioned checkpoints are never replaced in place; readers see one complete generation.

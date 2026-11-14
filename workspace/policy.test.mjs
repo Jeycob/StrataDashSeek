@@ -28,6 +28,6 @@ test('leases serialize competing runs, allow siblings and block overlapping root
 test('checkpoints preserve text, skip dependencies and refuse symlink escapes', async t => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'workspace-checkpoint-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   const root = path.join(dir, 'project'); await fs.mkdir(path.join(root, 'node_modules'), { recursive: true }); await fs.writeFile(path.join(root, 'hello.cs'), 'Hello'); await fs.writeFile(path.join(root, 'node_modules', 'ignored'), 'ignored');
-  const manifest = await sourceManifest(root); assert.deepEqual(Object.keys(manifest.files), ['hello.cs']); const saved = await saveCheckpoint(root, path.join(dir, 'checkpoint'), manifest); assert.equal(await fs.readFile(path.join(saved, 'hello.cs'), 'utf8'), 'Hello');
+  const manifest = await sourceManifest(root); assert.deepEqual(Object.keys(manifest.files), ['hello.cs']); const saved = await saveCheckpoint(root, path.join(dir, 'checkpoint'), manifest); assert.equal(await fs.readFile(path.join(saved, 'files', 'hello.cs'), 'utf8'), 'Hello');
   if (process.platform !== 'win32') { await fs.symlink(dir, path.join(root, 'escape')); await assert.rejects(canonicalInside(root, 'escape/secret', true), /Symbolic/); }
 });

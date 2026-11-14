@@ -17,7 +17,7 @@ export function relativeFile(value) {
 export const DEFAULTS = Object.freeze({ provider: 'strata-vast', model: 'strata', reasoningEffort: 'medium', maxTokens: 32768, thinkingBudget: 4096, temperature: 1, topP: .95, projectMode: 'auto', noProgressLimit: 3, maxStageSteps: 60, language: 'en', environment: 'web' });
 export function validateSettings(input, availableModels) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new WorkbenchError('INVALID_SETTINGS', 'Expected settings.', 400);
-  for (const key of Object.keys(input)) if (!(key in DEFAULTS) && key !== 'baseCommit') throw new WorkbenchError('INVALID_SETTINGS', 'Unknown setting: ' + key, 400);
+  for (const key of Object.keys(input)) if (!Object.hasOwn(DEFAULTS, key) && key !== 'baseCommit') throw new WorkbenchError('INVALID_SETTINGS', 'Unknown setting: ' + key, 400);
   const result = { ...DEFAULTS, ...input };
   for (const key of ['provider', 'model']) if (typeof result[key] !== 'string' || !/^[\w./:-]{1,128}$/u.test(result[key])) throw new WorkbenchError('INVALID_SETTINGS', 'Invalid ' + key, 400);
   for (const [key, choices] of Object.entries({ reasoningEffort: ['off', 'low', 'medium', 'high'], projectMode: ['auto', 'fresh', 'worktree', 'continue'], language: ['en', 'cs'], environment: ['web', 'dotnet', 'general'] })) if (!choices.includes(result[key])) throw new WorkbenchError('INVALID_SETTINGS', 'Invalid ' + key, 400);

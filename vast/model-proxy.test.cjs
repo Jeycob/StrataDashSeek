@@ -1,5 +1,13 @@
 const test=require('node:test'),assert=require('node:assert/strict'),http=require('node:http');
-const {normalizePayload,createModelProxy}=require('./model-proxy.cjs');
+const {normalizePayload,createModelProxy,requestControls}=require('./model-proxy.cjs');
+test('workspace controls are bounded, request-local and never enable off-mode thinking',()=>{
+ const a={maxTokens:2048,thinkingBudget:512,effort:'medium',temperature:0,topP:.6};
+ const one=normalizePayload({messages:[],reasoning_effort:'medium'},a),two=normalizePayload({messages:[],reasoning_effort:'low'});
+ assert.equal(one.max_tokens,2048);assert.equal(one.thinking_budget_tokens,512);assert.equal(one.temperature,0);assert.equal(one.top_p,.6);assert.equal(two.thinking_budget_tokens,2048);assert.equal(two.top_p,.95);
+ assert.equal(normalizePayload({chat_template_kwargs:{enable_thinking:false}},a).thinking_budget_tokens,undefined);
+ assert.throws(()=>requestControls(Buffer.from('{"maxTokens":999999}').toString('base64url')));assert.throws(()=>requestControls('invalid'));
+ assert.deepEqual(requestControls(Buffer.from(JSON.stringify(a)).toString('base64url')),a);
+});
 test('HomeAI defaults preserve explicit budgets and off-mode compaction',()=>{
  const medium=normalizePayload({messages:[]});assert.equal(medium.thinking_budget_tokens,4096);assert.equal(medium.max_tokens,32768);assert.equal(medium.temperature,1);assert.equal(medium.top_p,.95);assert.equal(medium.top_k,20);
  const original={max_tokens:8192,thinking_budget_tokens:123,chat_template_kwargs:{enable_thinking:false}};const off=normalizePayload(original);assert.equal(off.reasoning_effort,'none');assert.equal(off.chat_template_kwargs.enable_thinking,false);assert.equal(off.thinking_budget_tokens,undefined);assert.equal(original.thinking_budget_tokens,123);
