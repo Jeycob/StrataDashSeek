@@ -6,14 +6,26 @@ def args(pid):
     except OSError:return []
 def quiet():
     life=json.loads((r/'state/lifecycle.json').read_text());model=json.load(urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=5))
-    return not life.get('active') and model.get('busy') is False and not model.get('queued')
+    queue=json.loads((r/'state/turn-queue.json').read_text())
+    return not life.get('active') and model.get('busy') is False and not model.get('queued') and not queue.get('owner') and not queue.get('waiting')
 services=json.loads((r/'state/services.json').read_text())['pids']
 harness=next(p for p in services if any(x.endswith('/@deepseek-ai/dsh/lib/bin.js') for x in args(p)))
 supervisor=next(int(p.name) for p in pathlib.Path('/proc').iterdir() if p.name.isdigit() and '/data/harness/app/vast/supervisor.cjs' in args(int(p.name)))
+proxy=next(p for p in services if '/data/harness/app/mobile/https-proxy.cjs' in args(p))
 if not quiet():raise RuntimeError('Live user/model turn; migration cutover postponed')
-os.kill(harness,signal.SIGSTOP)
-if not quiet():
-    os.kill(harness,signal.SIGCONT);raise RuntimeError('A turn started during preparation; resumed unchanged')
+os.kill(proxy,signal.SIGSTOP)
+try:
+    time.sleep(1)
+    code="const a=require('/data/harness/root-secrets/homeai-migrate-admin.cjs');(async()=>{const c=await a.login();const s=await a.call('session/list',{},c);process.stdout.write(s.items.some(x=>x.running)?'busy':'idle')})().catch(()=>process.exit(1));"
+    running=subprocess.check_output([str(r/'node/bin/node'),'-e',code],text=True,timeout=20)
+    if running!='idle' or not quiet():raise RuntimeError('A queued or running turn exists; cutover postponed')
+    os.kill(harness,signal.SIGSTOP)
+    if not quiet():raise RuntimeError('A turn started during preparation')
+except:
+    for p in [harness,proxy]:
+        try:os.kill(p,signal.SIGCONT)
+        except ProcessLookupError:pass
+    raise
 previews=[]
 try:
     for p in pathlib.Path('/proc').iterdir():
@@ -24,7 +36,7 @@ try:
             previews.append(int(p.name))
         else:raise RuntimeError('Unknown workspace process remains: '+p.name)
 except:
-    os.kill(harness,signal.SIGCONT);raise
+    os.kill(harness,signal.SIGCONT);os.kill(proxy,signal.SIGCONT);raise
 os.kill(supervisor,signal.SIGSTOP)
 for p in services:
     if '/data/harness/app/mobile/https-proxy.cjs' in args(p):os.kill(p,signal.SIGTERM)
@@ -33,8 +45,9 @@ for p in previews:
     except ProcessLookupError:pass
 os.kill(supervisor,signal.SIGTERM);os.kill(supervisor,signal.SIGCONT)
 time.sleep(.3)
-try:os.kill(harness,signal.SIGCONT)
-except ProcessLookupError:pass
+for p in [harness,proxy]:
+    try:os.kill(p,signal.SIGCONT)
+    except ProcessLookupError:pass
 def alive(pid):
     try:return not pathlib.Path(f'/proc/{pid}/stat').read_text().split(') ',1)[1].startswith('Z')
     except OSError:return False
