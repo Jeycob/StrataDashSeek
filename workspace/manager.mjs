@@ -48,7 +48,8 @@ export class WorkspaceManager {
   }
   async allocatePorts() {
     const used = new Set(Object.values(this.data.sessions).flatMap(x => x.ports ?? []));
-    for (let base = 21000; base < 25000; base += 4) {
+    const start = this.config.portBase ?? 21000;
+    for (let base = start; base < start + 4000; base += 4) {
       const ports = [base, base + 1, base + 2, base + 3]; if (ports.some(p => used.has(p))) continue;
       const handles = [];
       try { for (const port of ports) { const server = net.createServer(); await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); }); handles.push(server); } return ports; }
@@ -76,9 +77,10 @@ export class WorkspaceManager {
       let repository, baseCommit;
       if (settings.projectMode !== 'fresh' && settings.projectMode !== 'continue') {
         try {
-          const options = { cwd: current, timeout: 10000, env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' } };
-          repository = (await run('git', ['-c', 'core.fsmonitor=false', 'rev-parse', '--show-toplevel'], options)).stdout.trim();
-          baseCommit = (await run('git', ['rev-parse', '--verify', (settings.baseCommit ?? 'HEAD') + '^{commit}'], options)).stdout.trim();
+          const options = { cwd: current, timeout: 10000, maxBuffer: 4 * 1024 * 1024, env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' } };
+          repository = (await run('git', ['-c', 'core.fsmonitor=false', '-c', 'protocol.allow=never', 'rev-parse', '--show-toplevel'], options)).stdout.trim();
+          baseCommit = (await run('git', ['-c', 'protocol.allow=never', 'rev-parse', '--verify', (settings.baseCommit ?? 'HEAD') + '^{commit}'], options)).stdout.trim();
+          await run('git', ['-c', 'protocol.allow=never', 'rev-list', '--objects', '--missing=error', baseCommit, '--'], options);
         } catch (error) { if (settings.projectMode === 'worktree') throw new WorkbenchError('COMMIT_REQUIRED', 'Existing projects require an available local Git commit before creating a worktree.'); }
       }
       if (repository && !baseCommit) throw new WorkbenchError('COMMIT_REQUIRED', 'Commit the existing repository before creating an isolated checkout.');
@@ -244,7 +246,8 @@ export class WorkspaceManager {
       }
       const target = await this.ctx.fs.resolve(file, { signal });
       if (!within(root, this.ctx.fs.processPath(target))) throw new WorkbenchError('OUTSIDE_PROJECT', 'Resolved path is outside the project.', 403);
-      if (operation === 'read') { const info = await this.ctx.fs.stat(target, signal); if (info?.size > 1024 * 1024) throw new WorkbenchError('TOO_LARGE', 'Use Download for files larger than 1 MiB.', 413); return { path: relative, version: info?.version, text: await this.ctx.fs.readText(target, signal, 1024 * 1024) }; }
+      if (operation === 'stat') { const info = await this.ctx.fs.stat(target, signal); return { path: relative, version: info?.version, bytes: info?.size }; }
+      if (operation === 'read') { const info = await this.ctx.fs.stat(target, signal); if (info?.size > 1024 * 1024) throw new WorkbenchError('TOO_LARGE', 'Use Download for files larger than 1 MiB.', 413); const bytes = await this.ctx.fs.readBytes(target, signal, 1024 * 1024); let text; try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); if (text.includes('\0')) throw Error('binary'); } catch { throw new WorkbenchError('BINARY_FILE', 'Binary files can be downloaded, renamed or deleted.', 415); } return { path: relative, version: info?.version, text }; }
       if (operation === 'write') {
         if (typeof args.text !== 'string' || Buffer.byteLength(args.text) > 1024 * 1024 || args.text.includes('\0')) throw new WorkbenchError('INVALID_TEXT', 'Text exceeds the editor limit.', 413);
         const expected = args.version ? { kind: 'replaceIfVersion', version: args.version } : { kind: 'createIfAbsent' };
@@ -266,6 +269,6 @@ export class WorkspaceManager {
         await fs.writeFile(file, data, { flag: 'wx', mode: 0o644 }); return { uploaded: true };
       }
       throw new WorkbenchError('UNKNOWN_OPERATION', 'Unknown file operation.', 400);
-    }, !['list', 'read', 'download'].includes(operation));
+    }, !['list', 'read', 'stat', 'download'].includes(operation));
   }
 }

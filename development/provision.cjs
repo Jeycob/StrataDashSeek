@@ -8,7 +8,8 @@ function run(exe,args,options={}){cp.execFileSync(exe,args,{stdio:'inherit',env:
  if(Number(fs.statfsSync('/data').bavail)*Number(fs.statfsSync('/data').bsize)<2.5*1073741824)throw Error('At least 2.5 GiB free space is required.');
  fs.mkdirSync(root+'/browser',{recursive:true});
  fs.writeFileSync(root+'/browser/package.json',JSON.stringify({name:'harness-prepared-browser',private:true,dependencies:{playwright:versions.playwright}},null,2));
- run('/data/harness/node/bin/npm',['install','--ignore-scripts','--no-audit','--no-fund','--registry=https://registry.npmjs.org/','--userconfig=/dev/null','--globalconfig=/dev/null'],{cwd:root+'/browser'});
+ for(const name of ['npm-user.conf','npm-global.conf'])fs.writeFileSync(root+'/'+name,'',{mode:0o600});
+ run('/data/harness/node/bin/npm',['install','--ignore-scripts','--no-audit','--no-fund','--registry=https://registry.npmjs.org/','--userconfig='+root+'/npm-user.conf','--globalconfig='+root+'/npm-global.conf'],{cwd:root+'/browser'});
  const lock=JSON.parse(fs.readFileSync(root+'/browser/package-lock.json'));if(lock.packages['node_modules/playwright'].integrity!==versions.playwrightIntegrity)throw Error('Playwright integrity differs from pinned official metadata.');
  run(node,[root+'/browser/node_modules/playwright/cli.js','install','--with-deps','--only-shell','chromium']);
  if(!fs.existsSync(root+'/dotnet/dotnet')||cp.execFileSync(root+'/dotnet/dotnet',['--version'],{encoding:'utf8'}).trim()!==versions.dotnetVersion){
@@ -21,6 +22,7 @@ function run(exe,args,options={}){cp.execFileSync(exe,args,{stdio:'inherit',env:
  }
  const uid=Number(cp.execFileSync('id',['-u','harness'])),gid=Number(cp.execFileSync('id',['-g','harness']));
  fs.mkdirSync('/data/harness/state/development',{recursive:true,mode:0o700});fs.chownSync('/data/harness/state/development',uid,gid);
- run('runuser',['-u','harness','--',node,path.join(__dirname,'doctor.cjs'),'--output','/data/harness/state/development.json']);
+ fs.copyFileSync(path.join(__dirname,'doctor.cjs'),root+'/doctor.cjs');fs.chmodSync(root+'/doctor.cjs',0o644);
+ run('/usr/sbin/runuser',['-u','harness','--',node,root+'/doctor.cjs','--output','/data/harness/state/development.json']);
  console.log(JSON.stringify({provisioned:true,playwright:versions.playwright,dotnet:versions.dotnetVersion,downloadsOnOrdinaryBoot:false}));
 })().catch(e=>{console.error(e.message);process.exitCode=1});
