@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "at": "2026-11-14T21:25:38.349Z",
+  "baseCommit": "2d9e5c1721dae8129de08798a7c5850d8b2b6430",
+  "codeCommit": "3fc5dfa80cac5eeed6041744b29302b98ac4ba13",
+  "branch": "feat/unified-workbench-sidebar",
+  "deployedByThisTask": false,
+  "profile": {
+    "id": "cloud-native-workbench",
+    "name": "file:///data/harness/app/workspace/native-ui/index.mjs",
+    "config": {
+      "appsWorkspaceRoot": "/data/harness/workspaces"
+    }
+  },
+  "activation": "node /data/harness/app/workspace/native-ui/install.cjs",
+  "installation": {
+    "additive": true,
+    "idempotent": true,
+    "profileBackupMode": "0600",
+    "backupDirectoryMode": "0700",
+    "checksProfileUnchangedBeforeRename": true,
+    "requiresCoordinatedProfileWriteWindow": true,
+    "copyPhoneShellAndNativeBundleTogether": true,
+    "noNativeOrModelRestartRequested": true,
+    "noSdkOrSessionHeaderPatch": true
+  },
+  "files": [
+    {
+      "file": "mobile/apps.js",
+      "baseBlobSha256": "9b58ee869f43acf409c3a407ad4f30b274e8e6ea450c879d73cf9d31b48485f3",
+      "targetBlobSha256": "5c8d984d3a0c941a61447afe589d71e435e204136f28b7385802ea01e89dd55c",
+      "workingTreeSha256": "5c8d984d3a0c941a61447afe589d71e435e204136f28b7385802ea01e89dd55c",
+      "requiredAtRuntime": true
+    },
+    {
+      "file": "mobile/phone.js",
+      "baseBlobSha256": "778acc351e2aabb3d41fdbe6662359e322e06f8fa859987fbe589b3818595e6d",
+      "targetBlobSha256": "d666b9d6d2a49a56c344bbb4d878e1805c99c3edf81145e275585f49cacf96c0",
+      "workingTreeSha256": "d666b9d6d2a49a56c344bbb4d878e1805c99c3edf81145e275585f49cacf96c0",
+      "requiredAtRuntime": true
+    },
+    {
+      "file": "mobile/phone.html",
+      "baseBlobSha256": "b9bede57b95cdd6176b67bd8257d6f265ec8415e4a8340736bb57ad4bf504a46",
+      "targetBlobSha256": "46fd3ff59a924555f47078a930d42d12b64ee7da5058839f93ea4ea0fb7f61eb",
+      "workingTreeSha256": "46fd3ff59a924555f47078a930d42d12b64ee7da5058839f93ea4ea0fb7f61eb",
+      "requiredAtRuntime": true
+    },
+    {
+      "file": "workspace/client.js",
+      "baseBlobSha256": "050f015b4b8d4268fba55ec49d149af6c128731058fc40cbf3467f70ccd4f5de",
+      "targetBlobSha256": "5c359aea7b01196f09b374a8d9b0cc2bd2694444a5ceefae72c683e598c42078",
+      "workingTreeSha256": "5c359aea7b01196f09b374a8d9b0cc2bd2694444a5ceefae72c683e598c42078",
+      "requiredAtRuntime": true
+    },
+    {
+      "file": "shared/i18n.cjs",
+      "baseBlobSha256": "05dbc875771ca3e32179827e5c134875d001b0f21e80720a7d3e10564ac52e30",
+      "targetBlobSha256": "5d43c854e8e45d14375a3a9eb782d57f969989e9bb13bae0c3134e79aab073c7",
+      "workingTreeSha256": "5d43c854e8e45d14375a3a9eb782d57f969989e9bb13bae0c3134e79aab073c7",
+      "requiredAtRuntime": true
+    },
+    {
+      "file": "workspace/native-ui/package.json",
+      "baseBlobSha256": null,
+      "targetBlobSha256": "1152df0a05b06a90a1cc940a7b7947607d5aeceb207dfb89ba4e270857bae478",
+      "workingTreeSha256": "1152df0a05b06a90a1cc940a7b7947607d5aeceb207dfb89ba4e270857bae478",
+      "requiredAtRuntime": true
+    },
+    {
+      "file": "workspace/native-ui/index.mjs",
+      "baseBlobSha256": null,
+      "targetBlobSha256": "d73847ccfb061f7099864cb25a0b63641d5409511eae4b5543d581f01663ad50",
+      "workingTreeSha256": "d73847ccfb061f7099864cb25a0b63641d5409511eae4b5543d581f01663ad50",
+      "requiredAtRuntime": true
+    },
+    {
+      "file": "workspace/native-ui/client.js",
+      "baseBlobSha256": null,
+      "targetBlobSha256": "71967d201c4a78d6266535bd9c92668a283eec7f55a6a50a88fb227a0366df72",
+      "workingTreeSha256": "71967d201c4a78d6266535bd9c92668a283eec7f55a6a50a88fb227a0366df72",
+      "requiredAtRuntime": true
+    },
+    {
+      "file": "workspace/native-ui/source.js",
+      "baseBlobSha256": null,
+      "targetBlobSha256": "7ab27155ad9eb82aad80dd4111dca70187b9d54dcd447f6a1d96842eaacc1fe3",
+      "workingTreeSha256": "7ab27155ad9eb82aad80dd4111dca70187b9d54dcd447f6a1d96842eaacc1fe3",
+      "requiredAtRuntime": false
+    },
+    {
+      "file": "workspace/native-ui/build.cjs",
+      "baseBlobSha256": null,
+      "targetBlobSha256": "6c50fa201960267931cdc0ff24f901ea03a753ae543a3b4bd59d184ca5e1fb26",
+      "workingTreeSha256": "6c50fa201960267931cdc0ff24f901ea03a753ae543a3b4bd59d184ca5e1fb26",
+      "requiredAtRuntime": false
+    },
+    {
+      "file": "workspace/native-ui/install.cjs",
+      "baseBlobSha256": null,
+      "targetBlobSha256": "ebf280bd651fddecf8024d05d7dfc1b5ae261c1754ad791ebba6ec68371f71ae",
+      "workingTreeSha256": "ebf280bd651fddecf8024d05d7dfc1b5ae261c1754ad791ebba6ec68371f71ae",
+      "requiredAtRuntime": false
+    }
+  ],
+  "verification": {
+    "tests": 8,
+    "passed": 8,
+    "failed": 0,
+    "skipped": 0,
+    "node": "24.22.1",
+    "nativeHarness": "0.2.2-rc.2",
+    "browser": "Playwright 1.65.1 Chromium headless",
+    "desktop": {
+      "width": 1440,
+      "height": 1000
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844
+    },
+    "actualNativeHost": true,
+    "actualNativeClientController": true,
+    "fileAndApplicationApis": "controlled fixtures; server storage and Docker are not deployed by this test",
+    "scenarios": [
+      "Original Native document folder-icon click routes through commandTarget/openTabFromTarget to corrected kind=files",
+      "Native CtrlAltP retains the original product command",
+      "Two actual Native sessions use distinct managed roots and correct sessionId",
+      "File open and versioned delete target only first session; second remains available",
+      "Editor drafts survive closing/reopening with a new tab id",
+      "Tree refresh preserves unsaved editor content",
+      "Workspace model draft survives EN/CZ switch",
+      "Single Native Settings contains General/Models plus workspace, Docker/vault/remote and notifications sections",
+      "Docker current-project action sends bounded relative scaffold/register requests; sibling-prefix escape rejected",
+      "Container logs and stop/start work; read-only views do not wake the worker",
+      "Phone push installation id and handlers survive adoption into Native Settings without a second subscription",
+      "Profile addition is idempotent and preserves unrelated configuration"
+    ]
+  },
+  "compatibility": {
+    "previewFolderBridge": "rc.2 data-files-navigator-toggle only; no generic folder interception or DOM-derived session IDs",
+    "enhancedFilesFalse": "QA/fallback configuration; does not fix the upstream stale-cwd limitation on its own",
+    "settingsBridge": "Uses existing root Settings Store handle from public slot registration; original AccountMenu is preserved",
+    "treeRefresh": "Explicit Refresh and Native page refresh; no automatic tree changefeed claimed",
+    "backendLookupFix": "HomeAI owns optional workspace/native-files.mjs (1a23607); apply separately for effective-root relative resource reads and @ references",
+    "sessionIdentity": "Immutable header and client sessions.list are unchanged",
+    "startupUpdate": "Displays sanitized GET state.update contract when installed; read-only"
+  },
+  "deploymentGuard": {
+    "activeShopRun": "Do not restart or interrupt the active production run",
+    "coordinateWith": "HomeAI",
+    "github": "Feature branch only; no main push. Startup updater requires a trusted signed final main commit from the release owner.",
+    "baseHashes": "Git blob canonical bytes. Compare current production files before replacement; do not overwrite independently modified files."
+  }
+}

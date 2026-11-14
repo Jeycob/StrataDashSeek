@@ -1,12 +1,16 @@
 'use strict';
-const byId=id=>document.getElementById(id);
+const phoneNodes=new Map([...document.querySelectorAll('[id]')].map(e=>[e.id,e]));
+const byId=id=>phoneNodes.get(id)||document.getElementById(id);
+const notificationCopy=[];{const walker=document.createTreeWalker(byId('settings'),NodeFilter.SHOW_TEXT);let n;while((n=walker.nextNode()))if(!n.parentElement.closest('#message'))notificationCopy.push([n,n.nodeValue]);}
+function notificationLanguage(){for(const [node,original]of notificationCopy)node.nodeValue=window.HarnessCopy?.translate(original,window.HarnessI18n?.language||'cs')||original;}
+window.addEventListener('harness-language-change',notificationLanguage);
 let installationId=localStorage.getItem('harness.push.installation');
 if(!installationId){installationId=crypto.randomUUID();localStorage.setItem('harness.push.installation',installationId);}
 const standalone=matchMedia('(display-mode: standalone)').matches||navigator.standalone===true;
 const ios=/iPhone|iPad|iPod/.test(navigator.userAgent);
 let registration=null,state=null;
 const supported='serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window;
-function note(text){byId('message').textContent=text;}
+function note(text){byId('message').textContent=window.HarnessCopy?.translate(text,window.HarnessI18n?.language||'cs')||text;}
 async function api(route,data){const response=await fetch('/phone/api/'+route,{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(6000),headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const result=await response.json();if(!response.ok)throw Object.assign(Error(result.error||'Požadavek selhal.'),{status:response.status});return result;}
 let refreshing=false;
 function keyBytes(text){return Uint8Array.from(atob(text.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));}
@@ -26,11 +30,9 @@ function installNotificationMenu(){
   const item=template.cloneNode(false);item.removeAttribute('id');item.removeAttribute('aria-keyshortcuts');item.removeAttribute('data-dsh-automatic-focus');item.dataset.harnessPushMenu='true';
   const label=doc.createElement('span');const originalLabel=template.querySelector('span[class*="itemLabel"]');
   if(originalLabel)label.className=originalLabel.className;else label.style.gridColumn='1 / -1';
-  label.textContent='Nastavení Harnessu';item.appendChild(label);
-  item.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();byId('settings').hidden=false;byId('close-settings').focus();};
+  label.textContent=window.HarnessI18n?.t('monitor')||'Server monitor';item.appendChild(label);
+  item.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessMonitor();};
   const wrapper=template.parentElement.cloneNode(false);wrapper.removeAttribute('id');wrapper.appendChild(item);template.parentElement.after(wrapper);
-  const monitorWrapper=wrapper.cloneNode(true),monitorItem=monitorWrapper.querySelector('button');monitorItem.removeAttribute('data-harness-push-menu');monitorItem.dataset.harnessMonitorMenu='true';monitorItem.querySelector('span').textContent=window.HarnessI18n?.t('monitor')||'Server monitor';monitorItem.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessMonitor();};wrapper.after(monitorWrapper);
-  const appsWrapper=wrapper.cloneNode(true),appsItem=appsWrapper.querySelector('button');appsItem.removeAttribute('data-harness-push-menu');appsItem.dataset.harnessAppsMenu='true';appsItem.querySelector('span').textContent='Aplikace a kontejnery';appsItem.onclick=event=>{event.preventDefault();event.stopPropagation();trigger.click();window.openHarnessApps();};monitorWrapper.after(appsWrapper);
  };
  harnessMenuObserver=new MutationObserver(addMenuItem);
  harnessMenuObserver.observe(doc.body,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-expanded']});
@@ -48,8 +50,8 @@ async function refresh(){
   byId('enable').disabled=!registration||!supported||(ios&&!standalone);byId('test').disabled=!state.registered;byId('disable').disabled=!state.registered;
  }catch(e){if(e.status===401){state=null;byId('pair').hidden=false;byId('harness').hidden=true;byId('setup-header').hidden=false;document.body.classList.remove('push-enabled');byId('settings').hidden=true;byId('status').textContent='Tento prohlížeč ještě není propojený s Harness serverem';}else byId('status').textContent='Připojení se obnovuje…';}finally{refreshing=false;}
 }
-byId('settings-button').onclick=()=>{byId('settings').hidden=!byId('settings').hidden;};
-byId('open-app-settings').onclick=()=>{byId('settings').hidden=true;window.openHarnessApps({settings:true});};
+byId('settings-button').onclick=()=>{if(window.HarnessNativeUI?.openSettings('harness-notifications'))return;byId('settings').hidden=!byId('settings').hidden;};
+byId('open-app-settings').hidden=true;
 byId('close-settings').onclick=()=>{byId('settings').hidden=true;};
 document.addEventListener('keydown',e=>{if(e.key==='Escape')byId('settings').hidden=true;});
 byId('pair-form').onsubmit=async e=>{e.preventDefault();try{await api('pair',{code:byId('pair-code').value.trim()});byId('pair-code').value='';byId('pair-message').textContent='';await refresh();byId('settings').hidden=false;note('Propojeno. Nyní můžeš zapnout oznámení.');}catch(err){byId('pair-message').textContent=err.message;}};
@@ -64,4 +66,14 @@ if(!supported)note('Tento prohlížeč nepodporuje Web Push. Na iPhonu otevři i
 else if(ios&&!standalone)note('Povolení oznámení bude dostupné po otevření ikony z plochy.');
 if(supported)navigator.serviceWorker.register('/phone/sw.js',{scope:'/phone/'}).then(r=>{registration=r;}).catch(()=>note('Registrace oznámení selhala. Obnov stránku.'));
 if(new URL(location.href).searchParams.get('settings')==='1')byId('settings').hidden=false;
+
+// Adopt the existing controls, listeners and push registration into Native Settings.
+// Permission requests still execute in the original user click handler.
+window.HarnessPhoneSettings={mount(host){
+ const section=byId('settings'),placeholder=document.createComment('phone-notifications');
+ section.before(placeholder);const prior={hidden:section.hidden,style:section.getAttribute('style'),role:section.getAttribute('role')};
+ section.hidden=false;section.removeAttribute('role');section.style.cssText='position:relative;inset:auto;max-height:none;border:0;padding:16px;box-shadow:none';
+ byId('close-settings').hidden=true;byId('settings-title').hidden=true;host.append(section);notificationLanguage();
+ return()=>{placeholder.replaceWith(section);section.hidden=prior.hidden;prior.style===null?section.removeAttribute('style'):section.setAttribute('style',prior.style);if(prior.role)section.setAttribute('role',prior.role);byId('close-settings').hidden=false;byId('settings-title').hidden=false;};
+}};
 harnessPrepare().then(refresh);setInterval(refresh,15000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)harnessPrepare().then(refresh);});
