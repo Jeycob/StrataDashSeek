@@ -6,7 +6,7 @@
   "keyFile": "/data/harness/secrets/apps-internal.key",
   "cliEnabled": false,
   "cli": "/data/harness/tools/docker",
-  "cliConfigDir": "/data/harness/tools/docker-config",
+  "cliConfigDir": "/data/harness/home/.docker-apps",
   "secretTmpDir": "/dev/shm/harness-apps",
   "vaultMachineFile": "/data/harness/secrets/vault-machine.json",
   "docker": {"url": "http://127.0.0.1:19075"},
