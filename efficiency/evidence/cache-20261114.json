@@ -1,0 +1,20 @@
+{
+  "date": "2026-11-14",
+  "model": "qwen3.8-flash-next-iq3_s",
+  "engine": "Strata 0.1.59",
+  "gpu": "RTX A4000",
+  "synthetic": true,
+  "toolChoice": "auto",
+  "configurationChanged": false,
+  "cases": [
+    {"name":"cold","promptTokens":5445,"reusedTokens":0,"prefillMs":4802.4,"decodeMs":61.9,"wallMs":4882.093234,"outputTokens":2,"answerCorrect":true},
+    {"name":"stable-repeat","promptTokens":5445,"reusedTokens":5438,"prefillMs":393,"decodeMs":59,"wallMs":459.760315,"outputTokens":2,"answerCorrect":true},
+    {"name":"changed-system-prefix","promptTokens":5450,"reusedTokens":0,"prefillMs":4759.3,"decodeMs":62.4,"wallMs":4831.949876,"outputTokens":2,"answerCorrect":true},
+    {"name":"changed-tool-order","promptTokens":5445,"reusedTokens":5438,"prefillMs":509.6,"decodeMs":59.7,"wallMs":581.697247,"outputTokens":2,"answerCorrect":true}
+  ],
+  "limits": [
+    "Each request answered only OK; this is not a coding-task quality benchmark.",
+    "Warm versus cold prefix timings do not establish whole-task speedup.",
+    "Reordering these two supplied tools did not invalidate cache in this build; do not infer a universal order-related speedup."
+  ]
+}
