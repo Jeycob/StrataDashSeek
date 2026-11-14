@@ -1,0 +1,1 @@
+{"version":1,"name":"Ukázková aplikace","dockerfile":"Dockerfile","port":8080,"healthPath":"/","memoryMiB":128,"cpus":0.5,"testCommand":["sh","/smoke.sh"]}

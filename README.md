@@ -1,5 +1,7 @@
 # StrataDashSeek
 
+Optional application builds and container UI: see [Applications](docs/applications.md). The Docker worker is disabled by default and requires an explicitly configured dedicated daemon.
+
 Run DeepSeek Harness, Strata and a local model together on one stoppable Vast.ai instance. Wake it from a free Cloudflare Worker, connect privately through Tailscale and receive iOS Web Push when work finishes.
 
 ```mermaid

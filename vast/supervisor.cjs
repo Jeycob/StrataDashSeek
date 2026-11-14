@@ -7,7 +7,7 @@ fs.chownSync(R+'/state',uid,gid);
 const children=new Map();let closing=false;
 const env={...process.env,HOME:R+'/home',DSH_HOME:R+'/home/.dsh',PATH:R+'/node/bin:/usr/local/bin:/usr/bin:/bin',STRATA_GATEWAY_KEY:'local-strata'};
 delete env.VAST_API_KEY;delete env.CLOUDFLARE_API_TOKEN;
-function save(){fs.writeFileSync(R+'/state/services.json',JSON.stringify({pids:[...children.values()].map(p=>p.pid)}),{mode:0o644});}
+function save(){fs.writeFileSync(R+'/state/services.json',JSON.stringify({pids:[...children.values()].map(p=>p.pid),names:Object.fromEntries([...children].map(([name,p])=>[name,p.pid]))}),{mode:0o644});}
 function launch(name,exe,args,asRoot=false){
  const out=fs.openSync(R+'/logs/'+name+'.log','a',0o600);
  if(!asRoot)fs.fchownSync(out,uid,gid);
@@ -20,6 +20,7 @@ function portOpen(port){return new Promise(resolve=>{const q=http.get('http://12
  let tailscaleAlive=false;try{cp.execFileSync('tailscale',['--socket='+R+'/tailscaled.sock','status','--json'],{stdio:'pipe',timeout:4000});tailscaleAlive=true;}catch{}
  if(!tailscaleAlive){try{fs.unlinkSync(R+'/tailscaled.sock')}catch{}launch('tailscaled','/usr/sbin/tailscaled',['--tun=userspace-networking','--statedir='+R+'/root-secrets/tailscale','--state='+R+'/root-secrets/tailscaled.state','--socket='+R+'/tailscaled.sock'],true);}
  launch('model-proxy',R+'/node/bin/node',[R+'/app/vast/model-proxy.cjs']);
+ launch('applications',R+'/node/bin/node',[R+'/app/vast/apps-service.cjs',R+'/apps-config.json']);
  launch('harness',R+'/node/bin/node',[R+'/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js','web','--no-open','--port','3090','--public-url','https://'+cfg.publicHost+'/','--trusted-host',cfg.publicHost]);
  launch('push',R+'/node/bin/node',[R+'/app/mobile/webpush-server.cjs',R+'/push-config.json']);
  launch('proxy',R+'/node/bin/node',[R+'/app/mobile/https-proxy.cjs',R+'/config.json']);

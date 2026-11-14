@@ -1,0 +1,16 @@
+{
+  "enabled": false,
+  "port": 3093,
+  "workspaceRoot": "/data/harness/workspaces",
+  "stateDir": "/data/harness/state/applications",
+  "keyFile": "/data/harness/secrets/apps-internal.key",
+  "docker": {"url": "http://127.0.0.1:19075"},
+  "vm": {"enabled": false, "root": "/data/harness/docker-worker", "idleSeconds": 600},
+  "preview": {"enabled": false, "firstListenPort": 18180},
+  "publishAddress": "127.0.0.1",
+  "applicationHost": "127.0.0.1",
+  "checkHost": "127.0.0.1",
+  "firstPort": 18080,
+  "portCount": 8,
+  "minFreeBytes": 2147483648
+}
