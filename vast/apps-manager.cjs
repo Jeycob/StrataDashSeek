@@ -26,6 +26,7 @@ class AppsManager {
  sleepToken(){if(this.drain&&this.drain.until<=Date.now())this.drain=null;return this.drain?.token;}
  acceptActivity(){if(this.sleepToken()){this.drain=null;this.heartbeat();throw Object.assign(Error('Server sleep was cancelled; retry this action shortly'),{status:409});}this.lastActivity=Date.now();this.worker?.touch();this.heartbeat();}
  async ready(){if(this.worker)await this.worker.ensure();else await this.engine.available();}
+ previewPortFor(project){const reserved=new Set(Object.values(this.store.projects).filter(p=>p.id!==project.id).map(p=>p.previewPort??p.hostPort));const previous=project.previewPort??project.hostPort;if(previous&&!reserved.has(previous))return previous;for(let port=this.cfg.firstPort;port<this.cfg.firstPort+this.cfg.portCount;port++)if(!reserved.has(port))return port;throw Error('Application preview port pool is full');}
  canSleep(){return!this.busy&&!this.previewRequests&&this.holdUntil<=Date.now()&&!this.worker?.pending&&!this.worker?.stopping;}
  hold(minutes){this.requireEnabled();if(!Number.isInteger(minutes)||minutes<0||minutes>60)throw Error('Hold must be 0–60 minutes');this.acceptActivity();this.holdUntil=minutes?Date.now()+minutes*60000:0;this.store.holdUntil=this.holdUntil;this.save();this.heartbeat();return{holdUntil:this.holdUntil};}
  async prepareSleep(){
@@ -91,7 +92,7 @@ class AppsManager {
   const saved=this.project(p.id);if(!saved.imageId)throw Error('Build this project before deploying');p={...p,...saved.buildSpec};
   const existing=await this.engine.list(),used=new Set(existing.filter(c=>c.State==='running').flatMap(c=>(c.Ports||[]).map(v=>v.PublicPort)));
   let port;for(let n=0;n<this.cfg.portCount;n++)if(!used.has(this.cfg.firstPort+n)){port=this.cfg.firstPort+n;break;}if(!port)throw Error('Application port pool is full');
-  let previewPort=saved.previewPort??saved.hostPort;if(!previewPort){const reserved=new Set(Object.values(this.store.projects).map(v=>v.previewPort??v.hostPort));for(let n=0;n<this.cfg.portCount;n++)if(!reserved.has(this.cfg.firstPort+n)){previewPort=this.cfg.firstPort+n;break;}}if(!previewPort)throw Error('Application preview port pool is full');
+  const previewPort=this.previewPortFor(saved);
   const old=saved.containerId,key=p.port+'/tcp';
   const created=await this.engine.json('POST','/containers/create?name=sdsh-'+p.id+'-'+job.id,{json:{Image:saved.imageId,Labels:{[LABEL]:'managed',[LABEL+'.project']:p.id},Env:['PORT='+p.port,'NODE_ENV=production',...Object.entries(runtimeEnv).map(([k,v])=>k+'='+v)],ExposedPorts:{[key]:{}},HostConfig:{PortBindings:{[key]:[{HostIp:this.cfg.publishAddress,HostPort:String(port)}]},Memory:p.memoryMiB*1024**2,MemorySwap:p.memoryMiB*1024**2,NanoCpus:Math.round(p.cpus*1e9),PidsLimit:128,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],RestartPolicy:{Name:'no'}}}});
   const id=created?.Id;if(!/^[a-f0-9]{64}$/.test(id||''))throw Error('Invalid created container id');
