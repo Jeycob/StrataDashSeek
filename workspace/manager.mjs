@@ -137,13 +137,13 @@ export class WorkspaceManager {
       if (exec.name === 'apply_patch' && typeof patch === 'string') for (const line of patch.split('\n')) { const match = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/u.exec(line); if (match && !within(record.root, path.resolve(record.root, match[1]))) return { reason: 'Patch target is outside this isolated project.' }; }
     }
   }
-  async toolResult(exec, result) {
+  async toolResult(exec, result, verificationKind) {
     const record = this.data.sessions[exec.agent?.id]; if (!record || exec.signal.aborted) return;
-    const command = exec.arguments?.command, kind = exec.name === 'stage_check' ? 'test' : validationKind(command);
+    const command = exec.arguments?.command, kind = verificationKind ?? (exec.name === 'stage_check' ? 'test' : validationKind(command));
     const exitCode = result.value?.exitCode;
     if (!kind && !result.isError && !(Number.isInteger(exitCode) && exitCode !== 0)) return;
     // A shell pipeline can hide the real check exit code. It cannot earn a pass.
-    if (kind && exitCode === 0 && /\||;|\$\(/u.test(command ?? '')) return;
+    if (kind && exitCode === 0 && (exec.name === 'project_exec' ? /\|\||;\s*(?:true|exit\s+0)\b/u : /\||;|\$\(/u).test(command ?? '')) return;
     const text = result.content?.filter(x => x.type === 'text').map(x => x.text).join('\n') ?? result.error?.message ?? '';
     let manifest; try { manifest = await sourceManifest(record.root, { signal: exec.signal }); } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
     const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, manifestHash: manifest?.sha256 }, this.settings(exec.agent.session).noProgressLimit);
@@ -154,6 +154,20 @@ export class WorkspaceManager {
       } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
     }
     record.budget = budget; await this.save();
+  }
+  async review(id) {
+    const agent = this.ctx.agents.get(id), owner = agent ? this.ownerAgent(agent) : undefined, record = this.data.sessions[owner?.id ?? id];
+    if (!record) return undefined;
+    const manifest = await sourceManifest(record.root);
+    return { root: record.root, sourceHash: manifest.sha256, budget: record.budget, checkpoints: record.checkpoints, ports: record.ports, databasePath: record.databasePath };
+  }
+  async reportVerification(report) {
+    const agent = this.ctx.agents.get(report.sessionId); if (!agent) throw new WorkbenchError('SESSION_NOT_LIVE', 'A live conversation is required to record verification.');
+    if (!['test', 'build', 'browser', 'acceptance', 'all'].includes(report.kind) || !Number.isInteger(report.exitCode)) throw new WorkbenchError('INVALID_VERIFICATION', 'Invalid structured verification result.', 400);
+    const owner = this.ownerAgent(agent), record = this.data.sessions[owner.id]; if (!record) throw new WorkbenchError('PROJECT_NOT_READY', 'Project isolation is not ready.');
+    if (report.sourceHash && (await sourceManifest(record.root)).sha256 !== report.sourceHash) throw new WorkbenchError('STALE_VERIFICATION', 'The source changed during verification; stale evidence cannot pass a stage.');
+    await this.toolResult({ agent: owner, name: 'stage_check', arguments: {}, signal: report.signal ?? new AbortController().signal }, { isError: report.exitCode !== 0, value: { exitCode: report.exitCode }, content: [{ type: 'text', text: String(report.diagnostics ?? '').slice(-16000) }] }, report.kind);
+    record.lastVerification = { kind: report.kind, exitCode: report.exitCode, at: Date.now(), sourceHash: report.sourceHash, checksPassed: report.checksPassed, checksTotal: report.checksTotal }; await this.save();
   }
   async releaseIfIdle(id) {
     if (this.ctx.agents.get(id)?.status === 'running') return;
@@ -180,7 +194,8 @@ export class WorkspaceManager {
         if (hash(bytes) !== expected.sha256) throw new WorkbenchError('CHECKPOINT_INVALID', 'Checkpoint file checksum does not match.');
         const destination = await canonicalInside(root, relative, true); await fs.mkdir(path.dirname(destination), { recursive: true });
         const target = await this.ctx.fs.resolve(destination, { signal }), stat = await this.ctx.fs.stat(target, signal);
-        await this.ctx.fs.writeText(target, bytes.toString('utf8'), stat ? { kind: 'replaceIfVersion', version: stat.version } : { kind: 'createIfAbsent' }, signal, policy);
+        if (expected.binary) { const temp = destination + '.restore-' + crypto.randomUUID(); await fs.writeFile(temp, bytes, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, destination); }
+        else await this.ctx.fs.writeText(target, bytes.toString('utf8'), stat ? { kind: 'replaceIfVersion', version: stat.version } : { kind: 'createIfAbsent' }, signal, policy);
       }
       for (const relative of Object.keys(current.files)) if (!(relative in manifest.files)) {
         const target = await this.ctx.fs.resolve(await canonicalInside(root, relative), { signal }), stat = await this.ctx.fs.stat(target, signal);

@@ -20,7 +20,9 @@ export async function apply(ctx, config = {}) {
     return decision;
   }, { prepend: true, global: true });
   ctx.tools.guard(exec => manager.toolGuard({ ...exec, agent: manager.ownerAgent(exec.agent) }));
-  ctx.on('tools/post-execute', async (exec, result, next) => { await manager.toolResult({ ...exec, agent: manager.ownerAgent(exec.agent) }, result); return next(); }, { global: true });
+  ctx.on('tools/post-execute', async (exec, result, next) => { if (exec.name !== 'verify_project') await manager.toolResult({ ...exec, agent: manager.ownerAgent(exec.agent) }, result); return next(); }, { global: true });
+  ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
+  ctx.on('workspace-runtime/review', async ({ sessionId }, next) => (await manager.review(sessionId)) ?? next());
   ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.releaseIfIdle(session.id).catch(() => {}), 0); });
   ctx.on('agent/disposed', ({ agent }) => { manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
   const timer = setInterval(() => { for (const id of manager.running.keys()) void manager.releaseIfIdle(id).catch(() => {}); }, 10000); timer.unref();

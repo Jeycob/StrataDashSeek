@@ -62,21 +62,21 @@ export class ProjectLocks {
   }
   async release(sessionId) { return this.exclusive(async () => { const file = path.join(this.directory, hash(sessionId) + '.lease.json'), record = await readJSON(file, null); if (record?.pid === process.pid) await fs.unlink(file).catch(e => { if (e.code !== 'ENOENT') throw e; }); }); }
 }
-const EXCLUDED = new Set(['.git', '.harness', 'node_modules', '.agents', 'bin', 'obj', 'dist', 'build', 'coverage', '.next', '.venv', 'venv', '__pycache__']);
+const EXCLUDED = new Set(['.git', '.harness', 'node_modules', '.agents', 'bin', 'obj', 'dist', 'out', 'build', 'coverage', '.next', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache', 'artifacts', 'screenshots', 'test-results', 'playwright-report', 'logs']);
 export async function sourceManifest(root, { maxFiles = 5000, maxBytes = 32 * 1024 * 1024, signal } = {}) {
   const files = {}; let bytes = 0, count = 0;
   async function walk(directory, relative = '') {
     signal?.throwIfAborted();
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
-      if (EXCLUDED.has(entry.name) || entry.isSymbolicLink()) continue;
+      if (EXCLUDED.has(entry.name) || entry.name.endsWith('.log') || entry.isSymbolicLink()) continue;
       const rel = relative ? relative + '/' + entry.name : entry.name, name = path.join(directory, entry.name);
       if (entry.isDirectory()) { await walk(name, rel); continue; }
       if (!entry.isFile()) continue;
       const stat = await fs.stat(name); if (stat.size > 1024 * 1024) continue;
       if (++count > maxFiles || bytes + stat.size > maxBytes) throw new WorkbenchError('CHECKPOINT_TOO_LARGE', 'Source checkpoint exceeds its configured budget.');
-      const data = await fs.readFile(name); if (data.includes(0)) continue;
-      try { new TextDecoder('utf-8', { fatal: true }).decode(data); } catch { continue; }
-      bytes += data.length; files[rel] = { sha256: hash(data), bytes: data.length };
+      const data = await fs.readFile(name); let binary = data.includes(0);
+      try { new TextDecoder('utf-8', { fatal: true }).decode(data); } catch { binary = true; }
+      bytes += data.length; files[rel] = { sha256: hash(data), bytes: data.length, binary };
     }
   }
   await walk(root); return { files, bytes, sha256: hash(JSON.stringify(Object.entries(files).sort())) };
