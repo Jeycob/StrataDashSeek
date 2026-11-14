@@ -150,7 +150,10 @@ class DockerVM {
   try{
    if(this.phase!=='ready')throw Error('Worker is not in a verified state; refusing automatic poweroff');
    await this.remember();this.phase='saving';
-   await Promise.all(this.saved.resumeIds.map(async id=>{await this.engine.owned(id);await this.engine.request('POST','/containers/'+id+'/stop?t=15',{timeout:25000});}));
+   // Inspect before stopping: a stop can hold daemon locks for its full grace period.
+   await Promise.all(this.saved.resumeIds.map(id=>this.engine.owned(id)));
+   const stops=await Promise.allSettled(this.saved.resumeIds.map(id=>this.engine.request('POST','/containers/'+id+'/stop?t=15',{timeout:45000})));
+   const failed=stops.find(r=>r.status==='rejected');if(failed)throw failed.reason;
    if(!this.serial||this.serial.destroyed)await this.connectSerial();this.serial.write('\nkill -TERM $(pidof dockerd) 2>/dev/null || true; for n in $(seq 1 30); do pidof dockerd >/dev/null || break; sleep 1; done; if pidof dockerd >/dev/null; then echo HARNESS_DOCKER_SHUTDOWN_FAILED; else sync; poweroff; fi\n');
    const deadline=Date.now()+60000;while(this.pid()&&Date.now()<deadline)await pause(500);
    if(this.pid())throw Error('Guest did not power off cleanly; host sleep was cancelled');

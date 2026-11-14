@@ -10,6 +10,9 @@ test('failed guest isolation never becomes ready even when the Docker API is rea
  let contacted=false;const vm={phase:'recovering',saved:{initialized:true},manifest:{volumeId:'a'.repeat(32)},buffer:'',serial:{destroyed:false,write(){}},pid:()=>123,engine:{json:async()=>{contacted=true;return{};}}};const pending=DockerVM.prototype.start.call(vm);await new Promise(r=>setTimeout(r,40));vm.scriptSent=true;vm.buffer='HARNESS_BOOT_EXIT_'+vm.nonce+'=1\n';await assert.rejects(pending,/Guest setup failed/);assert.equal(contacted,false);assert.equal(vm.phase,'error');
 });
 const {createPreview}=require('./apps-preview.cjs');
+test('VM shutdown inspects all owners first and awaits every stop before reporting a failure',async()=>{
+ const inspected=new Set();let secondFinished=false;const vm={phase:'ready',pending:null,stopping:false,pid:()=>123,saved:{resumeIds:['first','second']},remember:async()=>{},engine:{owned:async id=>{if(id==='second')await new Promise(r=>setTimeout(r,10));inspected.add(id);},request:async(method,route,options)=>{assert.equal(inspected.size,2);assert.ok(options.timeout>15000);if(route.includes('first'))throw Error('First stop failed');await new Promise(r=>setTimeout(r,30));secondFinished=true;}}};await assert.rejects(DockerVM.prototype.stop.call(vm),/First stop failed/);assert.equal(secondFinished,true);assert.equal(vm.phase,'error');assert.equal(vm.stopping,false);
+});
 const id='a'.repeat(64);
 async function fixture(t){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'apps-power-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));await fs.mkdir(path.join(root,'demo'));await fs.writeFile(path.join(root,'demo/.harness-app.json'),JSON.stringify({version:1,name:'Demo',port:3000}));await fs.writeFile(path.join(root,'demo/Dockerfile'),'FROM scratch\n');
