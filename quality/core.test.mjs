@@ -74,11 +74,12 @@ test('test summary parsers cover prepared runtimes',()=>{
   assert.equal(parseTestCounts('all fine'),null);
 });
 test('browser plan cannot silently ignore misspelled expectations or use foreign ports',()=>{
-  const plan={version:1,baseURL:'http://127.0.0.1:4000',viewports:[{name:'mobile',width:390,height:844}],flows:[{name:'shop',steps:[{action:'goto',path:'/'},{action:'checkpoint',name:'catalog'}]}]};
+  const plan={version:1,baseURL:'http://127.0.0.1:4000',viewports:[{name:'mobile',width:390,height:844}],flows:[{name:'shop',steps:[{action:'goto',path:'/'},{action:'expect',selector:'h1',minCount:1},{action:'checkpoint',name:'catalog'}]}]};
   assert.equal(validatePlan(plan),plan);
-  assert.throws(()=>validatePlan({...plan,flows:[{name:'shop',steps:[{action:'expect',selector:'h1',textInclude:'Hello'},{action:'checkpoint',name:'x'}]}]}));
+  assert.throws(()=>validatePlan({...plan,flows:[{name:'shop',steps:[{action:'goto',path:'/'},{action:'expect',selector:'h1',minCount:1,textInclude:'Hello'},{action:'checkpoint',name:'x'}]}]}),e=>e.code==='INVALID_BROWSER_ACTION');
   assert.throws(()=>resolveBaseURL(plan.baseURL,{HARNESS_QUALITY_ALLOWED_PORTS:'5000'}),e=>e.code==='UNASSIGNED_PORT');
   assert.throws(()=>resolveBaseURL('https://example.com',{}),e=>e.code==='INVALID_BROWSER_URL');
+  assert.throws(()=>validatePlan({...plan,flows:[{name:'empty',steps:[{action:'checkpoint',name:'empty'}]}]}),e=>e.code==='EMPTY_BROWSER_FLOW');
 });
 
 function pluginContext({stale=false,exitCode=0}={}) {
@@ -118,7 +119,7 @@ test('malformed native runner output cannot earn a manager pass',async()=>{
 });
 test('unavailable Chromium produces failure with no invented screenshots',async t=>{
   const workspace=await project(t,[passing]);
-  await fs.writeFile(path.join(workspace,'plan.json'),JSON.stringify({version:1,baseURL:'http://127.0.0.1:4000',viewports:[{name:'mobile',width:390,height:844}],flows:[{name:'shop',steps:[{action:'goto',path:'/'},{action:'checkpoint',name:'catalog'}]}]}));
+  await fs.writeFile(path.join(workspace,'plan.json'),JSON.stringify({version:1,baseURL:'http://127.0.0.1:4000',viewports:[{name:'mobile',width:390,height:844}],flows:[{name:'shop',steps:[{action:'goto',path:'/'},{action:'expect',selector:'h1',minCount:1},{action:'checkpoint',name:'catalog'}]}]}));
   const r=await verifyBrowser({workspace,planPath:'plan.json',outputPath:'.harness/quality/browser.json',runId:'missing',env:{},chromium:{launch:async()=>{throw Error('Chromium absent');}}});
   assert.equal(r.passed,0);assert.equal(r.failed,1);assert.deepEqual(r.screenshots,[]);
 });

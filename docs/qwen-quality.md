@@ -64,8 +64,8 @@ its workspace-write policy remain responsible for command confinement.
 ## Measured validation
 
 On the existing A4000 host, Node v24.21.0 and prepared Playwright 1.65.1:
-`node --test quality/core.test.mjs quality/browser.test.mjs` passed 18/18 tests,
-0 skipped, 0 failed, in 5.02 seconds. No GPU/model inference was requested.
+`node --test quality/core.test.mjs quality/browser.test.mjs` passed 20/20 tests,
+0 skipped, 0 failed, in 4.61 seconds. No GPU/model inference was requested.
 The browser regression fixture produced and checked 10 actual desktop/mobile
 PNGs across five shop variants. A further end-to-end core-driver check produced
 two more PNGs and checked structured run nonce, source fingerprint and artifacts.
@@ -76,6 +76,10 @@ and console errors were each rejected independently on both viewports. Unit test
 also cover process timeout/cancellation, concurrent verification locks, bounded
 logs, partial vs complete stages, malformed output, native confinement arguments,
 single manager reporting and rejection of a changed authoritative source hash.
+Empty-page screenshots cannot pass: each browser flow must navigate to the app
+and positively assert rendered UI. Legacy shared projects are refused; the native
+environment channel contains only DSH_* keys and standard variables come from
+the shared project-run wrapper.
 Mocked manager tests do not establish live Harness registration; that is owned by
 the joint native fixture before profile activation.
 

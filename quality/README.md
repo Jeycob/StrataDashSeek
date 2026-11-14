@@ -45,7 +45,8 @@ Create `.harness-browser.json` using the application's assigned port:
 ```
 
 Supported steps: `goto`, `click`, `fill`, `press`, `expect`, `checkpoint`.
-Expectations support min/max count, textIncludes/textExcludes and `focused:true`
+Each flow must start with `goto` and include a positive UI expectation: an empty
+page with a screenshot cannot pass. Expectations support min/max count, textIncludes/textExcludes and `focused:true`
 (active element with visible outline/shadow). Every flow needs a real screenshot.
 Checkpoints check visible NaN text, visible broken images, declared image containers,
 horizontal overflow and console/page errors. Unknown options fail to prevent silent

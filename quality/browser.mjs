@@ -34,6 +34,7 @@ export function validatePlan(plan) {
   for (const f of plan.flows) {
     if (!known(f, ['name','viewports','steps'])) throw new QualityError('INVALID_FLOW', 'Unknown flow option.');
     if (!ID.test(f.name) || flows.has(f.name) || !Array.isArray(f.steps) || !f.steps.length || f.steps.length > 100) throw new QualityError('INVALID_FLOW', 'Declare unique named bounded flows.');
+    if (f.steps[0]?.action !== 'goto' || !f.steps.some(s => s.action === 'expect' && (s.minCount >= 1 || typeof s.textIncludes === 'string' && s.textIncludes.length > 0 || s.focused === true))) throw new QualityError('EMPTY_BROWSER_FLOW', 'Every flow must navigate to the app and positively assert rendered UI; an empty-page screenshot cannot pass.');
     flows.add(f.name);
     if (f.viewports && (!Array.isArray(f.viewports) || f.viewports.some(n => !names.has(n)))) throw new QualityError('INVALID_VIEWPORT', 'Unknown flow viewport.');
     const shots = new Set();
