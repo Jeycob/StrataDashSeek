@@ -38,6 +38,7 @@ export async function executeVerification(ctx, args, execution, config = {}) {
   const stale = !after || after.root !== review.root || after.sourceHash !== review.sourceHash || report.stale;
   if (stale) { report.passed = false; report.complete = false; report.stale = true; report.code = 'STALE_SOURCE'; }
   if (result?.exitCode !== 0 || result?.timedOut) { report.passed = false; report.complete = false; }
+  if (result?.timedOut) report.timedOut = true;
   const failed = report.checks.filter(c => !c.passed).flatMap(c => c.diagnostics ?? []);
   try { await ctx.serial('workspace-runtime/verification', {
     sessionId, kind, exitCode: report.passed ? 0 : 1,

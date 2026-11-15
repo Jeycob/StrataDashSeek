@@ -3,6 +3,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { classifyToolOutcome } from '../workspace/tool-recovery.mjs';
+import testRuntime from '../development/test-command.cjs';
 
 export const KINDS = ['build', 'test', 'browser', 'acceptance'];
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -88,6 +90,10 @@ export function parseTestCounts(output) {
 
 export async function runProgram(command, { cwd, env = process.env, signal, timeoutMs = 30000, outputLimit = 65536 } = {}) {
   signal?.throwIfAborted();
+  if (/^node(?:\.exe)?$/iu.test(path.basename(command[0])) && command[1] === '--test') {
+    const normalized = await testRuntime.normalizeNodeTestArgs(command.slice(1), { cwd, projectRoot: env.DSH_PROJECT_ROOT ?? cwd, signal });
+    command = [command[0], ...normalized.argv];
+  }
   return new Promise(resolve => {
     let stdout = '', stderr = '', truncated = false, timedOut = false, aborted = false, settled = false;
     const child = spawn(command[0], command.slice(1), { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -122,7 +128,7 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
     const before = await fingerprint(root, inputs), startedAt = Date.now(), runId = crypto.randomUUID(), results = [];
     for (const check of selected) {
       signal?.throwIfAborted();
-      const start = Date.now(), diagnostics = []; let measured = { passed: 0, failed: 1 }, artifacts = [], result;
+      const start = Date.now(), diagnostics = []; let measured = { passed: 0, failed: 1 }, artifacts = [], result, evidenceErrorCode;
       const remaining = budgetMs - (start - startedAt);
       if (remaining < 100) { results.push({ id: check.id, kind: check.kind, passed: false, exitCode: null, checksPassed: 0, checksTotal: 1, diagnostics: ['VERIFICATION_BUDGET_EXHAUSTED'], artifactPaths: [] }); break; }
       const cwd = await confined(root, check.cwd ?? '.');
@@ -150,9 +156,11 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
         if (!measured.passed) diagnostics.push('NO_POSITIVE_CHECKS');
         if (measured.failed) diagnostics.push(`FAILED_ASSERTIONS_${measured.failed}`);
         for (const artifact of check.artifacts ?? []) { const p = await confined(root, artifact); if (!(await fs.stat(p)).isFile()) throw new QualityError('ARTIFACT_MISSING', 'Expected a regular output file.'); artifacts.push(artifact); }
-      } catch (e) { diagnostics.push(e.code ?? e.message); }
+      } catch (e) { evidenceErrorCode = e.code; diagnostics.push(e.code ?? e.message); }
       const passed = !diagnostics.length;
-      results.push({ id: check.id, kind: check.kind, passed, exitCode: result.exitCode, durationMs: Date.now() - start, checksPassed: measured.passed, checksTotal: measured.passed + measured.failed, outputTruncated: result.truncated, diagnostics: diagnostics.slice(0,8), artifactPaths: artifacts, logPath: `.harness/quality/${check.id}.log` });
+      const recovery = classifyToolOutcome({ kind: check.kind, exitCode: result.exitCode, isError: !passed, timedOut: result.timedOut, aborted: result.aborted, errorCode: evidenceErrorCode,
+        text: result.stdout + '\n' + result.stderr + '\n' + diagnostics.join('\n') });
+      results.push({ id: check.id, kind: check.kind, passed, category: recovery.category, diagnosticCode: recovery.code, exitCode: result.exitCode, durationMs: Date.now() - start, checksPassed: measured.passed, checksTotal: measured.passed + measured.failed, outputTruncated: result.truncated, diagnostics: diagnostics.slice(0,8), artifactPaths: artifacts, logPath: `.harness/quality/${check.id}.log` });
     }
     const after = await fingerprint(root, inputs), stale = before.hash !== after.hash;
     if (stale) for (const r of results) { r.passed = false; r.diagnostics.push('SOURCE_CHANGED_DURING_VERIFICATION'); }
@@ -165,6 +173,6 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
 }
 
 export function compactReport(report) {
-  return { passed: report.passed, complete: report.complete, stale: report.stale, sourceHash: report.sourceHash, missingKinds: report.missingKinds, checks: report.results.map(r => ({ id: r.id, kind: r.kind, passed: r.passed, checksPassed: r.checksPassed, checksTotal: r.checksTotal, diagnostics: r.diagnostics, logPath: r.logPath, artifactPaths: r.artifactPaths })), reportPath: '.harness/quality/latest.json' };
+  return { passed: report.passed, complete: report.complete, stale: report.stale, sourceHash: report.sourceHash, missingKinds: report.missingKinds, checks: report.results.map(r => ({ id: r.id, kind: r.kind, passed: r.passed, category: r.category, diagnosticCode: r.diagnosticCode, checksPassed: r.checksPassed, checksTotal: r.checksTotal, diagnostics: r.diagnostics, logPath: r.logPath, artifactPaths: r.artifactPaths })), reportPath: '.harness/quality/latest.json' };
 }
 

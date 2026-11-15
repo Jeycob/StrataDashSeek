@@ -42,7 +42,7 @@ export async function apply(ctx, config = {}) {
   }, { prepend: true, global: true });
   ctx.tools.guard(exec => manager.toolGuard({ ...exec, agent: manager.ownerAgent(exec.agent), managedProjectShell: managedShell.handles(exec) }));
   ctx.on('tools/result', (exec, result) => {
-    if (exec.name !== 'verify_project') manager.observeToolResult({ ...exec, agent: manager.ownerAgent(exec.agent), managedProjectShell: managedShell.handles(exec) }, result);
+    manager.observeToolResult({ ...exec, agent: manager.ownerAgent(exec.agent), managedProjectShell: managedShell.handles(exec) }, result);
   }, { global: true });
   ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
   ctx.on('workspace-runtime/review', async ({ sessionId }, next) => (await manager.review(sessionId)) ?? next());

@@ -159,3 +159,22 @@ forms and arbitrary JavaScript are unchanged. npm scripts and lifecycle hooks
 are never silently bypassed or rewritten. A stale edit requires rereading the
 current lines, and hanging tests require fixing cleanup; there is no fuzzy edit,
 automatic side-effect retry or injected force-exit.
+
+The same test-directory compatibility also applies to direct Node commands in
+the quality runner. Literal display-only pipelines composed of `head`, `tail`
+and quoted `grep -vE` filters are removed from known verification commands;
+arbitrary pipelines, positive grep assertions and file-producing commands are
+left intact. The original command remains in the audit trail. Structured
+verification uses the final SDK outcome exactly once, with per-check diagnostic
+categories and measured assertion counts. Configuration rejection, file/module
+bootstrap failures and timeouts cannot masquerade as actual test failures or
+successful verification. Exceptions inside real test cases remain failures.
+
+If application code has changed after eight agent steps without a functional
+test, the same context channel supplies one task-independent first-check
+reminder. It asks for a small authentic behavior through validation and
+persistence before expanding the interface, with isolated data, early resource
+cleanup and I/O deadlines. A build alone does not satisfy this reminder.
+Unchanged repositories and prose-only tasks are excluded. The reminder is
+advisory; it never invents test cases, edits application code, changes a result
+or resets the existing repair/stage limits.

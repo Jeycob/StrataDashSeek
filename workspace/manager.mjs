@@ -7,7 +7,8 @@ import { promisify } from 'node:util';
 import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY_VERSION, validationKind, relativeFile, within } from './policy.mjs';
 import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash } from './storage.mjs';
 import { LiveChanges } from './changes.mjs';
-import { classifyToolOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
+import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
+import { guideFirstCheck } from './verification-guidance.mjs';
 const run = promisify(execFile);
 const notice = text => ({ id: crypto.randomUUID(), role: 'user', source: { kind: 'workspace-runtime' }, content: [{ type: 'text', text }] });
 
@@ -137,6 +138,7 @@ export class WorkspaceManager {
     const budget = this.budgets.get(agent.id), settings = this.settings(agent.session);
     // One admission per proposed step; retries do not consume a second stage step.
     if (record.lastStep !== `${initiator}:${turn}:${step}`) { record.lastStep = `${initiator}:${turn}:${step}`; budget.step(settings.maxStageSteps); }
+    await guideFirstCheck(this, agent, record, budget, signal);
     record.budget = budget; await this.save();
     if (budget.blocked) throw new WorkbenchError(budget.blocked.code, budget.blocked.message + ' Open Workspace → Run review to choose a different strategy.');
   }
@@ -178,11 +180,18 @@ export class WorkspaceManager {
   async drainToolResults(id) { await this.resultWork.get(id); }
   async toolResult(exec, result, verificationKind) {
     const record = this.data.sessions[exec.agent?.id]; if (!record || exec.signal?.aborted) return;
-    const command = exec.arguments?.command, kind = verificationKind ?? (exec.name === 'stage_check' ? 'test' : validationKind(command));
-    const exitCode = result.value?.exitCode;
+    const structured = exec.name === 'verify_project', value = result.value;
+    // A registry-issued acknowledgement means work is still running. It is
+    // neither failed verification nor a stage pass; inspect the owned job and
+    // use foreground verification for a completed project milestone.
+    if (!result.isError && ['bash', 'project_exec'].includes(exec.name) && value?.kind === 'background' && typeof value.jobId === 'string') return;
+    const command = exec.arguments?.command, kind = verificationKind ?? (structured ? exec.arguments?.kind ?? 'all' : exec.name === 'stage_check' ? 'test' : validationKind(command));
+    const exitCode = structured && typeof value?.passed === 'boolean' ? value.passed ? 0 : 1 : value?.exitCode;
     const text = result.content?.filter(x => x.type === 'text').map(x => x.text).join('\n') ?? result.error?.message ?? '';
-    const recovery = classifyToolOutcome({ kind, exitCode, text, isError: result.isError, timedOut: result.value?.timedOut, aborted: result.value?.aborted, errorCode: result.error?.info?.code });
+    const input = { kind, exitCode, text, isError: result.isError, timedOut: value?.timedOut, aborted: value?.aborted, errorCode: result.error?.info?.code };
+    const recovery = structured ? classifyVerificationOutcome(value, input) : classifyToolOutcome(input);
     if (recovery.category === 'cancelled') return;
+    if (structured && record.lastVerification) record.lastVerification.accepted = !recovery.failed && value?.passed === true && !value?.stale;
     if (recovery.failed) {
       const diagnostics = this.pendingDiagnostics.get(exec.agent.id) ?? new Map();
       diagnostics.set(recovery.code, recoveryContext(recovery));
@@ -233,8 +242,10 @@ export class WorkspaceManager {
     if (!['test', 'build', 'browser', 'acceptance', 'all'].includes(report.kind) || !Number.isInteger(report.exitCode)) throw new WorkbenchError('INVALID_VERIFICATION', 'Invalid structured verification result.', 400);
     const owner = this.ownerAgent(agent), record = this.data.sessions[owner.id]; if (!record) throw new WorkbenchError('PROJECT_NOT_READY', 'Project isolation is not ready.');
     if (report.sourceHash && (await sourceManifest(record.root)).sha256 !== report.sourceHash) throw new WorkbenchError('STALE_VERIFICATION', 'The source changed during verification; stale evidence cannot pass a stage.');
-    await this.toolResult({ agent: owner, name: 'stage_check', arguments: {}, signal: report.signal ?? new AbortController().signal }, { isError: report.exitCode !== 0, value: { exitCode: report.exitCode }, content: [{ type: 'text', text: String(report.diagnostics ?? '').slice(-16000) }] }, report.kind);
-    record.lastVerification = { kind: report.kind, exitCode: report.exitCode, at: Date.now(), sourceHash: report.sourceHash, checksPassed: report.checksPassed, checksTotal: report.checksTotal }; await this.save();
+    // The final SDK outcome is authoritative for the single repair budget.
+    // This internal report only records source-checked evidence; an admission or
+    // final policy failure must never be counted twice or earn a stage pass.
+    record.lastVerification = { kind: report.kind, exitCode: report.exitCode, at: Date.now(), sourceHash: report.sourceHash, checksPassed: report.checksPassed, checksTotal: report.checksTotal, accepted: false }; await this.save();
   }
   async releaseIfIdle(id) {
     await this.drainToolResults(id);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import {verifyProject, runProgram, validateContract, confined, parseTestCounts} from './core.mjs';
+import {verifyProject, runProgram, validateContract, confined, parseTestCounts, compactReport} from './core.mjs';
 import {validatePlan, resolveBaseURL, verifyBrowser} from './browser.mjs';
 import {executeVerification, apply} from './plugin.mjs';
 
@@ -16,6 +16,18 @@ async function project(t, checks, requiredKinds = ['test']) {
   return root;
 }
 const passing = {id:'tests',kind:'test',command:command("console.log('# pass 3\\n# fail 0')")};
+
+test('quality uses the same bounded Node directory compatibility and retains setup versus test-body failures', async t => {
+  const workspace = await project(t, [{ id: 'api', kind: 'test', command: [process.execPath, '--test', 'test/'] }]);
+  await fs.mkdir(path.join(workspace, 'test'));
+  const target = path.join(workspace, 'test/bootstrap.test.mjs');
+  const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+  await fs.writeFile(target, "throw new TypeError('root path required');\n");
+  const bootstrap = await verifyProject({ workspace, env }); assert.equal(bootstrap.passed, false); assert.equal(bootstrap.results[0].category, 'setup', await fs.readFile(path.join(workspace, '.harness/quality/api.log'), 'utf8'));
+  assert.equal(compactReport(bootstrap).checks[0].diagnosticCode, 'TEST_BOOTSTRAP_FAILURE');
+  await fs.writeFile(target, "import test from 'node:test';test('actual behavior',()=>{throw new TypeError('root path required')});\n");
+  const actual = await verifyProject({ workspace, env }); assert.equal(actual.passed, false); assert.equal(actual.results[0].category, 'verification');
+});
 
 test('real exit code overrides printed success; zero assertions cannot pass', async t => {
   for (const [code, diagnostic] of [["console.log('# pass 4\\n# fail 0');process.exitCode=7",'EXIT_7'],["console.log('# pass 0\\n# fail 0')",'NO_POSITIVE_CHECKS']]) {

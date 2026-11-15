@@ -1,6 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyToolOutcome, recoveryContext, normalizeVerificationCommand, nodeTestCommandRecipe } from './tool-recovery.mjs';
+import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, normalizeVerificationCommand, nodeTestCommandRecipe } from './tool-recovery.mjs';
+
+test('Node file bootstrap failures differ from exceptions inside actual test cases', () => {
+  const loader = 'TypeError: root path required\n at ModuleJob.run (node:internal/modules/esm/module_job:1:1)\n# Subtest: tests/api.test.mjs\nnot ok 1 - tests/api.test.mjs\n error: test failed\n code: ERR_TEST_FAILURE\n# tests 1\n# pass 0\n# fail 1';
+  assert.equal(classifyToolOutcome({ kind: 'test', exitCode: 1, text: loader }).code, 'TEST_BOOTSTRAP_FAILURE');
+  assert.equal(classifyToolOutcome({ kind: 'test', exitCode: 1, text: loader + '\n at TestContext.<anonymous> (test.mjs:3:1)' }).category, 'verification');
+  assert.equal(classifyToolOutcome({ kind: 'test', exitCode: 1, text: loader + '\n ERR_ASSERTION' }).category, 'verification');
+});
+
+test('structured verification preserves configuration, timeout and assertion meanings and measured failure counts', () => {
+  const common = { kind: 'all', exitCode: 1, text: '' };
+  assert.equal(classifyVerificationOutcome({ code: 'INVALID_CONTRACT', checks: [] }, common).category, 'configuration');
+  assert.equal(classifyVerificationOutcome({ code: 'NO_PROJECT_SANDBOX', checks: [] }, common).category, 'setup');
+  const check = { passed: false, checksTotal: 1, checksPassed: 0, category: 'setup', diagnosticCode: 'TEST_BOOTSTRAP_FAILURE' };
+  assert.equal(classifyVerificationOutcome({ checks: [check] }, common).category, 'setup');
+  assert.equal(classifyVerificationOutcome({ checks: [{ ...check, category: 'timeout', diagnosticCode: 'EXECUTION_TIMEOUT' }] }, common).category, 'timeout');
+  const failure = { ...check, category: 'verification', diagnosticCode: 'ASSERTION_FAILURE', checksTotal: 5, checksPassed: 2 };
+  const actual = classifyVerificationOutcome({ checks: [failure] }, common); assert.equal(actual.category, 'verification'); assert.equal(actual.evidence.failed, 3);
+  assert.equal(classifyVerificationOutcome({ checks: [] }, { kind: 'all', exitCode: 0 }).category, 'empty-verification');
+  assert.equal(classifyVerificationOutcome({ code: 'INVALID_CONTRACT', checks: [] }, { ...common, text: 'ERR_ASSERTION' }).category, 'verification');
+});
+
+test('only literal display filters are removed, including quoted grep alternation and head SIGPIPE patterns', () => {
+  const command = 'node --test tests/api.test.mjs 2>&1 | grep -vE "^ℹ (suites|duration)" | head -70';
+  assert.deepEqual(normalizeVerificationCommand(command), { command: 'node --test tests/api.test.mjs', changed: true, reason: 'VERIFICATION_OUTPUT_FILTERS_REMOVED' });
+  assert.equal(normalizeVerificationCommand('cd server && ' + command).command, 'cd server && node --test tests/api.test.mjs');
+  for (const value of ['npm test 2>&1 | grep -q passed', 'npm test 2>&1 | tee evidence.log', 'npm test 2>&1 | head -70; exit 0', 'npm test 2>&1 | grep -vE "$(touch bad)" | head -70', 'cat secret 2>&1 | head -70']) assert.equal(normalizeVerificationCommand(value).changed, false);
+});
 
 test('setup and invocation errors do not masquerade as completed verification', () => {
   const examples = [

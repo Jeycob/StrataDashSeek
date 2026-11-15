@@ -60,7 +60,7 @@ export class RepairBudget {
       if (this.errors[fingerprint] >= limit) this.blocked = { code: 'REPEATED_TOOL_ERROR', message: 'The same tool error repeated without resolution. Review the error and choose a different approach.' };
       return { improved: false, key: 'tool-error', category: classification.category, blocked: this.blocked };
     }
-    const key = kind ?? 'tool-error', previous = this.checks[key], score = failed ? checkScore(exitCode === 0 ? 1 : exitCode, text) : 0;
+    const key = kind ?? 'tool-error', previous = this.checks[key], score = failed ? Number.isSafeInteger(classification.evidence?.failed) && classification.evidence.failed > 0 ? classification.evidence.failed : checkScore(exitCode === 0 ? 1 : exitCode, text) : 0;
     const fingerprint = failed ? errorFingerprint(text) : null;
     if (fingerprint) this.errors[fingerprint] = (this.errors[fingerprint] ?? 0) + 1;
     const improved = !previous || score < previous.bestScore;
