@@ -2,6 +2,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { WorkbenchError, within } from './policy.mjs';
+import privateSource from './source-private.cjs';
+const { isPrivateSourcePath } = privateSource;
 
 export const hash = data => crypto.createHash('sha256').update(data).digest('hex');
 export async function readJSON(file, fallback) { try { return JSON.parse(await fs.readFile(file, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } }
@@ -64,12 +66,13 @@ export class ProjectLocks {
 }
 const EXCLUDED = new Set(['.git', '.harness', 'node_modules', '.agents', 'bin', 'obj', 'dist', 'out', 'build', 'coverage', '.next', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache', 'artifacts', 'screenshots', 'test-results', 'playwright-report', 'logs']);
 export async function sourceManifest(root, { maxFiles = 5000, maxBytes = 32 * 1024 * 1024, signal } = {}) {
-  const files = {}; let bytes = 0, count = 0;
+  const files = Object.create(null); let bytes = 0, count = 0;
   async function walk(directory, relative = '') {
     signal?.throwIfAborted();
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       if (EXCLUDED.has(entry.name) || entry.name.endsWith('.log') || entry.isSymbolicLink()) continue;
       const rel = relative ? relative + '/' + entry.name : entry.name, name = path.join(directory, entry.name);
+      if (isPrivateSourcePath(rel)) continue;
       if (entry.isDirectory()) { await walk(name, rel); continue; }
       if (!entry.isFile()) continue;
       const stat = await fs.stat(name); if (stat.size > 1024 * 1024) continue;
@@ -82,6 +85,7 @@ export async function sourceManifest(root, { maxFiles = 5000, maxBytes = 32 * 10
   await walk(root); return { files, bytes, sha256: hash(JSON.stringify(Object.entries(files).sort())) };
 }
 export async function saveCheckpoint(root, destination, manifest) {
+  if (Object.keys(manifest.files).some(isPrivateSourcePath)) throw new WorkbenchError('CHECKPOINT_PRIVATE_PATH', 'Private runtime files cannot be retained in a source checkpoint.');
   const capacity = await fs.statfs(root);
   if (Number(capacity.bavail) * Number(capacity.bsize) - manifest.bytes < 2 * 1024 ** 3) throw new WorkbenchError('CHECKPOINT_DISK_RESERVE', 'Keeping 2 GiB free; previous best checkpoint is retained.');
   const staging = destination + '.' + crypto.randomUUID(); await fs.mkdir(staging, { recursive: true, mode: 0o700 });

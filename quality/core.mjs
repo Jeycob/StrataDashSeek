@@ -5,6 +5,8 @@ import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { classifyToolOutcome } from '../workspace/tool-recovery.mjs';
 import testRuntime from '../development/test-command.cjs';
+import privateSource from '../workspace/source-private.cjs';
+const { isPrivateSourcePath } = privateSource;
 
 export const KINDS = ['build', 'test', 'browser', 'acceptance'];
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -65,7 +67,9 @@ export function validateContract(c) {
 export async function fingerprint(root, sources) {
   const hash = crypto.createHash('sha256'), seen = new Set(); let bytes = 0;
   async function visit(relative) {
-    const p = await confined(root, relative), stat = await fs.stat(p);
+    const p = await confined(root, relative);
+    if (isPrivateSourcePath(relative)) return;
+    const stat = await fs.stat(p);
     if (stat.isDirectory()) {
       for (const name of (await fs.readdir(p)).sort()) if (!IGNORED.has(name)) await visit(path.join(relative, name));
     } else if (stat.isFile()) {

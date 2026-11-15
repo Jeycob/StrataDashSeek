@@ -161,7 +161,7 @@ test('git base compares committed content and includes untracked files without c
 
 test('secrets and generated dependency files are excluded and cannot be fetched directly', async t => {
   const f = await fixture(t); await f.tracker.initialize('one', f.project);
-  const privatePaths = ['.env', '.env.production', 'server.pem', 'private.key', '.git/config',
+  const privatePaths = ['.env', '.env.production', 'server.pem', 'private.key', 'secrets/session-secret', 'session-secret', '.git/config',
     '.harness/state.json', 'node_modules/pkg/index.js'];
   for (const name of privatePaths) await f.write(name, 'DO-NOT-EXPOSE-SECRET\n');
   await f.write('.env.example', 'PUBLIC_SETTING=example\n'); await f.write('app.js', 'safe\n');
@@ -172,6 +172,25 @@ test('secrets and generated dependency files are excluded and cannot be fetched 
   }
   assert.ok(byPath.has('.env.example')); assert.ok(byPath.has('app.js'));
   assert.equal(JSON.stringify(result).includes('DO-NOT-EXPOSE-SECRET'), false);
+});
+
+test('private paths in a legacy baseline are filtered without changing its public history or deleting recovery data', async t => {
+  const f = await fixture(t, {}, 'continue'); await f.write('app.txt', 'original\n');
+  await f.tracker.initialize('one', f.project); const metadata = await baselineFile(f);
+  const saved = JSON.parse(await fs.readFile(metadata, 'utf8')),secret = 'FIXTURE_PRIVATE_BASELINE\n';
+  const { createHash } = await import('node:crypto'), hash = createHash('sha256').update(secret).digest('hex');
+  saved.files['secrets/session-secret'] = { hash, bytes: Buffer.byteLength(secret), kind: 'text' };
+  const object = path.join(path.dirname(metadata), 'objects', hash); await fs.writeFile(object, secret);
+  await fs.writeFile(metadata, JSON.stringify(saved)); await f.tracker.dispose();
+  await f.write('secrets/session-secret', 'ROTATED_FIXTURE_VALUE\n'); await f.write('app.txt', 'changed\n');
+  const reopened = f.open(), result = await reopened.list('one', f.project);
+  assert.equal(result.files.some(file => file.path.includes('secrets')), false);
+  assert.equal(result.baseline.at, saved.baseline.at);
+  const diff = await reopened.diff('one', f.project, { path: 'app.txt' });
+  assert.ok(lines(diff).includes('-original')); assert.ok(lines(diff).includes('+changed'));
+  await assert.rejects(reopened.diff('one', f.project, { path: 'secrets/session-secret' }), { code: 'DIFF_PATH_EXCLUDED' });
+  assert.equal(await fs.readFile(object, 'utf8'), secret, 'existing private recovery copies require a separate approved cleanup');
+  assert(Object.hasOwn(JSON.parse(await fs.readFile(metadata, 'utf8')).files, 'secrets/session-secret'));
 });
 
 test('traversal cannot disclose files from another project or the state directory', async t => {

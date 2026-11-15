@@ -1,8 +1,9 @@
 'use strict';
 const fs=require('node:fs/promises'),path=require('node:path'),crypto=require('node:crypto');
+const {isPrivateSourcePath}=require('../workspace/source-private.cjs');
 const inside=(root,file)=>file===root||file.startsWith(root+path.sep);
 const blocked=new Set(['.git','.secrets','secrets','root-secrets','.ssh','.aws','.npmrc','.pypirc','.netrc','node_modules','.venv','venv','.next','.cache','.harness','.harness-quality','bin','obj']);
-function excluded(name){return blocked.has(name)||/^\.env(?:\.|$)/i.test(name)||/\.(?:key|pem|p12|pfx)$/i.test(name);}
+function excluded(name){return blocked.has(name)||isPrivateSourcePath(name)||/^\.env(?:\.|$)/i.test(name)||/\.(?:key|pem|p12|pfx)$/i.test(name);}
 async function projectAt(relative,cfg){
  if(typeof relative!=='string'||!relative||relative.length>300||path.isAbsolute(relative)||relative.split(/[\\/]/).some(p=>p==='..'||excluded(p)))throw Error('Use a project path relative to the workspace root');
  const root=await fs.realpath(cfg.workspaceRoot),dir=await fs.realpath(path.join(root,relative));if(!inside(root,dir)||dir===root)throw Error('Project is outside the workspace root');

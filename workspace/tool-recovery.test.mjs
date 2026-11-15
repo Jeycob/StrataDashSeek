@@ -119,6 +119,29 @@ test('only a known terminal tail filter is removed, exposing the real verificati
   }
 });
 
+test('known terminal verifier status echoes are display-only and cannot mask the real exit code', () => {
+  for (const [command, expected] of [
+    ['node --test tests/rules.test.mjs 2>&1 | tail -20; echo rulesexit=${PIPESTATUS[0]}', 'node --test tests/rules.test.mjs'],
+    ['cd client && npm run build 2>&1 | tail -15; echo "buildexit=$?"', 'cd client && npm run build'],
+    ['npm run test:api 2>&1 | tail -60; echo status=$?', 'npm run test:api'],
+    ['node --test tests/a.test.mjs; echo status=$?', 'node --test tests/a.test.mjs'],
+  ]) assert.deepEqual(normalizeVerificationCommand(command), { command: expected, changed: true, reason: 'VERIFICATION_STATUS_ECHO_REMOVED' });
+});
+
+test('status-echo adaptation refuses extra behavior, non-verifiers and arbitrary shell expansion', () => {
+  for (const command of [
+    'cat README.md 2>&1 | tail -20; echo status=$?',
+    'node server.js 2>&1 | tail -20; echo status=$?',
+    'npm test 2>&1 | tee evidence.log; echo status=$?',
+    'npm test 2>&1 | grep -q passed; echo status=$?',
+    'npm test 2>&1 | tail -20; echo status=${PIPESTATUS[1]}',
+    'npm test 2>&1 | tail -20; echo status=$(touch private)',
+    'npm test 2>&1 | tail -20; echo status=$?; echo extra',
+    'npm test; rm something; echo status=$?',
+    'node -e "console.log(1)" --test; echo status=$?',
+  ]) assert.equal(normalizeVerificationCommand(command).changed, false, command);
+});
+
 test('Node helper recipe retains literal argv, rejects shell programs and never rewrites JS', () => {
   const options = { nodePath: '/data/harness/node/bin/node', helperPath: '/data/harness/app/development/test-command.cjs' };
   const result = nodeTestCommandRecipe('node --test --test-timeout=6000 "test folder/"', options);

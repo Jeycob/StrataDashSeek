@@ -13,6 +13,7 @@ const GUIDANCE = Object.freeze({
   'empty-verification': 'No runnable tests were verified. Check the test selection, skipped-test totals and working directory. For Node --test, use actual test files or quoted supported glob patterns. Zero tests do not complete a verified stage.',
   'tool-error': 'The tool failed without a completed verification result. Inspect its exact diagnostic and current inputs, then choose a different concrete approach if the same error repeats.',
 });
+const VERIFICATION_STATUS_GUIDANCE = 'Verification completion cannot be established from this shell result. Pipelines, command substitutions and trailing echo/status commands can hide the verifier exit code. Run the verifier as one direct foreground command, or use verify_project with program arguments from /data/harness/app/quality/README.md. Keep its real exit code and full bounded diagnostics. A printed status, HTTP response or completed background job is not a verified milestone by itself; do not mask a failed check or weaken its assertions.';
 const DIAGNOSTIC_CODES = new Set(['OK', 'TOOL_FAILURE', 'EXECUTION_CANCELLED', 'EXECUTION_TIMEOUT',
   'ASSERTION_FAILURE', 'EDIT_CONTEXT_STALE', 'INVALID_INVOCATION', 'SETUP_FAILURE', 'TEST_BOOTSTRAP_FAILURE', 'NO_TESTS_EXECUTED', 'VERIFICATION_STATUS_UNAVAILABLE', 'VERIFICATION_CONFIGURATION']);
 const CONFIGURATION_CODES = new Set(['INVALID_CONTRACT', 'INVALID_CHECK', 'INVALID_BROWSER_CHECK', 'INVALID_BROWSER_PLAN', 'INVALID_BROWSER_ACTION', 'INVALID_BROWSER_URL', 'INVALID_VIEWPORT', 'INVALID_FLOW', 'INVALID_SELECTOR', 'INVALID_ROUTE', 'INVALID_BROWSER_VALUE', 'INVALID_ASSERTION', 'INVALID_SCREENSHOT', 'INVALID_COMMAND', 'INVALID_TIMEOUT', 'INVALID_ENV', 'INVALID_ARTIFACTS', 'INVALID_KIND', 'MISSING_REQUIRED_CHECK', 'NO_CHECKS', 'SHELL_REFUSED', 'EMPTY_BROWSER_FLOW', 'EMPTY_ASSERTION', 'SCREENSHOT_REQUIRED', 'UNASSIGNED_PORT']);
@@ -64,7 +65,7 @@ export function classifyToolOutcome(input = {}) {
   }
   const verification = Boolean(kind && (category === 'verification' || category === 'success'));
   return { category, code, failed: failed || category === 'empty-verification' || code === 'VERIFICATION_STATUS_UNAVAILABLE', verification,
-    guidance: GUIDANCE[category], evidence: { ...counts, assertion } };
+    guidance: code === 'VERIFICATION_STATUS_UNAVAILABLE' ? VERIFICATION_STATUS_GUIDANCE : GUIDANCE[category], evidence: { ...counts, assertion } };
 }
 
 export function classifyVerificationOutcome(value, input = {}) {
@@ -85,7 +86,7 @@ export function recoveryContext(input = {}, { maxChars = 2400 } = {}) {
   if (value.category === 'success') return '';
   // Fixed guidance deliberately excludes raw command arguments, source and log secrets.
   const code = DIAGNOSTIC_CODES.has(value.code) ? value.code : 'TOOL_FAILURE';
-  const guidance = Object.hasOwn(GUIDANCE, value.category) ? GUIDANCE[value.category] : GUIDANCE['tool-error'];
+  const guidance = code === 'VERIFICATION_STATUS_UNAVAILABLE' ? VERIFICATION_STATUS_GUIDANCE : Object.hasOwn(GUIDANCE, value.category) ? GUIDANCE[value.category] : GUIDANCE['tool-error'];
   return ('[Harness diagnostic: ' + code + ']\n' + guidance).slice(0, maxChars);
 }
 
@@ -112,7 +113,7 @@ function words(command) {
 const quote = value => "'" + value.replace(/'/gu, "'\\''") + "'";
 function isVerification(argv) {
   return argv && (argv[0] === 'node' && argv[1] === '--test' && !argv.some(arg => ['-e', '--eval', '-p', '--print'].includes(arg))
-    || ['npm', 'pnpm', 'yarn', 'bun'].includes(argv[0]) && /^(?:run )?(?:test|check|typecheck|build|lint)(?: |$)/u.test(argv.slice(1).join(' '))
+    || ['npm', 'pnpm', 'yarn', 'bun'].includes(argv[0]) && /^(?:run )?(?:test|check|typecheck|build|lint)(?::[A-Za-z0-9_-]+)*(?: |$)/u.test(argv.slice(1).join(' '))
     || ['pytest', 'tsc', 'eslint'].includes(argv[0]) || ['cargo', 'go', 'dotnet'].includes(argv[0]) && ['test', 'check', 'build'].includes(argv[1]));
 }
 
@@ -128,7 +129,7 @@ function commandBody(command) {
   return { prefix: match[1], body: match[2] };
 }
 
-export function normalizeVerificationCommand(command) {
+function normalizeVerificationCore(command) {
   if (typeof command !== 'string') return { command, changed: false };
   const parts = commandBody(command); if (!parts) return { command, changed: false };
   const match = /^(.*?)\s+2>&1\s*\|\s*tail\s+(?:-n\s+|--lines=|-)([1-9]\d{0,4})\s*$/u.exec(parts.body);
@@ -156,6 +157,19 @@ export function normalizeVerificationCommand(command) {
   // Remove only the known terminal output filter. The runner already bounds
   // output; executing the left side directly preserves its real exit status.
   return { command: parts.prefix + match[1].trim(), changed: true, reason: 'TERMINAL_TAIL_REMOVED' };
+}
+
+export function normalizeVerificationCommand(command) {
+  if (typeof command !== 'string') return { command, changed: false };
+  // Only one exact, terminal, display-only status echo. Other shell commands,
+  // expansions, positive filters and lifecycle hooks remain untouched.
+  const assignment = '[A-Za-z_][A-Za-z0-9_-]{0,47}=(?:\\$\\?|\\$\\{PIPESTATUS\\[0\\]\\})';
+  const suffix = new RegExp(';\\s*echo\\s+(?:' + assignment + '|"' + assignment + '")\\s*$', 'u').exec(command);
+  if (!suffix) return normalizeVerificationCore(command);
+  const direct = normalizeVerificationCore(command.slice(0, suffix.index));
+  const parts = commandBody(direct.command), argv = parts && words(parts.body);
+  if (!isVerification(argv)) return normalizeVerificationCore(command);
+  return { command: direct.command, changed: true, reason: 'VERIFICATION_STATUS_ECHO_REMOVED' };
 }
 
 export function nodeTestCommandRecipe(command, { nodePath, helperPath } = {}) {

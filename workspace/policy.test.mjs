@@ -1,6 +1,6 @@
 import test from 'node:test'; import assert from 'node:assert/strict';
 import fs from 'node:fs/promises'; import os from 'node:os'; import path from 'node:path';
-import { relativeFile, validateSettings, RepairBudget, errorFingerprint } from './policy.mjs';
+import { relativeFile, validateSettings, RepairBudget, errorFingerprint, operationFingerprint } from './policy.mjs';
 import { ProjectLocks, sourceManifest, saveCheckpoint, canonicalInside } from './storage.mjs';
 test('workspace settings validate ranges and unavailable models', () => {
   assert.equal(validateSettings({}).reasoningEffort, 'medium');
@@ -68,6 +68,103 @@ test('a repeated tool failure still pauses and a verified stage starts a fresh e
   assert.equal(b.blocked, null); b.observe({ isError: true, text: 'same failed tool' }); assert.equal(b.blocked.code, 'REPEATED_TOOL_ERROR');
 });
 test('same error ignores timings and generated absolute paths', () => assert.equal(errorFingerprint('/tmp/a.js error in 20ms'), errorFingerprint('/tmp/b.js error in 99ms')));
+
+test('file operation scopes identify lexical targets, not replacement text or descriptions', () => {
+  const edit = (file_path, extra = {}) => ({ name: 'edit', arguments: { file_path, ...extra } });
+  const first = edit('src/../src/app.mjs', { old_string: 'one', new_string: 'two', description: 'first' });
+  const original = JSON.stringify(first);
+  const scope = operationFingerprint(first, '/project');
+  assert.equal(scope, operationFingerprint(edit('/project/src/app.mjs', { old_string: 'other', new_string: 'changed', description: 'retry' }), '/project'));
+  assert.notEqual(scope, operationFingerprint(edit('src/other.mjs'), '/project'));
+  assert.notEqual(scope, operationFingerprint({ name: 'read', arguments: { file_path: 'src/app.mjs' } }, '/project'));
+  assert.equal(operationFingerprint(edit('src\\app.mjs'), 'C:\\project'), operationFingerprint(edit('C:/project/src/app.mjs'), 'C:\\project'));
+  assert.equal(JSON.stringify(first), original);
+});
+
+test('managed command scopes share command and lexical cwd across tool aliases', () => {
+  const exec = Object.freeze({ name: 'bash', arguments: Object.freeze({ command: 'node check.mjs', cwd: 'src/..', description: 'first', timeout: 10 }) });
+  const scope = operationFingerprint(exec, '/project');
+  assert.equal(scope, operationFingerprint({ name: 'project_exec', arguments: { command: 'node check.mjs', cwd: '/project', description: 'retry', timeout: 999 } }, '/project'));
+  assert.notEqual(scope, operationFingerprint({ name: 'bash', arguments: { command: 'node other.mjs' } }, '/project'));
+  assert.notEqual(scope, operationFingerprint({ name: 'bash', arguments: { command: 'node check.mjs', cwd: 'other' } }, '/project'));
+});
+
+test('other scopes hash stable arguments without metadata or exposing argument contents', () => {
+  const original = { name: 'lookup', callId: 'outer-a', arguments: { query: 'private-credential-value', options: { b: 2, a: 1 }, requestId: 'a', description: 'first', timeoutMs: 2 } };
+  const snapshot = JSON.stringify(original);
+  const scope = operationFingerprint(original, '/project');
+  assert.equal(scope, operationFingerprint({ name: 'lookup', callId: 'outer-b', arguments: { timeoutMs: 40, description: 'retry', requestId: 'b', options: { a: 1, b: 2 }, query: 'private-credential-value' } }, '/project'));
+  assert.notEqual(scope, operationFingerprint({ name: 'lookup', arguments: { query: 'different' } }, '/project'));
+  assert.match(scope, /^op1:[a-f0-9]{64}$/u);
+  assert.ok(!scope.includes('private-credential-value'));
+  assert.equal(JSON.stringify(original), snapshot);
+});
+
+test('stale edits of three different targets do not combine into one repeated error', () => {
+  const budget = new RepairBudget();
+  for (const target of ['tests/checkout.test.mjs', '.harness-quality.json', 'client/vite.config.mjs']) {
+    const scope = operationFingerprint({ name: 'edit', arguments: { file_path: target } }, '/project');
+    budget.step(60);
+    budget.observe({ operationScope: scope, isError: true, text: `Error: old_string was not found in "/project/${target}"` });
+  }
+  assert.equal(budget.blocked, null); assert.equal(budget.stalled, 0); assert.equal(budget.steps, 3);
+  assert.deepEqual(Object.values(budget.errors), [1, 1, 1]);
+});
+
+test('same target repeats still block despite changed descriptions and edit content', () => {
+  const budget = new RepairBudget();
+  for (let i = 0; i < 3; i++) {
+    const operationScope = operationFingerprint({ name: 'edit', arguments: { file_path: 'app.mjs', description: String(i), old_string: String(i), new_string: 'other' } }, '/project');
+    budget.observe({ operationScope, isError: true, text: 'old_string not found' });
+  }
+  assert.equal(budget.blocked?.code, 'REPEATED_TOOL_ERROR');
+  const saved = JSON.parse(JSON.stringify(budget));
+  const loaded = new RepairBudget(saved);
+  loaded.resolveOperation(operationFingerprint({ name: 'edit', arguments: { file_path: 'app.mjs' } }, '/project'));
+  assert.deepEqual(JSON.parse(JSON.stringify(loaded)), saved, 'resolution never resumes or changes a blocked run');
+});
+
+test('successful same-operation resolution clears only its scoped tool failures', () => {
+  const budget = new RepairBudget({ stage: 4, steps: 7, stalled: 2, checks: { test: { bestScore: 3 } }, errors: { 'legacy-error': 2 } });
+  const scope = name => operationFingerprint({ name, arguments: { file_path: 'app.mjs' } }, '/project');
+  const edit = scope('edit');
+  for (let i = 0; i < 2; i++) budget.observe({ operationScope: edit, isError: true, text: 'old_string not found' });
+  assert.equal(budget.resolveOperation(scope('read')), 0);
+  assert.equal(budget.resolveOperation(operationFingerprint({ name: 'edit', arguments: { file_path: 'other.mjs' } }, '/project')), 0);
+  assert.equal(budget.resolveOperation(edit), 1);
+  assert.deepEqual(budget.errors, { 'legacy-error': 2 });
+  assert.equal(budget.stage, 4); assert.equal(budget.steps, 7); assert.equal(budget.stalled, 2); assert.deepEqual(budget.checks, { test: { bestScore: 3 } });
+  budget.observe({ operationScope: edit, isError: true, text: 'old_string not found' });
+  assert.equal(budget.blocked, null); assert.deepEqual(Object.values(budget.errors), [2, 1]);
+});
+
+test('legacy error behavior and hard stage limits survive scoped operation counters', () => {
+  const legacy = new RepairBudget();
+  for (let i = 0; i < 3; i++) legacy.observe({ isError: true, text: 'old_string not found' });
+  assert.equal(legacy.blocked?.code, 'REPEATED_TOOL_ERROR');
+  const saved = new RepairBudget();
+  for (let i = 0; i < 2; i++) saved.observe({ isError: true, text: 'old_string not found' });
+  const loaded = new RepairBudget(JSON.parse(JSON.stringify(saved)));
+  loaded.observe({ operationScope: 'private raw operation scope', isError: true, text: 'old_string not found' });
+  assert.equal(loaded.blocked, null); assert.ok(!JSON.stringify(loaded.errors).includes('private raw operation scope'));
+  const limited = new RepairBudget();
+  for (let i = 0; i < 10; i++) { limited.step(10); limited.observe({ operationScope: String(i), isError: true, text: 'old_string not found' }); }
+  assert.equal(limited.blocked, null); assert.equal(limited.step(10), false); assert.equal(limited.blocked.code, 'STAGE_BUDGET');
+});
+
+test('operation resolution preserves failed verification and unrelated scoped failures', () => {
+  const budget = new RepairBudget(), operationScope = operationFingerprint({ name: 'edit', arguments: { file_path: 'app.mjs' } }, '/project');
+  budget.step(60);
+  budget.observe({ operationScope, kind: 'test', exitCode: 1, text: '2 failed' });
+  const checks = structuredClone(budget.checks), verificationErrors = { ...budget.errors };
+  budget.observe({ operationScope, isError: true, text: 'old_string not found' });
+  budget.observe({ operationScope: 'another-operation', isError: true, text: 'old_string not found' });
+  assert.equal(budget.resolveOperation(undefined), 0); assert.equal(budget.resolveOperation(''), 0);
+  assert.equal(budget.resolveOperation(operationScope), 1);
+  assert.equal(budget.steps, 1); assert.equal(budget.stage, 1); assert.equal(budget.stalled, 1);
+  assert.deepEqual(budget.checks, checks); assert.equal(Object.keys(budget.errors).length, 2);
+  for (const [key, count] of Object.entries(verificationErrors)) assert.equal(budget.errors[key], count);
+});
 
 test('recognized test setup, invocation, stale edits and timeouts do not consume failed verification repairs', () => {
   const budget = new RepairBudget(); budget.step(60);

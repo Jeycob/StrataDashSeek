@@ -93,6 +93,11 @@ test('literal verification adaptations preserve admitted arguments, project poli
   const displayed = await f.run({ command: 'node --test tests/acceptance.test.mjs 2>&1 | grep -vE "^ℹ (suites|duration)" | head -70', description: 'Read the actual verification result' }, f.execution);
   assert(!displayed.spec.command.includes('head -70')); assert(!displayed.spec.command.includes('grep -vE'));
   assert.match(displayed.result.stdout.text, /terminal display filters removed/);
+  const statusArgs = Object.freeze({ command: 'node --test tests/rules.test.mjs 2>&1 | tail -20; echo rulesexit=${PIPESTATUS[0]}', description: 'Keep the verifier status' });
+  const status = await f.run(statusArgs, f.execution);
+  assert(status.spec.command.includes('test-command.cjs')); assert(!status.spec.command.includes('rulesexit=')); assert(!status.spec.command.includes('tail -20'));
+  assert.match(status.result.stdout.text, /terminal status echo and display filters removed/);
+  assert.equal(statusArgs.command, 'node --test tests/rules.test.mjs 2>&1 | tail -20; echo rulesexit=${PIPESTATUS[0]}');
 });
 
 test('arbitrary compound commands and JavaScript source are never rewritten', async t => {

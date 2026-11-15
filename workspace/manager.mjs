@@ -4,11 +4,14 @@ import net from 'node:net';
 import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY_VERSION, validationKind, relativeFile, within } from './policy.mjs';
+import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY_VERSION, validationKind, relativeFile, within, operationFingerprint } from './policy.mjs';
 import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash } from './storage.mjs';
 import { LiveChanges } from './changes.mjs';
 import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
 import { guideFirstCheck, warnStageBudget } from './verification-guidance.mjs';
+import { verificationStatusMayBeMasked } from './shell-status.mjs';
+import privateSource from './source-private.cjs';
+const { isPrivateSourcePath } = privateSource;
 const run = promisify(execFile);
 const notice = text => ({ id: crypto.randomUUID(), role: 'user', source: { kind: 'workspace-runtime' }, content: [{ type: 'text', text }] });
 
@@ -158,6 +161,14 @@ export class WorkspaceManager {
     const blocked = this.budgets.get(id)?.blocked;
     if (this.data.trash[id] || blocked) return { reason: blocked?.message ?? 'Conversation is in Trash.', info: { code: blocked?.code ?? 'SESSION_IN_TRASH' } };
     const record = this.data.sessions[id]; if (!record) return;
+    // Capture admitted operation identity before execution; queued/concurrent
+    // results must never borrow another call's target or current directory.
+    if (typeof exec.callId === 'string') {
+      this.operationScopes ??= new Map();
+      const key = id + '\0' + exec.callId;
+      if (!this.operationScopes.has(key)) try { this.operationScopes.set(key, operationFingerprint(exec, record.root)); }
+      catch { this.ctx.logger?.warn('Tool operation identity unavailable.'); }
+    }
     if (!record.legacy && (['exec_command', 'terminal'].includes(exec.name) || exec.name === 'bash' && !exec.managedProjectShell)) return { reason: 'Managed commands require the installed project executor; unconfined execution is refused.' };
     const args = exec.arguments;
     if (args && ['write', 'edit', 'apply_patch', 'delete_file', 'bash'].includes(exec.name)) {
@@ -172,7 +183,13 @@ export class WorkspaceManager {
   // Serialize bookkeeping per project and drain it before the next model step.
   observeToolResult(exec, result) {
     const id = exec.agent?.id; if (!id) return;
-    const work = (this.resultWork.get(id) ?? Promise.resolve()).then(() => this.toolResult(exec, result)).catch(error => {
+    const key = typeof exec.callId === 'string' ? id + '\0' + exec.callId : null;
+    let operationScope = key ? this.operationScopes?.get(key) : undefined;
+    if (key) this.operationScopes?.delete(key);
+    if (!operationScope) try { operationScope = operationFingerprint(exec, this.data.sessions[id]?.root); }
+    catch { this.ctx.logger?.warn('Tool operation identity unavailable.'); }
+    const captured = { ...exec, operationScope };
+    const work = (this.resultWork.get(id) ?? Promise.resolve()).then(() => this.toolResult(captured, result)).catch(error => {
       this.ctx.logger?.warn('Tool diagnostic bookkeeping unavailable: ' + (error.code ?? 'DIAGNOSTIC_UNAVAILABLE'));
     });
     this.resultWork.set(id, work);
@@ -186,6 +203,8 @@ export class WorkspaceManager {
     // neither failed verification nor a stage pass; inspect the owned job and
     // use foreground verification for a completed project milestone.
     if (!result.isError && ['bash', 'project_exec'].includes(exec.name) && value?.kind === 'background' && typeof value.jobId === 'string') return;
+    let operationScope = exec.operationScope;
+    if (!operationScope) try { operationScope = operationFingerprint(exec, record.root); } catch {}
     const command = exec.arguments?.command, kind = verificationKind ?? (structured ? exec.arguments?.kind ?? 'all' : exec.name === 'stage_check' ? 'test' : validationKind(command));
     const exitCode = structured && typeof value?.passed === 'boolean' ? value.passed ? 0 : 1 : value?.exitCode;
     const text = result.content?.filter(x => x.type === 'text').map(x => x.text).join('\n') ?? result.error?.message ?? '';
@@ -200,19 +219,37 @@ export class WorkspaceManager {
       this.pendingDiagnostics.set(exec.agent.id, diagnostics);
       record.lastDiagnostic = { code: recovery.code, category: recovery.category, at: Date.now() };
     }
-    if (!kind && !recovery.failed) return;
+    if (!kind && !recovery.failed) {
+      const commandTool = ['bash', 'project_exec', 'exec_command', 'terminal'].includes(exec.name);
+      const jobTool = ['job_output', 'job_list', 'job_kill'].includes(exec.name), job = value?.job ?? value;
+      const completed = !result.isError && !result.error && !value?.timedOut && !value?.aborted
+        && (!commandTool || value?.exitCode === 0 && value?.signal == null && !value?.sandbox?.denied && !value?.sandbox?.runnerFailed)
+        && (!jobTool || job?.status === 'completed' && job?.result?.exitCode === 0);
+      const budget = this.budgets.get(exec.agent.id);
+      if (completed && budget?.resolveOperation?.(operationScope)) { record.budget = budget; await this.save(); }
+      return;
+    }
     // A shell pipeline can hide the real check exit code. It cannot earn a pass.
     const managedCommand = exec.name === 'project_exec' || exec.managedProjectShell;
     const observedCommand = managedCommand ? normalizeVerificationCommand(command).command : command;
-    if (kind && exitCode === 0 && /\||;|\$\(/u.test(observedCommand ?? '')) return;
+    if (kind && exitCode === 0 && verificationStatusMayBeMasked(observedCommand)) {
+      const diagnostics = this.pendingDiagnostics.get(exec.agent.id) ?? new Map();
+      diagnostics.set('VERIFICATION_STATUS_UNAVAILABLE', recoveryContext({ category: 'tool-error', code: 'VERIFICATION_STATUS_UNAVAILABLE' }));
+      while (diagnostics.size > 4) diagnostics.delete(diagnostics.keys().next().value);
+      this.pendingDiagnostics.set(exec.agent.id, diagnostics);
+      record.lastDiagnostic = { code: 'VERIFICATION_STATUS_UNAVAILABLE', category: 'tool-error', at: Date.now() };
+      // Execution still returned its actual result. Do not invent a verifier
+      // exit code, pass a stage or charge an unknown result as a failed repair.
+      return;
+    }
     if (!kind) {
       const budget = this.budgets.get(exec.agent.id);
-      budget.observe({ exitCode, text, isError: result.isError, recovery }, this.settings(exec.agent.session).noProgressLimit);
+      budget.observe({ exitCode, text, isError: result.isError, recovery, operationScope }, this.settings(exec.agent.session).noProgressLimit);
       record.budget = budget; await this.save(); return;
     }
     let manifest;
     if (recovery.verification) try { manifest = await sourceManifest(record.root, { signal: exec.signal }); } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
-    const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, recovery, manifestHash: manifest?.sha256 }, this.settings(exec.agent.session).noProgressLimit);
+    const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, recovery, operationScope, manifestHash: manifest?.sha256 }, this.settings(exec.agent.session).noProgressLimit);
     if (decision.improved && manifest) {
       try {
         const saved = await saveCheckpoint(record.root, path.join(this.root, 'checkpoints', exec.agent.id, 'best'), manifest);
@@ -269,19 +306,22 @@ export class WorkspaceManager {
       if (!manifest || hash(JSON.stringify(Object.entries(manifest.files).sort())) !== checkpoint.sha256) throw new WorkbenchError('CHECKPOINT_INVALID', 'Checkpoint manifest does not match.');
       const current = await sourceManifest(root, { signal });
       record.beforeRestore = await saveCheckpoint(root, path.join(this.root, 'checkpoints', id, 'before-restore'), current); await this.save();
+      let restoredFiles = 0, skippedPrivateFiles = 0;
       for (const [relative, expected] of Object.entries(manifest.files)) {
+        if (isPrivateSourcePath(relative)) { skippedPrivateFiles++; continue; }
         relativeFile(relative); const source = await canonicalInside(path.join(checkpoint.path, 'files'), relative), bytes = await fs.readFile(source);
         if (hash(bytes) !== expected.sha256) throw new WorkbenchError('CHECKPOINT_INVALID', 'Checkpoint file checksum does not match.');
         const destination = await canonicalInside(root, relative, true); await fs.mkdir(path.dirname(destination), { recursive: true });
         const target = await this.ctx.fs.resolve(destination, { signal }), stat = await this.ctx.fs.stat(target, signal);
         if (expected.binary) { const temp = destination + '.restore-' + crypto.randomUUID(); await fs.writeFile(temp, bytes, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, destination); }
         else await this.ctx.fs.writeText(target, bytes.toString('utf8'), stat ? { kind: 'replaceIfVersion', version: stat.version } : { kind: 'createIfAbsent' }, signal, policy);
+        restoredFiles++;
       }
-      for (const relative of Object.keys(current.files)) if (!(relative in manifest.files)) {
+      for (const relative of Object.keys(current.files)) if (!Object.hasOwn(manifest.files, relative)) {
         const target = await this.ctx.fs.resolve(await canonicalInside(root, relative), { signal }), stat = await this.ctx.fs.stat(target, signal);
         await this.ctx.fs.deleteFile(target, { version: stat.version }, signal, policy);
       }
-      return { restored: true, files: Object.keys(manifest.files).length, previousVersionRetained: true };
+      return { restored: true, files: restoredFiles, skippedPrivateFiles, previousVersionRetained: true };
     }, true);
   }
   async trashSession(id) {

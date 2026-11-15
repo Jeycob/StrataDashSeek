@@ -71,6 +71,26 @@ keys, payment validation, server-calculated totals, inventory and persistence af
 reopening the database. UI checks alone cannot prove those properties. Review these
 requirements before writing implementation; do not weaken assertions to make a run pass.
 
+Before declaring delivery, run the documented package entry points exactly as a user
+will invoke them, including their lifecycle hooks. Running a script body separately
+does not establish that `npm test`, `npm start` or an advertised seed command works.
+Verify primary user flows through the UI as well as the API; an API-only substitute
+cannot establish that a form submits the correct payload. Keep screenshots and the
+real exit status of each check. A failed or interrupted check remains unverified.
+
+Managed shell verification can remove an exact terminal display filter and one
+display-only status echo from a recognized verifier command. It executes the verifier
+directly and preserves its real result; arbitrary compound shell programs are not
+rewritten. Unsupported status-masking constructs produce actionable feedback instead
+of a milestone pass. Quoted pattern characters and ordinary redirections retain their
+meaning. Repeated tool-error counters distinguish operation targets; a completed
+success resolves only that operation's errors and never resumes a stopped run.
+
+Conventional private credential paths are excluded from source fingerprints,
+checkpoints, Changes and application build snapshots. This filename policy does not
+detect arbitrary embedded secrets or replace project isolation. Existing private
+recovery copies are retained; restoring old code does not overwrite runtime keys.
+
 Self tests (no model/GPU calls):
 
 ```

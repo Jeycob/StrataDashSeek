@@ -7,14 +7,15 @@ import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
 import { WorkbenchError, relativeFile, within } from './policy.mjs';
 import { atomicJSON, canonicalInside } from './storage.mjs';
+import privateSource from './source-private.cjs';
+const { isPrivateSourcePath } = privateSource;
 
 const execute = promisify(execFile), MIB = 1024 ** 2;
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const EXCLUDED = new Set(['.git', '.harness', '.agents', '.codex', '.aws', '.ssh', 'node_modules', 'bin', 'obj', 'dist', 'out', 'build', 'coverage', '.next', '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache', 'artifacts', 'screenshots', 'test-results', 'playwright-report', 'logs']);
-const PRIVATE = /^(?:\.env(?:\.(?!example$|sample$|template$).*)?|\.npmrc|\.pypirc|\.netrc|\.credentials(?:\..*)?|id_rsa(?:\..*)?|id_ed25519(?:\..*)?|vault-machine\.json|credentials\.json)$|\.(?:pem|key|pfx|p12)$/iu;
 function allowed(value) {
   try { relativeFile(value); } catch { return false; }
-  return !/[\r\n]/u.test(value) && value.split('/').every(part => !EXCLUDED.has(part) && !PRIVATE.test(part)) && !value.endsWith('.log');
+  return !/[\r\n]/u.test(value) && !isPrivateSourcePath(value) && value.split('/').every(part => !EXCLUDED.has(part)) && !value.endsWith('.log');
 }
 function textOf(data) {
   try { if (data.includes(0)) return null; return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(data); } catch { return null; }
@@ -103,8 +104,14 @@ export class LiveChanges {
     let stored;
     try { stored = JSON.parse((await readStable(entry.directory, 'baseline.json', 2 * MIB)).toString('utf8')); } catch (error) { if (error.code !== 'ENOENT') throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The saved comparison baseline is unavailable.'); }
     if (stored) {
-      if (stored.version !== 1 || stored.sessionId !== entry.sessionId || stored.root !== entry.root || !['empty', 'git-base', 'snapshot'].includes(stored.baseline?.kind) || !stored.files || typeof stored.files !== 'object' || Array.isArray(stored.files) || Object.keys(stored.files).length > this.maxFiles || Object.entries(stored.files).some(([name, file]) => !allowed(name) || !/^[a-f0-9]{40,64}$/u.test(file.hash ?? '') || !['text', 'binary', 'oversized', 'unknown'].includes(file.kind))) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The saved comparison baseline is invalid.');
+      if (stored.version !== 1 || stored.sessionId !== entry.sessionId || stored.root !== entry.root || !['empty', 'git-base', 'snapshot'].includes(stored.baseline?.kind) || !stored.files || typeof stored.files !== 'object' || Array.isArray(stored.files) || Object.keys(stored.files).length > this.maxFiles || Object.entries(stored.files).some(([name, file]) => !(allowed(name) || isPrivateSourcePath(name)) || !file || !/^[a-f0-9]{40,64}$/u.test(file.hash ?? '') || !['text', 'binary', 'oversized', 'unknown'].includes(file.kind))) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The saved comparison baseline is invalid.');
       stored.files = Object.assign(Object.create(null), stored.files);
+      const removed = Object.entries(stored.files).filter(([name]) => isPrivateSourcePath(name));
+      if (removed.length) {
+        for (const [name] of removed) delete stored.files[name];
+        // Older private copies are not exposed by code history. Retain their
+        // immutable storage for an explicitly approved recovery/cleanup audit.
+      }
       entry.saved = stored; return;
     }
     const at = Date.now(); let baseline, files = Object.create(null), warnings = [], complete = true, excludedPaths = [];

@@ -31,6 +31,41 @@ export function validateSettings(input, availableModels) {
 export function errorFingerprint(text) {
   return crypto.createHash('sha256').update(String(text).replace(/\u001b\[[0-9;]*m/gu, '').replace(/\b\d+(?:\.\d+)?\s*(?:ms|seconds?|secs?)\b/giu, '<time>').replace(/(?:[A-Z]:)?[/\\][^\s:"']+/gu, '<path>').replace(/\b(?:call|job|request)-[\w-]+/gu, '<id>').trim().slice(-8000)).digest('hex');
 }
+const operationMetadata = new Set(['description', 'timeout', 'timeoutms', 'callid', 'requestid']);
+function stableOperationArguments(value, top = false) {
+  if (Array.isArray(value)) return value.map(item => stableOperationArguments(item));
+  if (!value || typeof value !== 'object') return value;
+  const result = Object.create(null);
+  for (const key of Object.keys(value).sort()) {
+    if (top && operationMetadata.has(key.replaceAll('_', '').toLowerCase())) continue;
+    result[key] = stableOperationArguments(value[key]);
+  }
+  return result;
+}
+// Lexical identity only: this does not read the target, follow symlinks, or
+// replace the executor's confinement/permission checks.
+export function operationFingerprint(exec, projectRoot) {
+  const name = typeof exec?.name === 'string' ? exec.name : '', args = exec?.arguments ?? {};
+  const root = typeof projectRoot === 'string' && projectRoot ? projectRoot : process.cwd();
+  const paths = /^[A-Za-z]:[\\/]|^\\\\/u.test(root) ? path.win32 : path.posix;
+  const canonical = value => {
+    const resolved = paths.resolve(root, typeof value === 'string' && value ? value : '.');
+    return paths === path.win32 ? resolved.replaceAll('\\', '/').replace(/^[A-Z]:/u, drive => drive.toLowerCase()) : resolved;
+  };
+  let identity;
+  if (['bash', 'project_exec'].includes(name)) {
+    identity = ['managed-command', typeof args.command === 'string' ? args.command : null, canonical(args.cwd ?? args.workdir)];
+  } else if (['read', 'write', 'edit', 'read_file', 'write_file', 'edit_file'].includes(name)) {
+    const target = args.file_path ?? args.path;
+    identity = [name, 'file', typeof target === 'string' && target ? canonical(target) : null];
+  } else identity = [name, stableOperationArguments(args, true)];
+  return 'op1:' + crypto.createHash('sha256').update(JSON.stringify(identity)).digest('hex');
+}
+function operationErrorPrefix(scope) {
+  // Hash even caller-supplied scopes so persisted counters never contain raw
+  // commands, paths, credentials, or argument objects.
+  return typeof scope === 'string' && scope ? 'operation:' + crypto.createHash('sha256').update(scope).digest('hex') + ':' : null;
+}
 export function validationKind(command) {
   if (typeof command !== 'string') return null;
   if (/\b(?:pytest|cargo\s+test|go\s+test|dotnet\s+test|node\s+--test|(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+(?:test|check|typecheck)|playwright\s+test)\b/iu.test(command)) return 'test';
@@ -46,7 +81,16 @@ export const REPAIR_POLICY_VERSION = 3;
 export class RepairBudget {
   constructor(saved = {}) { Object.assign(this, { stage: 1, steps: 0, stalled: 0, errors: {}, checks: {}, blocked: null }, saved); }
   step(limit) { if (this.blocked) return false; if (++this.steps > limit) this.blocked = { code: 'STAGE_BUDGET', message: 'A verified stage is required before continuing.' }; return !this.blocked; }
-  observe({ kind, exitCode, text, isError, manifestHash, timedOut, aborted, recovery }, limit = 3) {
+  // The result observer calls this only for an authoritative completed success.
+  // Clearing counters is not verification and never resumes a blocked run.
+  resolveOperation(scope) {
+    const prefix = operationErrorPrefix(scope);
+    if (this.blocked || !prefix) return 0;
+    let removed = 0;
+    for (const key of Object.keys(this.errors)) if (key.startsWith(prefix)) { delete this.errors[key]; removed++; }
+    return removed;
+  }
+  observe({ kind, exitCode, text, isError, manifestHash, timedOut, aborted, recovery, operationScope }, limit = 3) {
     if (this.blocked) return { improved: false };
     const classification = recovery ?? classifyToolOutcome({ kind, exitCode, text, isError, timedOut, aborted });
     const failed = classification.failed;
@@ -55,7 +99,7 @@ export class RepairBudget {
     // Setup/usage failures are not failed verification or attempted repairs.
     // Still stop a genuinely repeated tool error, without combining unrelated errors.
     if (!kind || !classification.verification) {
-      const fingerprint = classification.category + ':' + errorFingerprint(text);
+      const fingerprint = (operationErrorPrefix(operationScope) ?? '') + classification.category + ':' + errorFingerprint(text);
       this.errors[fingerprint] = (this.errors[fingerprint] ?? 0) + 1;
       if (this.errors[fingerprint] >= limit) this.blocked = { code: 'REPEATED_TOOL_ERROR', message: 'The same tool error repeated without resolution. Review the error and choose a different approach.' };
       return { improved: false, key: 'tool-error', category: classification.category, blocked: this.blocked };
