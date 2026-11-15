@@ -1,7 +1,8 @@
 {
   "version": 1,
-  "observedAt": "2026-11-15T17:13:03.120Z",
+  "observedAt": "2026-11-15T17:19:39.251Z",
   "activeRuntimeRevision": "0f9548a2dea390f25fb8465f45d9f2b757bd316a",
+  "runtimeActivatedAt": "2026-11-15T17:16:18.802Z",
   "dockerServiceImplementation": "bca06728a555311388bc724483309b3298c26466",
   "signedAndActivated": true,
   "protectedModelAndNineOtherServicesPreservedDuringLastNativeUpdate": true,
@@ -13,6 +14,7 @@
     "imagesVolumesAndProjectDataNotDeleted": true
   },
   "actualAttempt": {
+    "observedAt": "2026-11-15T17:13:03.120Z",
     "imageBuildPassed": true,
     "candidateCreated": true,
     "candidateStarted": true,

@@ -20,7 +20,7 @@ computer. Keep the private signing key there. Transfer the public keyring to
 a root-only file on the server, then run:
 
 ```sh
-node /data/harness/app/vast/startup-install.cjs \
+/data/harness/node/bin/node /data/harness/app/vast/startup-install.cjs \
   /root/operator-public-signers.gpg FULL_PRIMARY_FINGERPRINT
 ```
 
@@ -42,6 +42,12 @@ gate while services remain stopped and publishes its executable entry only
 after policy, public trust and updater files are present. An existing stable
 updater is not silently overwritten: apply a reviewed operator upgrade before
 claiming that a running installation has these newer policy checks.
+
+The first-install script provisions `gpgv` and `flock` alongside Git and Python.
+An existing installation needs those commands available before gate setup.
+Disabling the idle guard during initial validation is independent of this gate:
+`root-secrets/guard.json.enabled` may be false, while
+`root-secrets/startup-update.json.enabled` must be the boolean true.
 
 Private policy is `/data/harness/root-secrets/startup-update.json`. Its source
 is fixed to this repository's `main` branch. The keyring is separately pinned

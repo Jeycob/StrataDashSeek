@@ -3,7 +3,7 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y --no-install-recommends git curl ca-certificates xz-utils python3-venv build-essential
+apt-get install -y --no-install-recommends git gpgv util-linux curl ca-certificates xz-utils python3-venv build-essential
 if ! command -v tailscale >/dev/null 2>&1; then
  curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg -o /usr/share/keyrings/tailscale-archive-keyring.gpg
  curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list -o /etc/apt/sources.list.d/tailscale.list
@@ -29,5 +29,8 @@ chown -R harness:harness /data/harness/{home,workspaces,logs,state,secrets}
 chmod 755 /data/harness/app/vast/turn-queue
 chmod 644 /data/harness/app/vast/turn-queue/*.mjs
 # Configure Tailscale, config.json and root-secrets/guard.json before starting.
-# Preserve existing /root/onstart.sh and append: bash /data/harness/app/vast/start.sh &
+# Before the first service start, follow README's signed startup gate setup:
+# stage one recognized onstart launcher, install the independently verified
+# public keyring/full fingerprint with startup-install.cjs, then start the
+# installed /data/harness/bootstrap/start.sh. Keep private signing keys off-host.
 

@@ -1,0 +1,96 @@
+{
+  "version": 1,
+  "reviewedAt": "2026-11-15T17:37:00Z",
+  "scope": "Requirement and evidence audit of the HomeAI/Vast work; local source, existing private observations, real SDK/Chromium fixtures and official service documentation. No new model request or server wake for this audit.",
+  "baseMain": "b09aa1ae55837d57c3cc47ecd5809cea619ef9cd",
+  "lastObservedActiveRuntime": "0f9548a2dea390f25fb8465f45d9f2b757bd316a",
+  "lastObservedProvider": {
+    "at": "2026-11-15T17:33:03.999Z",
+    "status": "exited",
+    "intendedStatus": "stopped",
+    "readOnlyRequest": true,
+    "wakeRequested": false
+  },
+  "requirements": [
+    {
+      "requirement": "Whole-stack status and comparison",
+      "status": "partial",
+      "evidence": ["deployments/startup-runtime-live-20261115/status.json", "deployments/docker-create-20261115/live.json"],
+      "remaining": "The current shop has independent acceptance failures and no promoted, fully tested Docker URL. Infrastructure tests do not prove application quality."
+    },
+    {
+      "requirement": "Ten proposed optimizations with approval before implementation",
+      "status": "proposals-delivered-awaiting-owner-selection",
+      "remaining": "Executor UID separation, offsite backup, automatic lease renewal, parameter aliases, enforced early checks, independent CI acceptance, spending caps, Kubernetes connector, retained-release deletion and autonomous signed promotion are not approved as a package. Later explicit approvals cover only their stated subsets."
+    },
+    {
+      "requirement": "Reduce unnecessary requests",
+      "status": "implemented-and-regression-tested",
+      "evidence": ["workspace/changes.mjs", "workspace/native-ui/source.js", "mobile/apps.js"],
+      "limits": "Bounded conditional polling, hidden/disposed panel suspension and cancellation reduce duplicate work. No claim of a measured account-wide quota reduction."
+    },
+    {
+      "requirement": "Vault pricing and visible configuration",
+      "status": "implemented-with-billing-verification-limit",
+      "evidence": ["vast/apps-vault.cjs", "mobile/apps.js"],
+      "officialSources": ["https://infisical.com/pricing", "https://infisical.com/docs/documentation/platform/access-controls/role-based-access-controls"],
+      "limits": "Published Free plan is USD 0 with a combined five human/machine identity limit. Built-in roles, including Viewer and No Access, are available on Free. Current account billing was not freshly verified because the browser session is logged out. Bootstrap identity and some Native credential caching remain local; not every credential is absent from the server."
+    },
+    {
+      "requirement": "Docker sidebar with logs, start/stop and creation",
+      "status": "implemented-and-fixture-tested",
+      "evidence": ["workspace/native-ui/source.js", "mobile/apps.js", "vast/apps-service.cjs", "vast/apps-manager.cjs"],
+      "limits": "Creation scaffolds and registers the current project; it is not an unrestricted docker-run form. Sleeping-worker inventory is remembered state, not a fresh running-container observation."
+    },
+    {
+      "requirement": "Unified settings",
+      "status": "implemented-follow-up-regression-tested",
+      "evidence": ["workspace/native-ui/source.js", "workspace/client.js", "mobile/apps.js"],
+      "limits": "The current follow-up preserves per-project credential reference drafts across refresh and cancels requests on panel disposal. Native settings and phone views require separate rendered-client validation."
+    },
+    {
+      "requirement": "Project/file operations and live code changes",
+      "status": "implemented-and-live-canary-tested",
+      "evidence": ["workspace/native-files.mjs", "workspace/manager.mjs", "workspace/changes.mjs", "deployments/startup-runtime-live-20261115/status.json"],
+      "limits": "Chat deletion is reversible archive/detach, not permanent data erasure or disk reclamation. File-tree refresh is explicit; the Changes panel separately updates selected diffs."
+    },
+    {
+      "requirement": "Save disk without changing the model or LLM cache",
+      "status": "approved-safe-cleanup-delivered-further-mode-awaits-approval",
+      "evidence": ["vast/apps-cleanup.cjs", "deployments/docker-create-20261115/live.json", "deployments/startup-runtime-live-20261115/status.json"],
+      "limits": "Only recognized temporary copies, idle npm download caches and unused Docker builder caches are eligible. Images, volumes, databases, source and successful release rollback data are retained. An optional test-in-candidate mode is unimplemented pending explicit approval."
+    },
+    {
+      "requirement": "Critical security review",
+      "status": "reviewed-material-risk-open",
+      "evidence": ["workspace/project-tool.mjs", "workspace/project-run.cjs", "vast/supervisor.cjs"],
+      "remaining": "Native Harness, Apps and project executors still share the harness OS identity. Path/write confinement does not provide complete OS read or signal isolation from Harness credentials. Separate UID and a secret broker remain a proposal. Private signing keys remain off-server."
+    },
+    {
+      "requirement": "Clear installation and maintainable runtime",
+      "status": "follow-up-fix-regression-tested",
+      "evidence": ["README.md", "docs/installation-overview.md", "docs/startup-updates.md", "vast/install.sh"],
+      "limits": "First installation now places the public-key signature gate before first service start and provisions gpgv/flock dependencies. Targeted gate tests and shell syntax validation passed; this is not an empty-host installation proof."
+    },
+    {
+      "requirement": "Kubernetes/OpenLens feasibility and deployment",
+      "status": "assessed-not-implemented",
+      "officialSources": ["https://docs.k3s.io/installation/requirements"],
+      "remaining": "The current 1-vCPU/2-GiB/3-GiB worker is below the K3s server CPU minimum before app workloads. A suitable external target, namespace-scoped credentials, image registry and connector implementation are needed. Remote Docker over SSH is not Kubernetes integration."
+    },
+    {
+      "requirement": "Mandatory latest signed update before first Harness requests",
+      "status": "implemented-recovery-order-observed",
+      "evidence": ["vast/start.sh", "vast/startup-bootstrap.sh", "vast/startup-update.cjs", "deployments/startup-runtime-live-20261115/status.json"],
+      "remaining": "Gate readiness was observed before Native startup with preserved chats and restored RAM vault files. A subsequent unattended whole-instance cold cycle after the latest fixes is not yet verified."
+    },
+    {
+      "requirement": "Autonomous Harness self-improvement",
+      "status": "partial-not-proven",
+      "remaining": "Runtime self-description and bounded repair/verification tools exist. End-to-end branch creation, independent acceptance, reviewed signed promotion and successful autonomous deployment have not been demonstrated. The model must not receive the operator private signing key."
+    }
+  ],
+  "overallComplete": false,
+  "newPaidResourceOrStorageMigration": false,
+  "rawSecretsOrApplicationDataIncluded": false
+}

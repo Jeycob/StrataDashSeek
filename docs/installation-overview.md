@@ -6,7 +6,7 @@ the persistent model, runtime, projects, databases and push identity.
 | Task | Existing entry point | What it changes |
 | --- | --- | --- |
 | Open the existing server | Private phone launcher or authenticated wake page | Starts the configured existing instance on demand |
-| Start services after boot | `vast/start.sh` and `vast/supervisor.cjs` | Reuses installed services; no ordinary-boot dependency installation |
+| Start services after boot | Installed `bootstrap/start.sh` → signed source verification → supervisor | Reuses installed services; no ordinary-boot dependency installation |
 | Update code before first requests | [Signed startup gate](startup-updates.md) | Verifies pinned signatures, dependencies and disk reserve before activating source |
 | First Harness installation | `vast/install.sh`, then README configuration steps | Installs pinned runtime; requires an existing compatible Strata/model installation |
 | Enable optional Apps | [Applications](applications.md) and [v2 workflows](applications-v2.md) | Explicit dedicated container worker, preview, checks, releases and rollback |
@@ -23,11 +23,15 @@ currently installed server revision are separate facts.
 
 For a fresh installation, finish these stages in order: verify the existing
 model and disk headroom; install the pinned Harness/runtime; configure private
-network and credentials; start core services; pair the phone; enable optional
-Apps and development tools; then prove task execution, persistence and a cold
-cycle before enabling automatic idle stop. The detailed existing README steps
-remain the executable procedure. Do not replay a first-install procedure over
-a configured live profile or replace credentials with example values.
+network and credentials; install the mandatory startup gate with an independently
+verified public keyring and full primary fingerprint; then start core services
+through the installed stable bootstrap. Confirm signed update readiness before
+the first Harness request. Pair the phone, enable optional Apps and development
+tools, then prove task execution, persistence and a cold cycle before enabling
+automatic idle stop. The idle guard may remain disabled during validation;
+the separate startup update policy must remain enabled. The detailed README
+steps are the executable procedure. Do not replay first installation over a
+configured live profile or replace credentials with example values.
 
 Keep bootstrap provisioning separate from routine startup. A staged release
 should verify its dependencies once, back up the current profile and activate

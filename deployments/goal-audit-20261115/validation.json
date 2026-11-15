@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "scope": "Preserve project credential-reference drafts, discard pre-mutation state responses and cancel disposed Apps requests; correct first-install startup-gate order and dependencies",
+  "infrastructure": {
+    "passed": 458,
+    "failed": 0,
+    "skipped": 0,
+    "testFiles": 60,
+    "sourceChangedDuringTests": false,
+    "source": {
+      "sha256": "56c4545f5e9cc7d3bbaad6e17e0a6fd8aad1287b38c55f397012a627c41fa6d7",
+      "files": 283,
+      "definition": "Sorted tracked and nonignored untracked JS/Python/shell/config/HTML/CSS/Markdown sources; path + NUL + LF-normalized UTF-8 + NUL. Deployment evidence subdirectories excluded."
+    }
+  },
+  "actualRuntimeChecks": {
+    "pinnedHarnessSDK": true,
+    "nativeHost": true,
+    "chromium": true,
+    "sourceAndGeneratedAppsClientRegression": true,
+    "blurAndActualRerenderPreservesTwoProjectDrafts": true,
+    "failedSavePreservesDraft": true,
+    "confirmedSaveDiscardsOlderGET": true,
+    "confirmedDraftReleasedForAuthoritativeUpdates": true,
+    "destroyAbortsActualHTTPRequest": true,
+    "lateSuccessAndErrorCannotMutateDisposedPanel": true,
+    "doesNotRequireAbortSignalAnyOrTimeout": true,
+    "noPersistentDraftStorage": true,
+    "startupPolicyNegativeCases": true,
+    "firstInstallShellSyntax": true
+  },
+  "historicalCSVBenchmarkReportedSeparately": {
+    "passed": 14,
+    "failed": 4,
+    "repaired": false,
+    "includedInInfrastructureCount": false
+  },
+  "limitations": [
+    "Local SDK/Native/Chromium fixtures do not prove a fully deployed shop or live iPhone behavior",
+    "The infrastructure result does not remove known application acceptance failures",
+    "First-install documentation and syntax checks are not an empty-host installation proof",
+    "Private raw logs and application data are not published"
+  ]
+}

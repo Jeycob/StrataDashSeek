@@ -34,21 +34,60 @@
  if(embedded)style.textContent+='#'+prefix+'root{container-type:inline-size}#'+prefix+'root button{white-space:normal}@container(max-width:600px){#'+prefix+'root table,#'+prefix+'root tbody{display:block;width:100%}#'+prefix+'root thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}#'+prefix+'root tr{display:flex;flex-wrap:wrap;border:1px solid #dce5e9;border-radius:9px;margin:10px 0;padding:10px}#'+prefix+'root td{display:block;white-space:normal;border:0;padding:4px;overflow-wrap:anywhere}#'+prefix+'root td:first-child{font-weight:600;width:100%}#'+prefix+'root td:last-child{display:flex;flex-wrap:wrap;gap:6px;width:100%}#'+prefix+'root .apps-actions{flex-direction:column}#'+prefix+'root .apps-actions>*{max-width:100%;width:100%}#'+prefix+'apps-add>div{flex-direction:column}}';
  if(embedded&&window.HarnessNativeTheme){panel.classList.add('harness-native-surface');style.textContent=window.HarnessNativeTheme.css(style.textContent,panel.id);}
  let loading=false,acting=false,state=null,selectedLog=null,restoreFocus=null,renderedKey='',addPanelInitialized=false;
+ const credentialEditors=new Map(),requests=new Set();let stateEpoch=0,refreshAfterMutation=false;
+ const alive=()=>!lifetime.signal.aborted&&panel.open;
+ const cancelled=()=>new DOMException('Panel request cancelled.','AbortError');
+ const showError=(id,error)=>{if(alive()&&error?.name!=='AbortError')el(id).textContent=error.message;};
+ const cancelRequests=()=>{for(const controller of requests)controller.abort();};
  const status={queued:'Ve frontě',running:'Probíhá',passed:'Dokončeno',failed:'Chyba',interrupted:'Přerušeno',sleeping:'Uspaný',created:'Vytvořený',exited:'Zastavený',restarting:'Restartuje',paused:'Pozastavený',dead:'Ukončený'};
  const actionNames={build:'Sestavení',deploy:'Nasazení',check:'Kontrola',verify:'Ověření a nasazení',rollback:'Návrat vydání',export:'Export',compose:'Sestava Compose',wake:'Probuzení Dockeru',sleep:'Uspání Dockeru','preview-settings':'Nastavení náhledů'};
  function node(tag,text,className){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(className)n.className=className;return n;}
- async function api(route,data){const r=await fetch('/phone/api/apps/'+route,{method:data?'POST':'GET',cache:'no-store',credentials:'same-origin',signal:AbortSignal.timeout(20000),headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const value=await r.json();if(!r.ok)throw Error(value.error||'Operace se nezdařila');return value;}
- async function act(route,data){if(acting)return;acting=true;el('apps-error').textContent='';try{const result=await api(route,data);if(result.id&&['project-action','worker-action','preview-settings'].includes(route))selectedLog={type:'job',id:result.id};await refresh();if(route==='register')el('apps-add-panel').open=false;return result;}catch(e){el('apps-error').textContent=e.message;}finally{acting=false;}}
+ async function api(route,data){
+  if(!alive())throw cancelled();
+  const controller=new AbortController(),onAbort=()=>controller.abort();let timedOut=false;
+  requests.add(controller);lifetime.signal.addEventListener('abort',onAbort,{once:true});
+  const timeout=setTimeout(()=>{timedOut=true;controller.abort();},20000);
+  try{
+   const r=await fetch('/phone/api/apps/'+route,{method:data?'POST':'GET',cache:'no-store',credentials:'same-origin',signal:controller.signal,headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});
+   const value=await r.json();
+   // Some transports may finish despite cancellation: never publish late data.
+   if(controller.signal.aborted||!alive())throw cancelled();
+   if(!r.ok)throw Error(value.error||'Operace se nezdařila');return value;
+  }catch(error){if(timedOut&&alive())throw Error('Požadavek překročil časový limit.');throw error;}
+  finally{clearTimeout(timeout);requests.delete(controller);lifetime.signal.removeEventListener('abort',onAbort);}
+ }
+ async function act(route,data,{onSuccess}={}){if(acting||!alive())return;acting=true;el('apps-error').textContent='';try{const result=await api(route,data);stateEpoch++;onSuccess?.(result);if(result.id&&['project-action','worker-action','preview-settings'].includes(route))selectedLog={type:'job',id:result.id};await refresh({afterMutation:true});if(!alive())return;if(route==='register')el('apps-add-panel').open=false;return result;}catch(e){showError('apps-error',e);}finally{acting=false;}}
  function field(label,value='',type='text'){const row=node('label',label+' '),input=node(type==='textarea'?'textarea':'input');if(type!=='textarea')input.type=type;input.value=value;input.autocomplete='off';row.append(input);return{row,input};}
  const targetFields=[field('Označení cíle','home'),field('Název','Domácí server'),field('Tailscale IP',''),field('SSH uživatel',''),field('SSH port','22','number'),field('Veřejný klíč hostitele (ssh-ed25519 …)',''),field('Infisical projekt (ID)',''),field('Prostředí','prod'),field('Složka v trezoru','/'),field('Název soukromého SSH klíče v trezoru','DEPLOY_SSH_KEY')];for(const f of targetFields)el('apps-target-form').append(f.row);const targetSubmit=node('button','Uložit cíl');targetSubmit.type='submit';el('apps-target-form').append(targetSubmit);
  function parseMap(text){const out={};for(const line of text.split('\n').filter(v=>v.trim())){const pair=line.split('=');if(pair.length!==2)throw Error('Použij jeden řádek NÁZEV_V_APLIKACI=NÁZEV_V_TREZORU');out[pair[0].trim()]=pair[1].trim();}return out;}
- function credentialForm(p,disabled){const d=node('details'),summary=node('summary','Přihlašovací údaje projektu');d.append(summary,node('p','Zadej pouze názvy klíčů. Jejich hodnoty se načtou z Infisicalu při použití.'));const c=p.credentials||{},scope=c.scope||{},fields=[field('Projekt Infisical (ID)',scope.projectId||''),field('Prostředí',scope.environment||'prod'),field('Složka v trezoru',scope.secretPath||'/'),field('Za běhu: NÁZEV=NÁZEV_V_TREZORU',Object.entries(c.runtime||{}).map(x=>x.join('=')).join('\n'),'textarea'),field('Při buildu: ID_SECRETU=NÁZEV_V_TREZORU',Object.entries(c.build||{}).map(x=>x.join('=')).join('\n'),'textarea')];for(const f of fields)d.append(f.row);d.append(button('Uložit odkazy',async()=>{try{await act('project-settings',{id:p.id,scope:{projectId:fields[0].input.value.trim(),environment:fields[1].input.value.trim(),secretPath:fields[2].input.value.trim()},runtime:parseMap(fields[3].input.value),build:parseMap(fields[4].input.value)});}catch(e){el('apps-error').textContent=e.message;}},disabled));return d;}
- async function showReleaseDetail(id,releaseId){try{const data=await api('release?id='+encodeURIComponent(id)+'&releaseId='+encodeURIComponent(releaseId));selectedLog=null;el('apps-log-panel').hidden=false;el('apps-log-title').textContent='Report vydání';el('apps-log').textContent=JSON.stringify(data.release,null,2);el('apps-log-panel').scrollIntoView({block:'nearest'});}catch(e){el('apps-error').textContent=e.message;}}
- async function showReleases(p,host){try{const data=await api('releases?id='+p.id);host.replaceChildren();for(const r of data.releases){const row=node('div',undefined,'apps-job'),description=node('span',new Date(r.startedAt).toLocaleString()+' · '+(r.status==='passed'?'Ověřeno':'Neprošlo')+' · '+(r.source?.sha256?.slice(0,12)||'bez sestavení')+(p.releaseId===r.id?' · aktivní':''));row.append(description,button('Report',()=>showReleaseDetail(p.id,r.id)),button('Vrátit tuto verzi',()=>act('project-action',{id:p.id,action:'rollback',releaseId:r.id}),!!state.busy||r.status!=='passed'||p.releaseId===r.id));host.append(row);}if(!data.releases.length)host.append(node('p','Zatím žádné ověřené vydání.'));}catch(e){el('apps-error').textContent=e.message;}}
+ function credentialForm(p,disabled){
+  let editor=credentialEditors.get(p.id);if(!editor){editor={values:null,open:false,revision:0};credentialEditors.set(p.id,editor);}
+  const d=node('details'),summary=node('summary','Přihlašovací údaje projektu');d.dataset.appsCredentials=p.id;d.open=editor.open;
+  d.addEventListener('toggle',()=>{if(alive()&&d.isConnected)editor.open=d.open;});
+  d.append(summary,node('p','Zadej pouze názvy klíčů. Jejich hodnoty se načtou z Infisicalu při použití.'));
+  const c=p.credentials||{},scope=c.scope||{},values=editor.values||[scope.projectId||'',scope.environment||'prod',scope.secretPath||'/',Object.entries(c.runtime||{}).map(x=>x.join('=')).join('\n'),Object.entries(c.build||{}).map(x=>x.join('=')).join('\n')];
+  const fields=[field('Projekt Infisical (ID)',values[0]),field('Prostředí',values[1]),field('Složka v trezoru',values[2]),field('Za běhu: NÁZEV=NÁZEV_V_TREZORU',values[3],'textarea'),field('Při buildu: ID_SECRETU=NÁZEV_V_TREZORU',values[4],'textarea')];
+  for(const f of fields){f.input.addEventListener('input',()=>{editor.values=fields.map(field=>field.input.value);editor.revision++;});d.append(f.row);}
+  d.append(button('Uložit odkazy',async()=>{
+   if(acting||!alive())return;
+   try{
+    const revision=editor.revision,data={id:p.id,scope:{projectId:fields[0].input.value.trim(),environment:fields[1].input.value.trim(),secretPath:fields[2].input.value.trim()},runtime:parseMap(fields[3].input.value),build:parseMap(fields[4].input.value)};
+    await act('project-settings',data,{onSuccess:()=>{
+     // Edits made while the save was pending belong to a newer draft.
+     if(editor.revision===revision)editor.values=null;
+     const current=state?.projects.find(project=>project.id===p.id);if(current)current.credentials={scope:data.scope,runtime:data.runtime,build:data.build};
+     renderedKey='';
+    }});
+   }catch(e){showError('apps-error',e);}
+  },disabled));return d;
+ }
+ async function showReleaseDetail(id,releaseId){try{const data=await api('release?id='+encodeURIComponent(id)+'&releaseId='+encodeURIComponent(releaseId));selectedLog=null;el('apps-log-panel').hidden=false;el('apps-log-title').textContent='Report vydání';el('apps-log').textContent=JSON.stringify(data.release,null,2);el('apps-log-panel').scrollIntoView({block:'nearest'});}catch(e){showError('apps-error',e);}}
+ async function showReleases(p,host){try{const data=await api('releases?id='+p.id);host.replaceChildren();for(const r of data.releases){const row=node('div',undefined,'apps-job'),description=node('span',new Date(r.startedAt).toLocaleString()+' · '+(r.status==='passed'?'Ověřeno':'Neprošlo')+' · '+(r.source?.sha256?.slice(0,12)||'bez sestavení')+(p.releaseId===r.id?' · aktivní':''));row.append(description,button('Report',()=>showReleaseDetail(p.id,r.id)),button('Vrátit tuto verzi',()=>act('project-action',{id:p.id,action:'rollback',releaseId:r.id}),!!state.busy||r.status!=='passed'||p.releaseId===r.id));host.append(row);}if(!data.releases.length)host.append(node('p','Zatím žádné ověřené vydání.'));}catch(e){showError('apps-error',e);}}
  function button(text,handler,disabled=false){const b=node('button',text);b.type='button';b.disabled=disabled;b.onclick=handler;return b;}
- async function showLog(type,id){selectedLog={type,id};await refreshLog();el('apps-log-panel').scrollIntoView({block:'nearest'});}
- async function refreshLog(){if(!selectedLog)return;try{const data=await api((selectedLog.type==='job'?'job-log':'container-log')+'?id='+encodeURIComponent(selectedLog.id));el('apps-log-panel').hidden=false;el('apps-log-title').textContent=selectedLog.type==='job'?'Průběh operace':'Běhový log';el('apps-log').textContent=data.text||'Log je zatím prázdný.';}catch(e){el('apps-log').textContent=e.message;}}
+ async function showLog(type,id){if(!alive())return;selectedLog={type,id};await refreshLog();if(alive())el('apps-log-panel').scrollIntoView({block:'nearest'});}
+ async function refreshLog(){if(!selectedLog)return;try{const data=await api((selectedLog.type==='job'?'job-log':'container-log')+'?id='+encodeURIComponent(selectedLog.id));el('apps-log-panel').hidden=false;el('apps-log-title').textContent=selectedLog.type==='job'?'Průběh operace':'Běhový log';el('apps-log').textContent=data.text||'Log je zatím prázdný.';}catch(e){showError('apps-log',e);}}
  function render(){
+  if(!alive())return;
   const phase=state.worker?.phase,managed=state.worker?.managed,busy=!!state.busy||phase==='saving';if(!addPanelInitialized){el('apps-add-panel').open=!embedded&&!state.projects.length;addPanelInitialized=true;}
   const unavailable=!state.enabled||!state.available&&!managed,held=state.holdUntil>Date.now();
   el('apps-vault-state').textContent=state.vault?.configured?'Trezor je připojený: '+state.vault.origin+(state.vault.expiresAt?' · přístupová identita platí do '+new Date(state.vault.expiresAt).toLocaleDateString():''):'Trezor ještě není připojený.';
@@ -60,7 +99,7 @@
   el('apps-power-note').textContent=held?'Uspání je pozastavené do '+new Date(state.holdUntil).toLocaleTimeString('cs-CZ')+'.':'Build, test a požadavky na aplikaci chrání server před uspáním. Pouhý seznam kontejnerů jej nedrží zapnutý.';
   const settings=state.previewSettings;el('apps-preview-enabled').checked=!!settings?.enabled;el('apps-preview-enabled').disabled=busy||!settings?.configured;el('apps-preview-save').disabled=busy||!settings?.configured;el('apps-preview-state').textContent=settings?.error?'Změnu je třeba zkontrolovat: '+settings.error:!settings?.configured?'Nastavení se připravuje.':settings.enabled?'Přístup přes Tailscale je zapnutý.':'Přístup přes Tailscale je vypnutý. Sestavení a testy uvnitř serveru fungují dál.';
   el('apps-add').querySelector('button').disabled=unavailable||busy;
-  const projects=el('apps-projects');projects.replaceChildren();if(!state.projects.length)projects.append(node('p','Zatím není přidaný žádný projekt.'));
+  const projects=el('apps-projects');for(const details of projects.querySelectorAll('[data-apps-credentials]')){const editor=credentialEditors.get(details.dataset.appsCredentials);if(editor)editor.open=details.open;}projects.replaceChildren();if(!state.projects.length)projects.append(node('p','Zatím není přidaný žádný projekt.'));
   for(const p of state.projects){
    const language=window.HarnessI18n?.language||'cs',when=p.composeFile?p.deployedAt:p.builtAt,label=p.composeFile?(when?'nasazeno':'dosud nenasazeno'):(when?'sestaveno':'dosud nesestaveno'),translated=window.HarnessCopy?.translate(label,language)||label;
    const card=node('article',undefined,'apps-project');card.append(node('h4',p.name),node('p',p.path+' · port '+p.port+' · '+translated+(when?' '+new Date(when).toLocaleString(language==='cs'?'cs-CZ':'en-GB'):'')));
@@ -75,17 +114,30 @@
   const containers=el('apps-containers');containers.replaceChildren();for(const c of visibleContainers){const row=node('tr');row.append(node('td',(state.projects.find(p=>p.id===c.projectId)?.name||c.name)+(c.service?' / '+c.service:'')),node('td',c.state==='running'?'Běží':status[c.state]||c.state),node('td',c.ports.map(p=>p.public+' → '+p.private).join(', ')||'—'));const controls=node('td');controls.append(button('Logy',()=>showLog('container',c.id),!state.enabled),button(c.state==='running'?'Zastavit':'Spustit',()=>act('container-action',{id:c.id,action:c.state==='running'?'stop':'start'}),unavailable||busy));row.append(controls);containers.append(row);}if(!visibleContainers.length){const row=node('tr'),cell=node('td','Žádné spravované kontejnery.');cell.colSpan=4;row.append(cell);containers.append(row);}
   const jobs=el('apps-jobs');jobs.replaceChildren();for(const j of state.jobs.slice().reverse()){const row=node('div',undefined,'apps-job');row.append(node('span',(actionNames[j.action]||j.action)+' · '+(status[j.status]||j.status)+(j.stage?' · '+j.stage:'')+(j.verification==='http-only'?' · pouze dostupnost HTTP':'')+(j.error?' · '+j.error:'')),button('Zobrazit log',()=>showLog('job',j.id)));if(j.export&&j.status==='passed'){const a=node('a','Stáhnout balíček');a.href='/phone/api/apps/export-download?id='+j.id;a.download=j.export.filename;row.append(a);}jobs.append(row);}if(!state.jobs.length)jobs.append(node('p','Zatím neproběhla žádná operace.'));
  }
- async function refresh(){if(loading||!panel.open||document.hidden||(embedded&&options.visible&&!options.visible()))return;loading=true;try{state=await api('state');const key=JSON.stringify([state.enabled,state.available,state.error,state.busy,state.worker,state.previewSettings,state.holdUntil,state.draining,state.projects,state.containers.map(c=>[c.id,c.name,c.state,c.ports]),state.jobs,state.vault?.configured,state.remoteTargets,state.features]);if(key!==renderedKey&&!(el('apps-projects').contains(document.activeElement)&&document.activeElement?.matches('input,textarea,select'))){render();renderedKey=key;}await refreshLog();}catch(e){el('apps-connection').textContent='Správa aplikací není dostupná. '+e.message;}finally{loading=false;}}
+ async function refresh({afterMutation=false}={}){
+  if(!alive()||document.hidden||(embedded&&options.visible&&!options.visible()))return;
+  if(loading){if(afterMutation)refreshAfterMutation=true;return;}
+  loading=true;const epoch=stateEpoch;
+  try{
+   const next=await api('state');
+   // A GET begun before a confirmed write cannot replace the saved references.
+   if(epoch!==stateEpoch){refreshAfterMutation=true;return;}
+   state=next;const key=JSON.stringify([state.enabled,state.available,state.error,state.busy,state.worker,state.previewSettings,state.holdUntil,state.draining,state.projects,state.containers.map(c=>[c.id,c.name,c.state,c.ports]),state.jobs,state.vault?.configured,state.remoteTargets,state.features]);
+   if(key!==renderedKey&&!(el('apps-projects').contains(document.activeElement)&&document.activeElement?.matches('input,textarea,select'))){render();renderedKey=key;}
+   await refreshLog();
+  }catch(e){if(alive()&&e.name!=='AbortError')el('apps-connection').textContent='Správa aplikací není dostupná. '+e.message;}
+  finally{loading=false;if(refreshAfterMutation){refreshAfterMutation=false;if(alive())void refresh();}}
+ }
  el('apps-add').onsubmit=e=>{e.preventDefault();void act('register',{path:el('apps-path').value.trim()});};
  el('apps-package').onclick=async()=>{const relative=el('apps-path').value.trim(),result=await act('scaffold',{path:relative});if(result){el('apps-log-panel').hidden=false;el('apps-log-title').textContent='Připravený Docker · '+result.runtime;el('apps-log').textContent=[...result.warnings,...Object.entries(result.files).map(([n,v])=>n+'\n'+v)].join('\n\n');await act('register',{path:relative});}};
- el('apps-vault-form').onsubmit=async e=>{e.preventDefault();const result=await act('vault-config',{origin:el('apps-vault-origin').value,clientId:el('apps-vault-client').value.trim(),clientSecret:el('apps-vault-secret').value});el('apps-vault-secret').value='';if(result)el('apps-vault-state').textContent='Připojení trezoru ověřeno a uloženo.';};
+ el('apps-vault-form').onsubmit=async e=>{e.preventDefault();const result=await act('vault-config',{origin:el('apps-vault-origin').value,clientId:el('apps-vault-client').value.trim(),clientSecret:el('apps-vault-secret').value});if(!alive())return;el('apps-vault-secret').value='';if(result)el('apps-vault-state').textContent='Připojení trezoru ověřeno a uloženo.';};
  el('apps-target-form').onsubmit=e=>{e.preventDefault();const v=targetFields.map(f=>f.input.value.trim());void act('target-settings',{id:v[0],name:v[1],host:v[2],user:v[3],port:Number(v[4]),hostKey:v[5],scope:{projectId:v[6],environment:v[7],secretPath:v[8]},keySecret:v[9]});};
  el('apps-wake').onclick=()=>void act('worker-action',{action:'wake'});el('apps-sleep').onclick=()=>void act('worker-action',{action:'sleep'});el('apps-hold').onclick=()=>void act('hold',{minutes:15});el('apps-release').onclick=()=>void act('hold',{minutes:0});el('apps-preview-save').onclick=()=>void act('preview-settings',{enabled:el('apps-preview-enabled').checked});
- el('apps-close').onclick=()=>panel.close();panel.addEventListener('close',()=>restoreFocus?.focus());
- if(!embedded)window.openHarnessApps=(options={})=>{restoreFocus=document.activeElement;if(!panel.open)panel.showModal();if(options.settings){el('apps-settings-group').open=true;el('apps-preview-settings').open=true;}void refresh().then(()=>{if(options.settings)el('apps-preview-settings').scrollIntoView({block:'start'});});};
+ el('apps-close').onclick=()=>panel.close();panel.addEventListener('close',()=>{cancelRequests();restoreFocus?.focus();});
+ if(!embedded)window.openHarnessApps=(options={})=>{if(lifetime.signal.aborted)return;restoreFocus=document.activeElement;if(!panel.open)panel.showModal();if(options.settings){el('apps-settings-group').open=true;el('apps-preview-settings').open=true;}void refresh().then(()=>{if(alive()&&options.settings)el('apps-preview-settings').scrollIntoView({block:'start'});});};
  const timer=setInterval(()=>void refresh(),5000);
  void refresh();
- return{element:panel,refresh,async useProject(relative){el('apps-path').value=relative;const result=await act('scaffold',{path:relative});if(!result)return false;return Boolean(await act('register',{path:relative}));},destroy(){clearInterval(timer);lifetime.abort();panel.remove();style.remove();}};
+ return{element:panel,refresh,async useProject(relative){if(!alive())return false;el('apps-path').value=relative;const result=await act('scaffold',{path:relative});if(!result)return false;return Boolean(await act('register',{path:relative}));},destroy(){clearInterval(timer);lifetime.abort();cancelRequests();credentialEditors.clear();panel.remove();style.remove();}};
  }};
  if(!window.HARNESS_NATIVE_WORKBENCH)window.HarnessApps.mount();
 })();
