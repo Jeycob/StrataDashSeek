@@ -45,7 +45,11 @@ export class WorkspaceManager {
     return this.inOrder(async () => {
       if (!this.ctx.workspaceRegistry.get(workspaceId)) throw new WorkbenchError('WORKSPACE_NOT_FOUND', 'Workspace not found.', 404);
       const settings = validateSettings(input); await this.ctx.llm.resolveCallConfig({ provider: settings.provider, model: settings.model, reasoningEffort: settings.reasoningEffort, maxTokens: settings.maxTokens, temperature: settings.temperature });
-      this.data.workspaces[workspaceId] = { settings, at: Date.now() }; await this.save(); return settings;
+      const overrides = Object.fromEntries(Object.keys(input).map(key => [key, settings[key]]));
+      const previous = this.data.workspaces[workspaceId];
+      this.data.workspaces[workspaceId] = { settings: overrides, at: Date.now() };
+      try { await this.save(); } catch (error) { if (previous === undefined) delete this.data.workspaces[workspaceId]; else this.data.workspaces[workspaceId] = previous; throw error; }
+      return settings;
     });
   }
   async applyDefaults(agent, source) {

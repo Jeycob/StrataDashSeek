@@ -30,6 +30,8 @@
 .harness-native-settings dt { font-weight: 600; }
 .harness-native-settings dd { margin: 0; }
 .harness-native-surface [data-setting-source] { display: block; margin-top: 4px; color: var(--dsw-alias-label-secondary, #68717e); font-size: 11px; }
+.harness-native-surface .wb-setting-reset { margin-top: 6px; font-size: 12px; white-space: normal; }
+.harness-native-surface .wb-setting-reset[hidden] { display: none; }
 .harness-native-surface .wb-modal { max-height: calc(100dvh - 32px); overflow: auto; overflow-wrap: anywhere; }
 @container (max-width: 560px) {
   .harness-native-surface .wb-form { grid-template-columns: minmax(0, 1fr); padding: 12px; gap: 12px; }

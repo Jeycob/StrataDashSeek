@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "scope": "Sparse workspace setting overrides, per-field reset, concurrent drafts and truthful save notices",
+  "sourceReview": "Independent integration review of the UI worker change",
+  "independentChecks": {"browserSource": 2, "browserExactIsolatedBundle": 2, "actualManagerPersistence": 2, "failed": 0, "skipped": 0},
+  "isolatedBundle": {"bytes": 138426, "sha256": "b0ca0134cbd90bacace5f5227df0322605290c6d96a41f8b0a4799dd4006899c"},
+  "workerEvidence": {"actualNativeHost": "Targeted settings check passed", "renderer": "EN/CS at 320, 390, 768 and narrow desktop panel; reset focus checked"},
+  "limitations": ["Existing stored full settings are not heuristically migrated", "No production activation claimed", "The separate device/Apps UI wave is excluded from this generated bundle"]
+}
