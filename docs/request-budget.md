@@ -1,9 +1,12 @@
 # Request budget and measurement
 
-Reviewed 2026-11-14. The Worker changes are merged into `main` and deployed to
-the existing Worker. The private monitor file is merged but awaits server
-availability and coordinated deployment; an existing open browser also needs
-to load the updated file. See `deployments/release-polling-20261114/status.json`.
+Reviewed 2026-11-15. The Worker changes are merged into `main` and deployed to
+the existing Worker. The running private server also serves the signed monitor,
+phone bootstrap and Service Worker sources; all three actual HTTP responses
+were compared with the active signed release. Existing open browsers must load
+the updated files. The earlier pending-server status in
+`deployments/release-polling-20261114/status.json` describes that dated release;
+see [current runtime evidence](../deployments/startup-runtime-live-20261115/status.json).
 
 ## What the graph proves
 
@@ -32,7 +35,7 @@ through another key or endpoint.
 | Source | Before | Prepared behavior |
 | --- | --- | --- |
 | Wake portal | Status delay grows to5s; capacity retry15s;6-minute bound | Status2s then grows to15s, jitter; same6-minute bound; hidden tab pauses; honors Retry-After |
-| Private mobile bootstrap | Wake plus local health; capacity15s | Owned by the UI chat; Worker still deduplicates its wake attempts |
+| Private mobile bootstrap | Wake plus local health; capacity15s | One in-flight preparation; health delay grows from0.8s to5s with jitter;6-minute bound; hidden client stops; capacity wake retry15s; Worker deduplicates |
 | Desktop opener | Status every2s for at most240s | Unchanged client; Worker shares reads while preserving SSH metadata |
 | Visible monitor | Every3s even when idle/unavailable | Busy3s, idle15s, failures15/30/60s, jitter; closed/hidden means no requests |
 | Billing collector | Direct Vast read every60s while server runs | Unchanged; up to1440 reads/day at continuous uptime |

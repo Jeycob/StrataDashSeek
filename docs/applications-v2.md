@@ -88,7 +88,7 @@ The integrated local regression suite passed 180 checks, with no failures or ski
 
 The same original Vast instance became available and the v2 service was deployed with backups, without restarting the model or main Harness. Real BuildKit secret mounts, runtime Infisical references containing dollar signs and Unicode, application tests, desktop/mobile Chromium checks, single-container rollback despite a broken working manifest, authenticated export and a web/backend/Redis Compose stack passed. Compose rollback preserved a database marker. Live testing also found and fixed the Buildx cache ownership, partial-stop recovery, stop deadlines and preview-port collision issues. The multi-container worker sleep/cold-wake retest passed: clean sleep took 41.7 seconds and wake 154.4 seconds, with the same running containers, preserved Redis data and fresh control-isolation proof. This small pilot validates the declared fixture, not a production shop or arbitrary database migrations.
 
-Whole-instance restoration preserved Native projects, session history, the active Apple registration and the original Docker container/image/writable marker. Six operational vault records were verified against live sources; five static runtime files now resolve to private RAM materialized from the Operations reader. The mutable Native credential store has a verified vault recovery snapshot and retains its local cache. Runtime machine identities remain separate and the temporary writer's project memberships were removed and denied through the API. Root-only original backups remain for recovery. Startup hydration is configured for the next supervisor start; a whole-instance cold start after this vault cutover has not been tested. No new paid instance, disk enlargement or replacement model was created.
+Whole-instance restoration preserved Native projects, session history, the active Apple registration and the original Docker container/image/writable marker. Six operational vault records were verified against live sources; five static runtime files now resolve to private RAM materialized from the Operations reader. The mutable Native credential store has a verified vault recovery snapshot and retains its local cache. Runtime machine identities remain separate and the temporary writer's project memberships were removed and denied through the API. Root-only original backups remain for recovery. After the original instance woke on 2026-11-15, standard supervisor startup restored all five RAM files from Infisical and all eleven services became available, preserving 56 chats. This cycle required operator recovery of a Python bytecode file added to the signed release; the integrity gate correctly blocked the initial startup. Managed services now prevent those bytecode writes. A further unattended whole-instance cold cycle with this fix remains unverified. No new paid instance, disk enlargement or replacement model was created. See [runtime evidence](../deployments/startup-runtime-live-20261115/status.json).
 
 ## Runtime awareness and automatic storage cleanup
 
@@ -174,3 +174,12 @@ storage configuration or migrate retained application data. A positive result
 establishes only the tested guest-kernel capability, not sufficient disk space
 or a successful Docker deployment. Local regression fixtures do not substitute
 for executing the diagnostic on the actual worker.
+
+On 2026-11-15 the actual managed guest kernel `6.18.60-0-virt` passed all twelve
+diagnostic checks, including verified unmount and scratch cleanup. Docker still
+reported VFS. Automatic unused-cache cleanup increased guest free space from
+252,125,184 to 1,039,491,072 bytes. All five project image/container/release
+references were unchanged and all seven previously remembered managed
+containers remained present. The measured 170.9 seconds includes cold worker
+startup and cache cleanup, not just the small filesystem test. This does not
+establish that the shop's build fits or authorize a storage migration.

@@ -116,3 +116,13 @@ This is a code update gate, not a new whole-stack installer. Runtime upgrades,
 signer rotation, model changes and data migrations require their own checked
 maintenance plan. A code release that passes startup checks can still have an
 application defect; inspect service health after a deployment.
+
+Live recovery on 2026-11-15 activated signed revision `4cbb7a1` through the
+existing verifier, then atomically upgraded the stable updater while services
+were stopped. The old updater was retained; policy, keyring, entry script,
+extractor and onstart file were unchanged. A subsequent standard bootstrap
+verified main at 16:25:25.482 UTC before Native started at 16:25:29.780 UTC.
+The active release digest still matched after its Python services had started.
+See [runtime evidence](../deployments/startup-runtime-live-20261115/status.json).
+This proves the checked recovery and startup ordering, not a later unattended
+whole-instance cold cycle or the success of every application.

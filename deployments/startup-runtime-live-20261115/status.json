@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "observedAt": "2026-11-15T16:37:07.549Z",
+  "activeRevision": "4cbb7a1111aa17942941ef83fea8bd2c78cc9447",
+  "signedStartupRecovery": {
+    "at": "2026-11-15T16:24:51.472Z",
+    "signatureVerified": true,
+    "stableBootstrapUpgraded": true,
+    "previousUpdaterRetained": true,
+    "trustPolicyEntryExtractorUnchanged": true,
+    "gateReadyAt": "2026-11-15T16:25:25.482Z",
+    "nativeStartedAt": "2026-11-15T16:25:29.780Z",
+    "gateBeforeNative": true,
+    "releaseDigestMatchedAfterServicesStarted": true,
+    "allElevenServicesPresent": true,
+    "vaultRamFilesRestored": 5,
+    "chatsPreserved": 56,
+    "unattendedColdCycleAfterFixVerified": false
+  },
+  "filesChangesCanary": {
+    "at": "2026-11-15T16:27:54.836Z",
+    "passed": true,
+    "checks": {
+      "ownerOnly": true,
+      "sameOrigin": true,
+      "clientRootRefused": true,
+      "traversalRefused": true,
+      "secretExcluded": true,
+      "unknownSessionRefused": true,
+      "actualFilesystemAddition": true,
+      "selectedDiffUpdated": true,
+      "conditionalResponse": true,
+      "revertedSelectionCleared": true,
+      "fixtureRemoved": true,
+      "conventionalRuntimeCredentialPathsRefused": true
+    },
+    "modelRequests": 0
+  },
+  "runtimeAwareness": {
+    "actualModelTool": "runtime_capabilities",
+    "toolCompletedAt": "2026-11-15T16:36:02.188Z",
+    "isError": false,
+    "storageProfileSource": "Verified managed worker, then bounded read-only project capability tool"
+  },
+  "storageDiagnostic": {
+    "at": "2026-11-15T16:33:20.652Z",
+    "durationMs": 170901,
+    "includesColdStartupAndCacheCleanup": true,
+    "passed": true,
+    "overlayProbe": {
+      "version": 1,
+      "kernel": "6.18.60-0-virt",
+      "status": "supported",
+      "supported": true,
+      "failedStep": "none",
+      "moduleInitiallyLoaded": true,
+      "moduleLoadedByProbe": false,
+      "moduleRestore": "not-required",
+      "checks": {
+        "guestIdentity": true,
+        "capacity": true,
+        "fixtureCreated": true,
+        "sameDevice": true,
+        "moduleAvailable": true,
+        "mounted": true,
+        "lowerRead": true,
+        "copyUp": true,
+        "deleteWhiteout": true,
+        "lowerUnchanged": true,
+        "unmounted": true,
+        "cleaned": true
+      },
+      "checkedAt": 1794760191769
+    },
+    "workerProfile": {
+      "vcpus": 1,
+      "memoryMiB": 2048,
+      "diskBytes": 3221225472,
+      "acceleration": "tcg",
+      "configuredStorageDriver": "vfs",
+      "observedStorageDriver": "vfs",
+      "storageObservedAt": 1794760156539,
+      "observedInRunningBoot": true,
+      "configuredLayerCopies": "full-parent-directory",
+      "peakBuildBytesKnown": false
+    },
+    "freeWorkerBytes": 1039491072,
+    "freeWorkerInodes": 155589,
+    "projectCount": 5,
+    "projectImageContainerReleaseReferencesUnchanged": true,
+    "previousManagedContainerCount": 7,
+    "allPreviousManagedContainersPresent": true,
+    "currentManagedContainerCount": 13,
+    "countExplanation": "Ready daemon includes retained managed test containers which remembered sleep state excludes.",
+    "capacityMeasurements": [
+      "Docker worker before capacity check: freeBytes=252125184, freeInodes=138748; requiredBytes=536870912, requiredInodes=16384.",
+      "Docker worker after unused build-cache cleanup: freeBytes=1039491072, freeInodes=155589; requiredBytes=536870912, requiredInodes=16384."
+    ],
+    "storageDriverChanged": false,
+    "newBuilderInstalled": false
+  },
+  "staticAssets": [
+    {
+      "route": "/phone/monitor.js",
+      "sha256": "7c03bdda509afe7d2ecbf96d65d119155f0c7b4b3ed049422ce71acd745c8017",
+      "http": 200,
+      "matchesSignedActiveSource": true,
+      "observedAt": "2026-11-15T16:30:53.235Z"
+    },
+    {
+      "route": "/phone/boot.js",
+      "sha256": "a00a92a64f649759dfee2c679df3b51da841929f13d77c90a0378c041a2bf342",
+      "http": 200,
+      "matchesSignedActiveSource": true,
+      "observedAt": "2026-11-15T16:30:53.235Z"
+    },
+    {
+      "route": "/phone/sw.js",
+      "sha256": "7287b93a391d4efc6947115eec243702162cf34305ef557e1a1d2a5fa468767c",
+      "http": 200,
+      "matchesSignedActiveSource": true,
+      "observedAt": "2026-11-15T16:30:53.235Z"
+    }
+  ],
+  "localRegression": {
+    "passed": 443,
+    "failed": 0,
+    "skipped": 0,
+    "files": 59,
+    "source": {
+      "sha256": "d3c531917bce67ff166dd7891a34e7b42866be9d9376b4dc544ba051db09b217",
+      "files": 273,
+      "definition": "Sorted tracked and nonignored untracked JS/Python/config/HTML/CSS/Markdown sources; path + NUL + LF-normalized UTF-8 + NUL. Deployment evidence subdirectories excluded."
+    }
+  },
+  "historicalBenchmark": {
+    "passed": 14,
+    "failed": 4,
+    "scope": "benchmarks/disposable-20261114/fixture/"
+  },
+  "limits": [
+    "No driver or builder migration was performed",
+    "Probe support and native tests are not a successful shop Docker deployment",
+    "No new rental, disk increase, model or LLM cache change",
+    "An updated browser must load new static sources; no measured daily Worker quota reduction is claimed"
+  ]
+}
