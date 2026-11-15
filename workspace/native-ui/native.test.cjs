@@ -48,6 +48,12 @@ test('rc.2 Native Settings, CtrlAltP, Docker and EN/CZ compose on desktop and mo
   await page.evaluate(address=>NativeFixture.openResource(address),fileAddressFor(sid,directory,path.join(directory,'Preview.txt')));await page.locator('[data-files-navigator-toggle]').click();await page.getByRole('button',{name:'native-fixture.txt',exact:true}).waitFor();assert.equal(fileRequests.at(-1).sessionId,sid);
   await page.keyboard.press('Control+Alt+p');await page.getByRole('button',{name:'native-fixture.txt',exact:true}).click();assert.equal(await page.locator('.wb-editor').inputValue(),'Native isolated project');assert.equal(fileRequests.every(r=>r.sessionId===sid),true);assert.ok(await page.locator('.wb-editor').evaluate(e=>e.offsetHeight>=300));
   await page.screenshot({path:path.join(evidence,'native-files.png'),fullPage:true});
+  await page.getByRole('button',{name:'Rename',exact:true}).click();
+  const renameDialog=page.locator('dialog[data-workbench-dialog="rename"]');await renameDialog.waitFor();
+  assert.equal(await renameDialog.locator('input').evaluate(e=>e===document.activeElement),true);
+  await page.screenshot({path:path.join(evidence,'native-editor-rename-dialog.png'),fullPage:true});
+  await page.keyboard.press('Escape');await renameDialog.waitFor({state:'detached'});
+  assert.equal(await page.locator('.wb-editor').inputValue(),'Native isolated project');
   await page.getByRole('button',{name:'Delete',exact:true}).click();await page.locator('.wb-editor').waitFor({state:'detached'});assert.equal(deleted.has(sid),true);assert.equal(fileRequests.filter(r=>r.operation==='delete').length,1);
   const other=path.join(directory,'second-source');fs.mkdirSync(other);fs.writeFileSync(path.join(other,'Second.txt'),'Second preview');const sid2=await page.evaluate(cwd=>NativeFixture.create(cwd),other);fixture.projects[sid2]={root:'/data/harness/workspaces/projects/second-isolated'};fixture.workspaces[0].sessionIds.push(sid2);
   await page.evaluate(id=>HarnessNativeUI.openFiles(id),sid2);await page.getByRole('button',{name:'native-fixture.txt',exact:true}).waitFor();assert.equal(fileRequests.at(-1).sessionId,sid2);assert.match(await page.locator('[id$="wb-info"]:visible').innerText(),/second-isolated/);
