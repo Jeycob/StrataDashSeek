@@ -11,6 +11,7 @@ function createAppsService(cfg={},injected){
  const previews=[];if(cfg.preview?.enabled)for(let n=0;n<(cfg.portCount||8);n++)previews.push(createPreview(manager,(cfg.firstPort||18080)+n,(cfg.preview.firstListenPort||18180)+n));
  const server=http.createServer(async(req,res)=>{try{
   if(!same(req.headers['x-harness-apps-key'],key))return json(res,401,{error:'Unauthorized'});
+  if(manager.serviceClosing)return json(res,503,{error:'Application service is shutting down'});
   const u=new URL(req.url,'http://loopback');
   if(req.method==='GET'&&u.pathname==='/state')return json(res,200,await manager.state());
   if(req.method==='GET'&&u.pathname==='/job-log')return json(res,200,{text:manager.jobLog(u.searchParams.get('id'))});
@@ -39,4 +40,15 @@ function createAppsService(cfg={},injected){
  server.on('close',()=>{clearInterval(clock);for(const p of previews)p.close();});return{server,manager,previews};
 }
 module.exports={createAppsService};
-if(require.main===module){const file=process.argv[2]||'/data/harness/apps-config.json';const cfg=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{};const {server,manager}=createAppsService(cfg);server.listen(cfg.port||3093,'127.0.0.1',()=>console.log('Private application worker API ready'));for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{manager.worker?.serial?.destroy();manager.worker?.child?.unref();server.close(()=>process.exit());setTimeout(()=>process.exit(),3000).unref();});}
+if(require.main===module){
+ const file=process.argv[2]||'/data/harness/apps-config.json',cfg=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{};
+ require('./apps-service-owner.cjs').ownAppsService(cfg,createAppsService).then(({server,manager})=>{
+  server.on('error',error=>{console.error('Application service failed: '+(error.code||'LISTEN_FAILED'));process.exit(1);});
+  server.listen(cfg.port||3093,'127.0.0.1',()=>console.log('Private application worker API ready'));
+  for(const signal of ['SIGTERM','SIGINT'])process.once(signal,()=>{
+   // Retain the kernel lease until process exit, including the shutdown grace.
+   // A background deployment must not overlap a replacement controller.
+   manager.serviceClosing=true;manager.worker?.serial?.destroy();manager.worker?.child?.unref();server.close(()=>process.exit());setTimeout(()=>process.exit(),3000).unref();
+  });
+ }).catch(error=>{console.error('Application service not started: '+(error.code||'INITIALIZATION_FAILED'));process.exitCode=1;});
+}

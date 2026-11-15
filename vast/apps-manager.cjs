@@ -6,7 +6,7 @@ const {StringDecoder}=require('node:string_decoder');
 const {DockerVM}=require('./apps-vm.cjs');
 const {redact}=require('./apps-command.cjs');
 const {createManagedContainer,reconcilePendingCreations,reconcileLegacyCreations,retainJobs}=require('./apps-container-create.cjs');
-function atomic(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const tmp=file+'.'+process.pid+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
+const {atomicJson:atomic}=require('../mobile/private-json.cjs');
 function cleanContainer(c){return{id:c.Id,name:(c.Names?.[0]||'').replace(/^\//,''),projectId:c.Labels?.[LABEL+'.project'],service:c.Labels?.['com.docker.compose.service']||null,releaseId:c.Labels?.[LABEL+'.release']||null,state:c.State,status:c.Status,image:c.Image,createdAt:c.Created*1000,ports:(c.Ports||[]).filter(p=>p.PublicPort).map(p=>({private:p.PrivatePort,public:p.PublicPort}))};}
 class AppsManager {
  constructor(cfg={},engine,worker){
@@ -23,9 +23,9 @@ class AppsManager {
  save(){this.store.jobs=retainJobs(this.store.jobs);atomic(this.storeFile,this.store);}
  heartbeat(){const w=this.worker?.status();atomic(this.cfg.activityFile||path.join(this.cfg.stateDir,'activity.json'),{at:Date.now(),active:this.busy||this.previewRequests||this.holdUntil>Date.now()?1:0,lastActivity:this.lastActivity,holdUntil:this.holdUntil,previewRequests:this.previewRequests,servicePid:process.pid,worker:w||null,draining:!!this.sleepToken()});}
  setBusy(value){this.busy=value;this.lastActivity=Date.now();this.heartbeat();}
- requireEnabled(){if(!this.cfg.enabled)throw Object.assign(Error('Docker worker is not enabled'),{status:409});}
+ requireEnabled(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(!this.cfg.enabled)throw Object.assign(Error('Docker worker is not enabled'),{status:409});}
  sleepToken(){if(this.drain&&this.drain.until<=Date.now())this.drain=null;return this.drain?.token;}
- acceptActivity(){if(this.sleepToken()){this.drain=null;this.heartbeat();throw Object.assign(Error('Server sleep was cancelled; retry this action shortly'),{status:409});}this.lastActivity=Date.now();this.worker?.touch();this.heartbeat();}
+ acceptActivity(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(this.sleepToken()){this.drain=null;this.heartbeat();throw Object.assign(Error('Server sleep was cancelled; retry this action shortly'),{status:409});}this.lastActivity=Date.now();this.worker?.touch();this.heartbeat();}
  async ready(){if(this.worker)await this.worker.ensure();else await this.engine.available();await reconcilePendingCreations(this);await reconcileLegacyCreations(this);}
  previewPortFor(project){const reserved=new Set(Object.values(this.store.projects).filter(p=>p.id!==project.id).map(p=>p.previewPort??p.hostPort));const previous=project.previewPort??project.hostPort;if(previous&&!reserved.has(previous))return previous;for(let port=this.cfg.firstPort;port<this.cfg.firstPort+this.cfg.portCount;port++)if(!reserved.has(port))return port;throw Error('Application preview port pool is full');}
  canSleep(){return!this.busy&&!this.previewRequests&&this.holdUntil<=Date.now()&&!this.worker?.pending&&!this.worker?.stopping;}

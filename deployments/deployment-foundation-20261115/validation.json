@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "scope": "Deployment utility foundations, durable service ownership and synced Apps metadata; orchestration adapters remain pending",
+  "independentPeerReview": "Three reproduced contract gaps fixed: late accepted HTTP work during close, first-deployment data alias, missing capacity requirements. Source recheck passed.",
+  "checks": {"windowsNode": 17, "linuxNode": 17, "linuxPlatformAssertions": 9, "legacyAppsRegression": 37, "failed": 0, "skipped": 0, "overlappingSets": true},
+  "isolatedSource": {"managerSha256": "c395c8c7983bbc12e0a7bf165da87201e4148c7f64437bda55830f8a3d6e0dbe", "serviceSha256": "98f37a2ce0190c6bb9fec8faa23777ab7335b5a3a51981003c2fbfc9942b11be", "newAppsContextRoutesExcluded": true},
+  "limits": ["No claim that existing Compose now isolates production data", "No Docker engine cutover or migration acceptance", "No production deployment or power-loss proof", "Trusted helper-container adapter, real capacity wiring and restart reconciliation remain required"]
+}
