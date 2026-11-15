@@ -38,6 +38,7 @@ through another key or endpoint.
 | Private mobile bootstrap | Wake plus local health; capacity15s | One in-flight preparation; health delay grows from0.8s to5s with jitter;6-minute bound; hidden client stops; capacity wake retry15s; Worker deduplicates |
 | Desktop opener | Status every2s for at most240s | Unchanged client; Worker shares reads while preserving SSH metadata |
 | Visible monitor | Every3s even when idle/unavailable | Busy3s, idle15s, failures15/30/60s, jitter; closed/hidden means no requests |
+| Infisical authentication | Each concurrent cold caller can log in separately | Share one in-flight login per service instance and exact credential identity; retain the existing short token lifetime |
 | Billing collector | Direct Vast read every60s while server runs | Unchanged; up to1440 reads/day at continuous uptime |
 | Idle guard | One direct stop transition when idle | Unchanged; monitor/status reads never count as activity |
 | Benchmark expiry | Scheduled only with explicit fixed configuration | Unchanged; no Cron trigger was found in the inspected production config |
@@ -64,6 +65,15 @@ Different isolates/regions, direct Vast callers and restarts do not share a
 lock or quota. This is not an account-wide rate limiter. No paid state service
 or credential-bearing shared HTTP cache is introduced. Authentication runs
 before cache lookup and before304; status and metrics never issue PUT.
+
+The vault regression uses injected synthetic responses: twelve simultaneous
+secret reads previously made twelve login requests; the corrected path makes
+one login and still makes all twelve secret reads. Secret values are not cached.
+Identity rotation invalidates token reuse; a connection candidate's token is
+published only after its configuration is atomically saved. Failed login can
+be retried by a later caller; failed secret writes are not automatically replayed.
+Separate service processes keep separate authentication state. This measures
+only login coalescing, not a production or account-wide quota reduction.
 
 ## Evidence and follow-up
 

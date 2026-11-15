@@ -77,7 +77,7 @@
  if(embedded){style.textContent+='#'+prefix+'root{position:relative;inset:auto;width:100%;height:100%;min-height:200px;padding:16px;overflow:auto}#'+prefix+'root>.apps-head{display:none}';if(options.settings){for(const child of panel.children)child.hidden=child!==el('apps-settings-group')&&child!==el('apps-error')&&child!==el('apps-connection');el('apps-settings-group').open=true;}else{el('apps-settings-group').hidden=true;}}
  if(embedded)style.textContent+='#'+prefix+'root{container-type:inline-size}#'+prefix+'root button{white-space:normal}@container(max-width:600px){#'+prefix+'root table,#'+prefix+'root tbody{display:block;width:100%}#'+prefix+'root thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}#'+prefix+'root tr{display:flex;flex-wrap:wrap;border:1px solid #dce5e9;border-radius:9px;margin:10px 0;padding:10px}#'+prefix+'root td{display:block;white-space:normal;border:0;padding:4px;overflow-wrap:anywhere}#'+prefix+'root td:first-child{font-weight:600;width:100%}#'+prefix+'root td:last-child{display:flex;flex-wrap:wrap;gap:6px;width:100%}#'+prefix+'root .apps-actions{flex-direction:column}#'+prefix+'root .apps-actions>*{max-width:100%;width:100%}#'+prefix+'apps-add>div{flex-direction:column}}';
  if(embedded&&window.HarnessNativeTheme){panel.classList.add('harness-native-surface');style.textContent=window.HarnessNativeTheme.css(style.textContent,panel.id);}
- let loading=false,acting=false,state=null,selectedLog=null,restoreFocus=null,renderedKey='',addPanelInitialized=false;
+ let loading=false,acting=false,state=null,selectedLog=null,restoreFocus=null,renderedKey='',connectionText='',addPanelInitialized=false;
  const credentialEditors=new Map(),requests=new Set();let stateEpoch=0,refreshAfterMutation=false;
  const alive=()=>!lifetime.signal.aborted&&panel.open;
  const cancelled=()=>new DOMException('Panel request cancelled.','AbortError');
@@ -130,6 +130,12 @@
  function button(text,handler,disabled=false){const b=node('button',text);b.type='button';b.disabled=disabled;b.onclick=handler;return b;}
  async function showLog(type,id){if(!alive())return;selectedLog={type,id};await refreshLog();if(alive())el('apps-log-panel').scrollIntoView({block:'nearest'});}
  async function refreshLog(){if(!selectedLog)return;try{const data=await api((selectedLog.type==='job'?'job-log':'container-log')+'?id='+encodeURIComponent(selectedLog.id));el('apps-log-panel').hidden=false;el('apps-log-title').textContent=selectedLog.type==='job'?'Průběh operace':'Běhový log';el('apps-log').textContent=data.text||'Log je zatím prázdný.';}catch(e){showError('apps-log',e);}}
+ function setConnectionText(text){if(alive()&&connectionText!==text){connectionText=text;el('apps-connection').textContent=text;}}
+ function renderConnection(){
+  const phase=state.worker?.phase,managed=state.worker?.managed,busy=!!state.busy||phase==='saving';
+  const phases={starting:'Probouzím Docker…',restoring:'Obnovuji kontejnery…',recovering:'Obnovuji připojení k Dockeru…',saving:'Ukládám kontejnery a uspávám Docker…'};
+  setConnectionText(!state.enabled?'Docker zatím není zapnutý.':managed&&phase==='asleep'?'Docker spí. Při sestavení, testu nebo otevření aplikace se automaticky probudí.':phases[phase]||(!state.available?'Docker není dostupný. '+(state.error||state.worker?.error||'Zkontroluj připojení.'):busy?'Probíhá operace s aplikací.':'Docker je připravený.'));
+ }
  function render(){
   if(!alive())return;
   const phase=state.worker?.phase,managed=state.worker?.managed,busy=!!state.busy||phase==='saving';if(!addPanelInitialized){el('apps-add-panel').open=!embedded&&!state.projects.length;addPanelInitialized=true;}
@@ -137,8 +143,7 @@
   el('apps-vault-state').textContent=state.vault?.configured?'Trezor je připojený: '+state.vault.origin+(state.vault.expiresAt?' · přístupová identita platí do '+new Date(state.vault.expiresAt).toLocaleDateString():''):'Trezor ještě není připojený.';
   if(!el('apps-vault-form').contains(document.activeElement)){if(!el('apps-vault-client').value)el('apps-vault-client').value=state.vault?.clientId||'';if(state.vault?.origin)el('apps-vault-origin').value=state.vault.origin;}
   el('apps-target-list').replaceChildren(...(state.remoteTargets||[]).map(t=>node('p',t.name+' · '+t.user+'@'+t.host+':'+t.port)));
-  const phases={starting:'Probouzím Docker…',restoring:'Obnovuji kontejnery…',recovering:'Obnovuji připojení k Dockeru…',saving:'Ukládám kontejnery a uspávám Docker…'};
-  el('apps-connection').textContent=!state.enabled?'Docker zatím není zapnutý.':managed&&phase==='asleep'?'Docker spí. Při sestavení, testu nebo otevření aplikace se automaticky probudí.':phases[phase]||(!state.available?'Docker není dostupný. '+(state.error||state.worker?.error||'Zkontroluj připojení.'):busy?'Probíhá operace s aplikací.':'Docker je připravený.');
+  renderConnection();
   el('apps-power').hidden=!state.enabled;el('apps-wake').disabled=busy||!managed||['ready','starting','restoring','recovering'].includes(phase);el('apps-sleep').disabled=busy||!managed||phase!=='ready'||held;el('apps-hold').disabled=busy;el('apps-release').hidden=!held;el('apps-release').disabled=busy;
   el('apps-power-note').textContent=held?'Uspání je pozastavené do '+new Date(state.holdUntil).toLocaleTimeString('cs-CZ')+'.':'Build, test a požadavky na aplikaci chrání server před uspáním. Pouhý seznam kontejnerů jej nedrží zapnutý.';
   const settings=state.previewSettings;el('apps-preview-enabled').checked=!!settings?.enabled;el('apps-preview-enabled').disabled=busy||!settings?.configured;el('apps-preview-save').disabled=busy||!settings?.configured;el('apps-preview-state').textContent=settings?.error?'Změnu je třeba zkontrolovat: '+settings.error:!settings?.configured?'Nastavení se připravuje.':settings.enabled?'Přístup přes Tailscale je zapnutý.':'Přístup přes Tailscale je vypnutý. Sestavení a testy uvnitř serveru fungují dál.';
@@ -166,10 +171,10 @@
    const next=await api('state');
    // A GET begun before a confirmed write cannot replace the saved references.
    if(epoch!==stateEpoch){refreshAfterMutation=true;return;}
-   state=next;const key=JSON.stringify([state.enabled,state.available,state.error,state.busy,state.worker,state.previewSettings,state.holdUntil,state.draining,state.projects,state.containers.map(c=>[c.id,c.name,c.state,c.ports]),state.jobs,state.vault?.configured,state.remoteTargets,state.features]);
+   state=next;renderConnection();const key=JSON.stringify([state.enabled,state.available,state.error,state.busy,state.worker,state.previewSettings,state.holdUntil,state.draining,state.projects,state.containers.map(c=>[c.id,c.name,c.state,c.ports]),state.jobs,state.vault?.configured,state.remoteTargets,state.features]);
    if(key!==renderedKey&&!(el('apps-projects').contains(document.activeElement)&&document.activeElement?.matches('input,textarea,select'))){render();renderedKey=key;}
    await refreshLog();
-  }catch(e){if(alive()&&e.name!=='AbortError')el('apps-connection').textContent='Správa aplikací není dostupná. '+e.message;}
+  }catch(e){if(alive()&&e.name!=='AbortError')setConnectionText('Správa aplikací není dostupná. '+e.message);}
   finally{loading=false;if(refreshAfterMutation){refreshAfterMutation=false;if(alive())void refresh();}}
  }
  el('apps-add').onsubmit=e=>{e.preventDefault();void act('register',{path:el('apps-path').value.trim()});};

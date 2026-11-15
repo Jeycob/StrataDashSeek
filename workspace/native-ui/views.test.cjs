@@ -53,7 +53,7 @@ test('Apps reference drafts and request lifetimes survive real Chromium races in
  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
  for(const asset of ['source','bundle'])await t.test(asset,{timeout:20000},async()=>{
   const own='a'.repeat(16),other='b'.repeat(16),requests=[],heldStates=[],heldLogs=[];
-  let holdState=false,holdLog=false,failSave=false,saveCount=0,stateCalls=0,abortedResponses=0;
+  let holdState=false,holdLog=false,failSave=false,failState=false,saveCount=0,stateCalls=0,abortedResponses=0;
   const credentials=id=>({scope:{projectId:'original-'+id,environment:'prod',secretPath:'/'},runtime:{API_KEY:'REFERENCE_'+id},build:{}});
   const apps={enabled:true,available:true,busy:false,worker:{managed:true,phase:'ready'},previewSettings:{configured:true,enabled:true},holdUntil:0,
    projects:[own,other].map((id,index)=>({id,name:index?'Other project':'Own project',path:'projects/'+id,port:3000,credentials:credentials(index?'B':'A')})),
@@ -67,7 +67,7 @@ test('Apps reference drafts and request lifetimes survive real Chromium races in
     res.setHeader('Content-Type','text/html; charset=utf-8');return res.end('<!doctype html><meta name="viewport" content="width=device-width"><button id="outside">Outside editor</button><div id="host"></div><script>window.HARNESS_NATIVE_WORKBENCH=true;window.__ModuleLoader__={load(){}};window.fetchRecords=[];const nativeFetch=window.fetch.bind(window);window.fetch=(url,init)=>{const record={url:String(url),aborted:false,bodyRead:false};fetchRecords.push(record);init?.signal?.addEventListener("abort",()=>record.aborted=true,{once:true});const options=window.ignoreLogAbort&&String(url).includes("container-log")?{...init,signal:undefined}:init;return nativeFetch(url,options).then(response=>{const nativeJSON=response.json.bind(response);response.json=async()=>{const result=await nativeJSON();record.bodyRead=true;return result};return response})};AbortSignal.any=undefined;AbortSignal.timeout=undefined;</script><script src="/client.js"></script>');
    }
    if(req.url==='/client.js'){res.setHeader('Content-Type','text/javascript; charset=utf-8');return res.end(fs.readFileSync(path.join(root,asset==='source'?'mobile/apps.js':'workspace/native-ui/client.js')));}
-   if(req.url==='/phone/api/apps/state'){stateCalls++;const snapshot=structuredClone(apps);if(holdState){heldStates.push(()=>json(snapshot));return;}return json(snapshot);}
+   if(req.url==='/phone/api/apps/state'){stateCalls++;if(failState)return json({error:'fixture-state-unavailable'},503);const snapshot=structuredClone(apps);if(holdState){heldStates.push(()=>json(snapshot));return;}return json(snapshot);}
    if(req.url==='/phone/api/apps/project-settings'){
     saveCount++;if(failSave)return json({error:'fixture-save-refused'},503);
     const input=JSON.parse(body),project=apps.projects.find(p=>p.id===input.id);assert.ok(project);
@@ -91,6 +91,16 @@ test('Apps reference drafts and request lifetimes survive real Chromium races in
    await editor(own).locator('input').nth(1).fill('staging');await editor(own).locator('input').nth(2).fill('/draft-a');
    await editor(own).locator('textarea').nth(0).fill('API_KEY=NEW_REFERENCE_A');await editor(own).locator('textarea').nth(1).fill('NPM_AUTH=BUILD_REFERENCE_A');
    await editor(other).locator('textarea').nth(0).fill('API_KEY=UNSAVED_REFERENCE_B');
+   // Recover the truthful status even when the successful JSON is unchanged.
+   await page.locator('#outside').click();const healthyStatus=await page.locator('[id$="apps-connection"]').innerText(),beforeRecoveryCalls=stateCalls;
+   await page.evaluate(id=>{window.beforeRecoveryDetails=document.querySelector('[data-apps-credentials="'+id+'"]');},own);
+   failState=true;await page.evaluate(()=>view.refresh());
+   assert.match(await page.locator('[id$="apps-connection"]').innerText(),/fixture-state-unavailable/);
+   failState=false;await page.evaluate(()=>view.refresh());
+   assert.equal(await page.locator('[id$="apps-connection"]').innerText(),healthyStatus,'same-state success must clear stale connection failure');
+   assert.equal(stateCalls-beforeRecoveryCalls,2,'recovery uses only the two requested reads');
+   assert.equal(await editor(own).evaluate(e=>e===window.beforeRecoveryDetails),true,'status recovery does not replace the credential editor');
+   assert.equal(await editor(own).evaluate(e=>e.open),true);assert.equal(await editor(own).locator('input').nth(0).inputValue(),'  project-draft-A  ');
    await page.locator('#outside').click();await page.evaluate(id=>{window.beforeDetails=document.querySelector('[data-apps-credentials="'+id+'"]');},own);
    changeJobs();await page.evaluate(()=>view.refresh());
    assert.equal(await editor(own).evaluate(e=>e!==window.beforeDetails),true,'actual render replaced old editor');

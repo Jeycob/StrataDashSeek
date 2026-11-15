@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "baseMain": "61babf154daadc734c21b19e59c5f259ac97380b",
+  "scope": "Coalesce identity-bound vault authentication and restore truthful Apps connection status after a transient failure",
+  "infrastructure": {
+    "passed": 472,
+    "failed": 0,
+    "skipped": 0,
+    "files": 61,
+    "sourceChangedDuringTests": false,
+    "source": {
+      "sha256": "f152d4b469d48609e40bdb09128c4d1139bf02340d63e3c641df380c48d1882a",
+      "files": 284,
+      "definition": "Sorted tracked and nonignored untracked JS/Python/shell/config/HTML/CSS/Markdown sources; path + NUL + LF-normalized UTF-8 + NUL. Deployment evidence subdirectories excluded."
+    }
+  },
+  "vault": {
+    "reproducedBeforeFix": true,
+    "syntheticConcurrentSecretReads": 12,
+    "loginRequestsBefore": 12,
+    "loginRequestsAfter": 1,
+    "secretReadsAfter": 12,
+    "newRaceAndNegativeTests": 14,
+    "sharedStateScope": "One service instance and exact origin/client ID/client secret identity",
+    "checks": [
+      "Cold and expired-token login fanout is coalesced",
+      "Failed login releases the flight for a later caller",
+      "Instances and identities do not share authentication state",
+      "Origin, client ID and client-secret rotation invalidate reuse",
+      "Stale completion cannot publish a token or clear a newer flight",
+      "Configuration candidate token remains unpublished until atomic save",
+      "Failed configuration authentication or persistence preserves the active identity",
+      "Configuration commits are ordered and advance a generation even for the same identity",
+      "Identity removal and restoration cannot revive an older flight",
+      "Status contains no token, client secret or identity digest",
+      "Secret values are not cached and failed secret operations are not automatically replayed"
+    ],
+    "realProviderOrAccountUsed": false,
+    "newPermissionOrScope": false
+  },
+  "appsConnection": {
+    "reproducedBeforeFixInSourceAndGeneratedClient": true,
+    "case": "Ready state, HTTP 503, then identical successful state JSON",
+    "sourceAndActualGeneratedClientPassed": true,
+    "truthfulStatusRestored": true,
+    "credentialEditorNodeAndDraftPreserved": true,
+    "extraPollingIntroduced": false,
+    "existingLifetimeAndMutationGuardsRetained": true
+  },
+  "runtimeChecks": {
+    "realPinnedSDK": true,
+    "realNativeHost": true,
+    "realChromium": true,
+    "liveVastActivationVerified": false
+  },
+  "historicalCSVReportedSeparately": { "passed": 14, "failed": 4 },
+  "limitations": [
+    "This measures login coalescing with synthetic responses, not production account-wide quota savings",
+    "Tests do not prove deployed shop quality, live account billing or full OS credential isolation",
+    "Last activation attempt was not accepted by the provider; publication does not establish activation",
+    "Candidate-exec mode, UID separation and the other optional proposals remain unapproved and unimplemented",
+    "Raw private logs, secret values and application data are not published"
+  ]
+}

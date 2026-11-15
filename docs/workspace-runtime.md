@@ -25,6 +25,15 @@ the source checkout, shared hooks and shared Git config are not granted.
 `.harness/` is ignored by Git in newly isolated projects. This is protection
 against accidental interference, not a multi-tenant security product.
 
+Native Harness, the Apps control service and project command execution still
+share the `harness` OS account. Write confinement and separate project folders
+do not provide complete read or process-signal isolation from credentials and
+services owned by that same account. Use owner-trusted projects. Separating
+executor identities and placing credential access behind an authenticated,
+project-scoped broker is a proposed change requiring owner approval; it is not
+installed. Moving values into Infisical alone does not remove this boundary:
+the running services still need bootstrap identities and runtime credentials.
+
 ## Files and conversations
 
 The file panel lists folders, creates files/folders, edits UTF-8 text, renames,
