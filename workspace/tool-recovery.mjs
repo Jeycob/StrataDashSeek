@@ -150,7 +150,7 @@ function normalizeVerificationCore(command) {
     if (segments.length < 2 || segments.length > 5 || !/\s+2>&1$/u.test(segments[0])) return { command, changed: false };
     const left = segments.shift().replace(/\s+2>&1$/u, ''), leftWords = words(left);
     const displayOnly = segment => /^(?:head|tail)\s+(?:-n\s*|--lines=|-)[1-9]\d{0,4}$/u.test(segment)
-      || /^grep\s+-(?:vE|Ev)\s+(?:"[^"$`\\\r\n]*"|'[^'$`\\\r\n]*')$/u.test(segment);
+      || /^grep\s+-(?:vE|Ev|E)\s+(?:"[^"$`\\\r\n]*"|'[^'$`\\\r\n]*')$/u.test(segment);
     if (!isVerification(leftWords) || !segments.every(displayOnly)) return { command, changed: false };
     return { command: parts.prefix + left, changed: true, reason: 'VERIFICATION_OUTPUT_FILTERS_REMOVED' };
   }
@@ -162,7 +162,7 @@ function normalizeVerificationCore(command) {
 export function normalizeVerificationCommand(command) {
   if (typeof command !== 'string') return { command, changed: false };
   // Only one exact, terminal, display-only status echo. Other shell commands,
-  // expansions, positive filters and lifecycle hooks remain untouched.
+  // expansions, non-display filters and lifecycle hooks remain untouched.
   const assignment = '[A-Za-z_][A-Za-z0-9_-]{0,47}=(?:\\$\\?|\\$\\{PIPESTATUS\\[0\\]\\})';
   const suffix = new RegExp(';\\s*echo\\s+(?:' + assignment + '|"' + assignment + '")\\s*$', 'u').exec(command);
   if (!suffix) return normalizeVerificationCore(command);

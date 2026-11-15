@@ -98,6 +98,13 @@ test('literal verification adaptations preserve admitted arguments, project poli
   assert(status.spec.command.includes('test-command.cjs')); assert(!status.spec.command.includes('rulesexit=')); assert(!status.spec.command.includes('tail -20'));
   assert.match(status.result.stdout.text, /terminal status echo and display filters removed/);
   assert.equal(statusArgs.command, 'node --test tests/rules.test.mjs 2>&1 | tail -20; echo rulesexit=${PIPESTATUS[0]}');
+  const positiveArgs = Object.freeze({ command: 'node --test tests/api.test.mjs 2>&1 | grep -E "^(✔|✖|ℹ)"', description: 'Keep complete test diagnostics' });
+  f.ctx.shell.execute = async () => ({ result: async () => ({ exitCode: 17, signal: null, timedOut: false, aborted: false,
+    stdout: { text: '# tests 1\n# pass 0\n# fail 1\nfull assertion detail', truncated: false }, stderr: { text: '', truncated: false } }) });
+  const positive = await f.run(positiveArgs, f.execution);
+  assert(!positive.spec.command.includes('grep -E')); assert(positive.spec.command.includes('test-command.cjs'));
+  assert.equal(positive.result.exitCode, 17); assert.match(positive.result.stdout.text, /full assertion detail/);
+  assert.equal(positiveArgs.command, 'node --test tests/api.test.mjs 2>&1 | grep -E "^(✔|✖|ℹ)"');
 });
 
 test('arbitrary compound commands and JavaScript source are never rewritten', async t => {

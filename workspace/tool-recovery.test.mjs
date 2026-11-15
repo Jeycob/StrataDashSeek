@@ -128,6 +128,23 @@ test('known terminal verifier status echoes are display-only and cannot mask the
   ]) assert.deepEqual(normalizeVerificationCommand(command), { command: expected, changed: true, reason: 'VERIFICATION_STATUS_ECHO_REMOVED' });
 });
 
+test('literal positive grep display filters expose the direct verifier without hiding diagnostics', () => {
+  for (const filter of ['grep -E "^(✔|✖|ℹ)"', "grep -E '^(# tests|# pass|# fail)' | tail -20"]) {
+    const command = 'node --test tests/unit.test.mjs tests/api.test.mjs 2>&1 | ' + filter;
+    assert.deepEqual(normalizeVerificationCommand(command), {
+      command: 'node --test tests/unit.test.mjs tests/api.test.mjs', changed: true, reason: 'VERIFICATION_OUTPUT_FILTERS_REMOVED',
+    });
+  }
+  for (const command of [
+    'npm test 2>&1 | grep -q passed',
+    'npm test 2>&1 | grep -E "passed" other.log',
+    'cat private.log 2>&1 | grep -E "passed"',
+    'npm test 2>&1 | grep -E "$(touch private)"',
+    'npm test 2>&1 | grep -E "passed"; true',
+    'npm test > result.log 2>&1; echo "EXIT=$?"; grep -E "passed" result.log',
+  ]) assert.equal(normalizeVerificationCommand(command).changed, false, command);
+});
+
 test('status-echo adaptation refuses extra behavior, non-verifiers and arbitrary shell expansion', () => {
   for (const command of [
     'cat README.md 2>&1 | tail -20; echo status=$?',

@@ -81,7 +81,9 @@ real exit status of each check. A failed or interrupted check remains unverified
 Managed shell verification can remove an exact terminal display filter and one
 display-only status echo from a recognized verifier command. It executes the verifier
 directly and preserves its real result; arbitrary compound shell programs are not
-rewritten. Unsupported status-masking constructs produce actionable feedback instead
+rewritten. Supported display filters include quoted literal `grep -E`/`grep -vE`
+without file operands or quiet mode; removing them exposes the full bounded diagnostic
+and the verifier's own exit, rather than the filter's exit. Unsupported status-masking constructs produce actionable feedback instead
 of a milestone pass. Quoted pattern characters and ordinary redirections retain their
 meaning. Repeated tool-error counters distinguish operation targets; a completed
 success resolves only that operation's errors and never resumes a stopped run.
