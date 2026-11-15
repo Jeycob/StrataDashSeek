@@ -7,11 +7,19 @@ the persistent model, runtime, projects, databases and push identity.
 | --- | --- | --- |
 | Open the existing server | Private phone launcher or authenticated wake page | Starts the configured existing instance on demand |
 | Start services after boot | `vast/start.sh` and `vast/supervisor.cjs` | Reuses installed services; no ordinary-boot dependency installation |
+| Update code before first requests | [Signed startup gate](startup-updates.md) | Verifies pinned signatures, dependencies and disk reserve before activating source |
 | First Harness installation | `vast/install.sh`, then README configuration steps | Installs pinned runtime; requires an existing compatible Strata/model installation |
 | Enable optional Apps | [Applications](applications.md) and [v2 workflows](applications-v2.md) | Explicit dedicated container worker, preview, checks, releases and rollback |
 | Isolate projects and verify results | [Workspace runtime](workspace-runtime.md) | Native project roots, verification and per-project state |
 | Tune context, scheduling and measure cost | [Efficiency](../efficiency/README.md) | Coordinated profile extension and separate billing collector |
 | Understand requests and disk headroom | [Request budget](request-budget.md), [disk proposal](disk-plan-20261114.md) | Read-only measurements and a removal proposal requiring approval |
+
+The signed code-update gate is implemented separately from the proposed
+whole-stack installer. Enabling it is a one-time operator step with a pinned
+public key; ordinary wakes reuse that setup. A failed signature, dependency or
+disk check blocks activation. Resolve the cause instead of replaying installation
+or pruning models and data automatically. A prepared GitHub release and the
+currently installed server revision are separate facts.
 
 For a fresh installation, finish these stages in order: verify the existing
 model and disk headroom; install the pinned Harness/runtime; configure private

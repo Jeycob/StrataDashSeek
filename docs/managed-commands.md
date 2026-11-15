@@ -15,12 +15,26 @@ Trash, an existing repair stop or an outside working directory still fails close
 No execution arguments are rewritten in middleware and no Native approval hook is
 bypassed.
 
-Managed commands support `command`, `description`, optional `workdir` and
-`timeoutMs`. They run in the foreground, stop on timeout, and have a maximum
-120-second limit. Background and permission escalation arguments are not offered
-for these managed tools. Services can use a project-owned lifecycle helper; their
-start command itself remains bounded. The original Native foreground output schema,
-exit status, cancellation and terminal presentation are retained for `bash`.
+Managed commands support `command`, `description`, optional `workdir`,
+`timeoutMs` and explicit `run_in_background`. Foreground commands stop on timeout
+and have a maximum 120-second limit. There is no automatic promotion on timeout
+and no permission escalation argument. The original Native foreground output
+schema, exit status, cancellation and terminal presentation are retained for
+`bash`.
+
+For a temporary server, set `run_in_background: true` and keep the returned
+`jobId`. Use `job_output` to read its status/logs and `job_kill` to stop that
+owned job. A job belongs to the actual executing agent, including a read-only
+child. Another session cannot stop it by knowing its ID. A background job runs
+for five minutes by default, with a ten-minute maximum; `timeoutMs` sets this
+bounded lifetime. Owner or executor disposal cancels and drains the owned
+handle. Missing job-registry/controller support refuses the start. Use these
+handles instead of `nohup`, `setsid`, `pkill` or `killall`. Lasting deployments
+belong in [Applications and Docker](applications.md).
+
+A background acknowledgement is neither completed verification nor a failed
+test. Run milestones in the foreground with `verify_project` so that the
+completed result is recorded.
 
 The working directory and its real filesystem target must remain in the project.
 The runner exports the project's assigned ports, database and prepared tool paths
@@ -30,10 +44,21 @@ Read-only sessions remain read-only, receive no extra writable roots and do not
 create project cache directories while preparing the environment. Platform
 temporary-directory exceptions still belong to the installed sandbox provider.
 
-This compatibility layer does not turn failed commands into success. Nonzero exit
-codes, timeouts and real access denials remain visible. Repeated real failures still
-consume the existing repair budget; build/test/browser/acceptance completion still
-requires meaningful verification. The model and its caches are unchanged.
+Known literal verification commands can drop display-only `tail`, `head` or
+quoted `grep -vE` filters so the first failure and final summary stay visible.
+The output announces this adaptation and the original admitted arguments remain
+in the audit trail. Direct `node --test` directory operands expand to bounded
+test-file selections, including in the quality runner. Unsupported shell forms,
+arbitrary JavaScript and npm scripts/lifecycle hooks remain unchanged.
+
+All final SDK tool outcomes share one diagnostic queue, including calls made by
+skills and `verify_project`. Configuration rejection, Node module/file bootstrap
+failure, stale edit context and timeouts stay unverified and do not masquerade
+as actual failed functional tests. Exceptions inside real test cases remain
+failures. Three repetitions of the same tool error and the overall stage limit
+still pause work. Empty, skipped-only, cancelled or incomplete verification
+cannot pass. After eight steps of changed application code without a functional
+check, one general reminder asks for a small tested behavior before expanding.
 
 Verification covers the actual pinned Native tool registry and bash output schema,
 first-step admission, independent policy denials, cancellation through quiescence,
@@ -43,5 +68,7 @@ first-use read-only behavior and a project service's start/stop lifecycle.
 
 Install with the normal signed source update. An already running Harness needs one
 controlled Harness-only restart while its conversations are idle; model and Apps
-services do not need a restart. Workbench state reports `managedShellVersion: 1`
-after the updated plugin is loaded.
+services do not need a restart. Workbench state reports `managedShellVersion: 1`,
+`projectBackgroundVersion: 1` and `repairPolicyVersion: 3` after this version is
+loaded. A signed commit or a passing local test does not prove that a particular
+server has activated it; inspect its installed revision and service health.

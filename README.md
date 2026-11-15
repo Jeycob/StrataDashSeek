@@ -11,6 +11,16 @@ Vast billing reads and private monitoring. A [read-only disk review](docs/disk-p
 identifies specific migration artifacts for review; it authorizes no deletion.
 For isolated projects, [managed commands](docs/managed-commands.md) explains how
 ordinary `bash` calls share the confined `project_exec` environment across chats.
+The [signed startup gate](docs/startup-updates.md) activates verified source
+before the first Harness request. Runtime upgrades and first installation remain
+separate maintenance operations.
+
+The Native right sidebar provides **Workspace files**, **Changes** and
+**Applications and Docker**. Open the sidebar's guide to choose a tool, or use
+Ctrl+Alt+P for files. Changes follow saved files while the model works, including
+shell writes. The workbench's project, Docker and vault options use the existing
+**Settings**. See the [workbench guide](docs/workspace-runtime.md) for tracking
+limits, temporary process jobs and verification behavior.
 
 ```mermaid
 flowchart LR
@@ -121,7 +131,7 @@ Official references: [Harness source](https://github.com/deepseek-ai/deepseek-ha
 
 ## Recorded deployment
 
-The latest `deployments/2026-11-14-budget-result.json` records the verified A4000/EPYC migration under a 2,000 CZK monthly target. At the recorded contract rates, 12 active hours/day plus 96 GB storage cost USD 47.36 per 30 days before transfers and tax. The old instance and disk were deleted after explicit approval and verification of the final encrypted local backup; their USD 10.24/month storage charge no longer continues. The model and HomeAI policy are unchanged. Automatic stop/wake, identity login and all 65 checks passed; one CSV comparison completed in 217 seconds versus the previous 334 seconds. These measurements are observations, not performance or availability guarantees.
+The dated `deployments/2026-11-14-budget-result.json` records the verified A4000/EPYC migration under a 2,000 CZK monthly target. At the recorded contract rates, 12 active hours/day plus 96 GB storage cost USD 47.36 per 30 days before transfers and tax. The old instance and disk were deleted after explicit approval and verification of the final encrypted local backup; their USD 10.24/month storage charge no longer continues. The model and HomeAI policy are unchanged. Automatic stop/wake, identity login and all 65 checks passed; one CSV comparison completed in 217 seconds versus the previous 334 seconds. These measurements are observations, not performance or availability guarantees.
 
 `deployments/2026-11-14-homeai-iq3/` contains sanitized settings actually captured from the deployed stack, a checksum manifest and verification results. Take a new sanitized snapshot and push it before changing production configurations or versions. Private backups stay outside Git. Hardware search results are observations, not proof of inference speed; benchmark the same model and tasks before promoting another host.
 
@@ -162,6 +172,9 @@ the Compose database and containers. A later wake again encountered capacity
 unavailability. The deployed Worker correctly reports HTTP202 for that state,
 retries only the original instance and preserves authenticated conditional
 status reads. The three earlier pending bootstrap files were verified deployed.
-See [current integration and deployment evidence](deployments/release-polling-20261114/status.json);
-the monitor update still awaits server availability. Cold-cycle success does
-not guarantee that the provider can reallocate the GPU on every wake.
+See the [dated integration evidence](deployments/release-polling-20261114/status.json)
+and [general tool verification](deployments/general-tool-recovery-20261115/public-summary.json).
+For a server's active revision, inspect `state.update.appliedCommit` in the
+owner-only Workbench API and its service health. Test evidence and a published
+Git commit do not establish activation on a particular server. Cold-cycle
+success does not guarantee that the provider can reallocate the GPU on every wake.
