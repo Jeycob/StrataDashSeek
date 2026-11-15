@@ -46,7 +46,8 @@ test('missing, disabled and malformed policy block actual and check-only update 
   await assert.rejects(update(root,{checkOnly}),scenario.pattern,scenario.name);
   assert.equal(fs.existsSync(path.join(root,'update-cache')),false);assert.equal(fs.existsSync(path.join(root,'releases')),false);
   if(checkOnly)assert.equal(fs.readFileSync(status,'utf8'),before);
-  else assert.equal(JSON.parse(fs.readFileSync(status)).phase,'blocked');
+  else if(process.platform==='linux'&&process.getuid()===0)assert.equal(JSON.parse(fs.readFileSync(path.join(root,'runtime-status/startup-update.json'))).phase,'blocked');
+  else assert.equal(fs.readFileSync(status,'utf8'),before,'unsupported privileged writes never use the legacy agent-owned diagnostic');
  }
 });
 

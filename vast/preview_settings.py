@@ -4,22 +4,29 @@ The unprivileged Apps API may request only a boolean. No command, recipient,
 address, port or ACL can be supplied by the browser or the agent.
 """
 import json, pathlib, os, subprocess, time, tempfile
+from runtime_paths import RuntimePaths, trusted_directory
 
 class PreviewSettings:
-    def __init__(self, root=pathlib.Path('/data/harness'), run=subprocess.run):
+    def __init__(self, root=pathlib.Path('/data/harness'), run=subprocess.run, account=None):
         self.root=root;self.run=run;self.applied=False;self.last_attempt=0
-        self.config=root/'preview-settings.json';self.request=root/'state/applications/preview-request.json';self.status=root/'state/applications/preview-status.json'
+        self.runtime=RuntimePaths(root,account);self.config=root/'preview-settings.json';self.request=root/'state/applications/preview-request.json';self.status=self.runtime.public/'preview-status.json'
     def read(self,p,default=None):
         try:
-            fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW)
-            with os.fdopen(fd,'rb') as f:raw=f.read(4097)
+            if p==self.request:return self.runtime.read_agent('applications/preview-request.json',4096,default)
+            trusted_directory(p.parent)
+            fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+            with os.fdopen(fd,'rb') as f:
+                import stat
+                s=os.fstat(f.fileno())
+                if not stat.S_ISREG(s.st_mode) or s.st_uid!=0 or s.st_nlink!=1 or s.st_mode&0o022:raise ValueError('Unsafe preview status/configuration')
+                raw=f.read(4097)
             if len(raw)>4096:raise ValueError('Preview settings exceeded limit')
             return json.loads(raw)
         except FileNotFoundError:return default
     def write(self,p,value):
-        p.parent.mkdir(parents=True,exist_ok=True);fd,name=tempfile.mkstemp(prefix=p.name+'.root-',dir=p.parent)
-        with os.fdopen(fd,'w') as f:json.dump(value,f);f.flush();os.fchmod(f.fileno(),0o644);os.fsync(f.fileno())
-        os.replace(name,p)
+        if p==self.status:self.runtime.publish('preview-status.json',value)
+        elif p==self.config:self.runtime.write(p,value)
+        else:raise ValueError('Unsupported preview output')
     def apply(self,enabled):
         for index in range(8):
             port=18080+index

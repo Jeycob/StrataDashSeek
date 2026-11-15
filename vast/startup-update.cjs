@@ -1,6 +1,7 @@
 'use strict';
 // Runs before any Harness process. Trust and persistent data live outside releases.
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),crypto=require('node:crypto');
+const runtime=require('./runtime-paths.cjs');
 const REPOSITORY='Jeycob/StrataDashSeek',MIB=1024*1024;
 function atomic(file,value,mode=0o600){const tmp=file+'.tmp-'+crypto.randomBytes(12).toString('hex'),fd=fs.openSync(tmp,'wx',mode);try{fs.writeFileSync(fd,typeof value==='string'||Buffer.isBuffer(value)?value:JSON.stringify(value,null,2));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(tmp,file);if(process.platform==='linux'){const parent=fs.openSync(path.dirname(file),'r');try{fs.fsyncSync(parent);}finally{fs.closeSync(parent);}}}
 function commitPayload(input){
@@ -21,7 +22,7 @@ function config(raw){
 }
 function safeEnvironment(root){return{PATH:process.env.PATH??'/usr/bin:/bin',HOME:path.join(root,'update-cache/home'),LANG:'C.UTF-8',GIT_TERMINAL_PROMPT:'0',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null'};}
 function program(command,args,{root,timeout=30000,maxBuffer=64*MIB,...options}={}){const result=cp.spawnSync(command,args,{encoding:null,timeout,maxBuffer,env:safeEnvironment(root),...options});if(result.error||result.status!==0)throw Error(path.basename(command)+' failed');return result.stdout??Buffer.alloc(0);}
-function rootOwned(file){const info=fs.lstatSync(file);if(info.isSymbolicLink()||info.uid!==0||(info.mode&0o022))throw Error('Update trust or bootstrap is writable outside root');return info;}
+function rootOwned(file){if(process.platform==='linux')runtime.directoryTree(path.dirname(file));const info=fs.lstatSync(file);if(info.isSymbolicLink()||info.uid!==0||(info.mode&0o022)||info.isFile()&&info.nlink!==1)throw Error('Update trust or bootstrap is writable outside root');return info;}
 function verifySignature(commit,keyring,signers,directory,{runner=program,root=directory}={}){
  const value=commitPayload(commit),sig=path.join(directory,'commit.sig'),payload=path.join(directory,'commit.payload');
  fs.writeFileSync(sig,value.signature,{mode:0o600});fs.writeFileSync(payload,value.payload,{mode:0o600});
@@ -61,7 +62,7 @@ function activate(root,candidate,sha,{afterSwitch=()=>{}}={}){
 }
 function sameRuntime(candidate,root){return['package.json','package-lock.json'].every(name=>fs.readFileSync(path.join(candidate,'runtime',name)).equals(fs.readFileSync(path.join(root,'runtime',name))));}
 function releaseDigest(directory){rootOwned(directory);const hash=crypto.createHash('sha256');function visit(relative){for(const entry of fs.readdirSync(path.join(directory,relative),{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name),file=path.join(directory,name),info=rootOwned(file);hash.update(name.split(path.sep).join('/')+'\0');if(entry.isDirectory()){hash.update('directory\0');visit(name);}else if(entry.isFile()){hash.update('file:'+(info.mode&0o111?'x':'-')+'\0');hash.update(fs.readFileSync(file));hash.update('\0');}else throw Error('Unsafe release entry');}}visit('');return hash.digest('hex');}
-function statusWriter(root){let state={version:1,enabled:true,phase:'checking',checkedAt:null,appliedCommit:readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{})?.commit??null,targetCommit:null,error:null,signatureVerified:false};return patch=>{state={...state,...patch,checkedAt:new Date().toISOString()};atomic(path.join(root,'state/startup-update.json'),state,0o644);return state;};}
+function statusWriter(root){let state={version:1,enabled:true,phase:'checking',checkedAt:null,appliedCommit:readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{})?.commit??null,targetCommit:null,error:null,signatureVerified:false};return patch=>{state={...state,...patch,checkedAt:new Date().toISOString()};runtime.writePrivate(root,'startup-update.json',state);runtime.publish(root,'startup-update.json',state);return state;};}
 async function update(root='/data/harness',{checkOnly=false}={}){
  const configFile=path.join(root,'root-secrets/startup-update.json');
  let checked={};const write=checkOnly?(patch=>checked={...checked,...patch}):statusWriter(root);

@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "scope": "Privileged filesystem paths and compatible explicit bootstrap migration",
+  "baseCommit": "09731454cdcd26d2dbb1a20b4ce116b538e40855",
+  "linux": {
+    "node": 38,
+    "pythonPreview": 5,
+    "pythonIdle": 24,
+    "pythonRuntimePaths": 4,
+    "failed": 0,
+    "skipped": 0,
+    "environment": "Local isolated Ubuntu POSIX fixtures, root service and existing UID65534 attacker, capability-dropped input reader"
+  },
+  "windows": {
+    "passed": 53,
+    "failed": 0,
+    "skipped": 0,
+    "scope": "Portable runtime publication, supervisor, Apps and telemetry regression tests; overlaps Linux checks"
+  },
+  "peerReview": {
+    "status": "passed",
+    "scope": "Independent source review of protected root writes, narrow log access, interrupted log migration and signed-status adoption",
+    "reviewerReranTests": false
+  },
+  "production": {
+    "migrated": false,
+    "bootstrapUpgradeRequired": true,
+    "rollout": "Explicit reviewed stable-bootstrap upgrade with existing pinned trust while old privileged services are quiescent; preserve hardened paths during recovery",
+    "normalSourceUpdateIsCompleteHostRemediation": false
+  },
+  "limitations": [
+    "Shared agent OS identity remains outside this repair",
+    "Exception/restart recovery and directory fsync tested; physical power loss not emulated",
+    "No actual production migration or live health proof is represented by local tests"
+  ]
+}

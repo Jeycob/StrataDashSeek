@@ -37,7 +37,7 @@ class AppsManager {
  }
  confirmSleep(token){if(!token||this.sleepToken()!==token||!this.canSleep()||this.worker?.pid())throw Object.assign(Error('Sleep preparation is no longer valid'),{status:409});return{ready:true};}
  cancelSleep(token){if(!token||this.drain?.token===token)this.drain=null;this.heartbeat();return{ok:true};}
- previewSettings(){const file=path.join(this.cfg.stateDir,'preview-status.json');return this.cfg.preview?.enabled&&fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{configured:false,enabled:false,ports:[]};}
+ previewSettings(){const file=this.cfg.previewStatusFile||(this.cfg.stateDir==='/data/harness/state/applications'?'/data/harness/runtime-status/preview-status.json':path.join(this.cfg.stateDir,'preview-status.json'));return this.cfg.preview?.enabled&&fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{configured:false,enabled:false,ports:[]};}
  enqueuePreviewSettings(enabled){
   this.requireEnabled();if(!this.cfg.preview?.enabled||typeof enabled!=='boolean')throw Error('Preview setting must be a boolean for the configured private gateway');if(this.busy)throw Object.assign(Error('Another application operation is running'),{status:409});this.acceptActivity();
   const job={id:crypto.randomBytes(8).toString('hex'),action:'preview-settings',status:'queued',startedAt:Date.now()};this.setBusy(job.id);this.store.jobs.push(job);this.save();

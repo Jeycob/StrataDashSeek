@@ -119,7 +119,7 @@ function createPushServer(cfg,adapter=webpush){
     const payload=req.method==='POST'?await body(req):undefined;
     return json(res,req.method==='POST'&&['/project-action','/worker-action','/preview-settings'].includes(route)?202:200,await callApps(route+(req.method==='GET'?u.search:''),payload,{keyFile:cfg.appsKeyFile||'/data/harness/secrets/apps-internal.key',port:cfg.appsPort||3093}));
    }
-   if(u.pathname==='/phone/api/monitor'&&req.method==='GET')return json(res,200,readJson(cfg.telemetryFile||'/data/harness/state/telemetry.json',{ready:false}));
+   if(u.pathname==='/phone/api/monitor'&&req.method==='GET')return json(res,200,readJson(!cfg.telemetryFile||cfg.telemetryFile==='/data/harness/state/telemetry.json'?'/data/harness/runtime-status/telemetry.json':cfg.telemetryFile,{ready:false}));
    if(u.pathname==='/phone/api/wake-config'&&req.method==='GET')return json(res,200,{wakeUrl:cfg.wakeUrl,key:cfg.wakeKeyFile?fs.readFileSync(cfg.wakeKeyFile,'utf8').trim():null});
    if(u.pathname==='/phone/api/state'&&req.method==='GET')return json(res,200,{authorized:true,registered:!!store.installations[u.searchParams.get('installationId')]&&!store.installations[u.searchParams.get('installationId')].retiredAt,vapidPublicKey:keys.publicKey,watcherOnline:Date.now()-watcherAt<30000,...stats});
    const data=await body(req);const id=String(data.installationId||'');if(!/^[a-zA-Z0-9_-]{16,80}$/.test(id))return json(res,400,{error:'Invalid installation'});

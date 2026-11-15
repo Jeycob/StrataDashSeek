@@ -2,9 +2,9 @@ import unittest,tempfile,pathlib,json,types
 from preview_settings import PreviewSettings
 class PreviewTests(unittest.TestCase):
     def fixture(self,enabled=False):
-        d=tempfile.TemporaryDirectory();self.addCleanup(d.cleanup);root=pathlib.Path(d.name);calls=[]
+        d=tempfile.TemporaryDirectory();self.addCleanup(d.cleanup);root=pathlib.Path(d.name);root.chmod(0o755);calls=[]
         def run(args,**kwargs):calls.append(args);return types.SimpleNamespace(returncode=0)
-        p=PreviewSettings(root,run);p.config.write_text(json.dumps({'enabled':enabled}));return p,calls
+        p=PreviewSettings(root,run,account=(65534,65534));p.config.write_text(json.dumps({'enabled':enabled}));return p,calls
     def request(self,p,**changes):p.request.parent.mkdir(parents=True,exist_ok=True);p.request.write_text(json.dumps({'id':'a'*16,'enabled':True,**changes}))
     def test_only_eight_approved_private_ports_can_be_enabled(self):
         p,calls=self.fixture();self.request(p);p.tick(100)

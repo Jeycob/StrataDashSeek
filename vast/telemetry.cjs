@@ -1,6 +1,6 @@
 'use strict';
 const fs=require('node:fs'),os=require('node:os'),cp=require('node:child_process'),util=require('node:util');
-const exec=util.promisify(cp.execFile),R='/data/harness',stateFile=R+'/state/telemetry.json';
+const exec=util.promisify(cp.execFile),R='/data/harness',runtime=require('./runtime-paths.cjs');
 const {readCpuStats,readMemoryStats,readIoStats,parseIoStat}=require('./cgroup.cjs'),readCgroup=p=>fs.readFileSync(p,'utf8');
 const {performance}=require('node:perf_hooks');
 const startedAt=Date.now();let previousCpu,previousDisk,previousAt=performance.now(),energyWh=0,history=[];
@@ -22,10 +22,10 @@ async function tick(){
  const [health,status,metrics]=await Promise.all([get('health'),get('status'),get('metrics')]);
  const requests=normalizeRequests(metrics);
  const last=requests.at(-1)||null,sample={at:now,gpuPercent:gpu?.percent,vramMiB:gpu?.vramUsedMiB};history.push(sample);history=history.slice(-60);
- let idle=null;try{idle=JSON.parse(fs.readFileSync(R+'/state/idle-status.json','utf8'));}catch{}
- let agentQueue=null;try{const q=JSON.parse(fs.readFileSync(R+'/state/turn-queue.json','utf8'));if(!q.closed&&now-JSON.parse(fs.readFileSync(R+'/state/lifecycle.json','utf8')).at<20000)agentQueue=queueSnapshot(q,now);}catch{}
+ let idle=null;try{idle=runtime.readPrivate(R,'idle-status.json');}catch{}
+ let agentQueue=null;try{const q=runtime.readAgent(R,'turn-queue.json');if(!q.closed&&now-runtime.readAgent(R,'lifecycle.json').at<20000)agentQueue=queueSnapshot(q,now);}catch{}
  const data={at:now,source:'Vast instance',gpu,cpu:cpu(seconds),ram:memory(),disk:disk(seconds),model:{id:health?.model,loaded:health?.loaded,contextMax:health?.max_context,busy:status?.busy,queued:status?.queued,phase:status?.phase,promptTokens:status?.prompt_tokens,generatedTokens:status?.generated,maxOutputTokens:status?.max_tokens,elapsedSeconds:metrics?.live?.elapsed_s},agentQueue,last,requests,history,liveTokensPerSecond:metrics?.live?.tok_s_mean??metrics?.live?.tok_s??null,energyWhSinceMonitorStart:energyWh,monitorStartedAt:startedAt,idle};
- const temporary=stateFile+'.tmp';fs.writeFileSync(temporary,JSON.stringify(data),{mode:0o644});fs.renameSync(temporary,stateFile);
+ runtime.writePrivate(R,'telemetry.json',data);runtime.publish(R,'telemetry.json',data);
  setTimeout(tick,3000);
 }
 function normalizeRequests(metrics){return (Array.isArray(metrics?.requests)?metrics.requests:[]).slice(0,12).sort((a,b)=>(a.time||0)-(b.time||0)).map(r=>({id:r.id,time:r.time,status:r.finish??r.status,promptTokens:r.prompt_tokens,outputTokens:r.output_tokens,cachedTokens:r.reused??r.cached_tokens??r.reused_tokens,decodeTokensPerSecond:r.decode_tok_s,prefillTokensPerSecond:r.prompt_tok_s??(r.prompt_ms>0?(r.prompt_read??r.prompt_tokens)/(r.prompt_ms/1000):null),durationSeconds:r.duration_s??(r.total_ms?r.total_ms/1000:null)}));}

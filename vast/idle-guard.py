@@ -1,7 +1,9 @@
 """Root watchdog: never stop across a live turn, build, unknown model state or stale heartbeat."""
 import json, pathlib, time, urllib.request, os, pwd, subprocess, datetime
 from preview_settings import PreviewSettings
+from runtime_paths import RuntimePaths
 ROOT=pathlib.Path('/data/harness')
+RUNTIME=None
 def load(path): return json.loads(path.read_text())
 def decide(now, last, lifecycle, model, jobs, lease_until, idle_seconds=300, applications=None):
     if now < lease_until: return False,'maintenance lease'
@@ -58,7 +60,7 @@ def passive_worker_processes(processes, applications, now):
 
 def jobs_running(ignore_previews=False, applications=None):
     uid=pwd.getpwnam('harness').pw_uid
-    services=set(load(ROOT/'state/services.json').get('pids',[]))
+    services=set(RUNTIME.read_private('services.json',{}).get('pids',[]))
     processes={}
     for entry in pathlib.Path('/proc').iterdir():
         if not entry.name.isdigit():continue
@@ -84,10 +86,12 @@ def application_call(route, payload=None, timeout=110):
 def audit(event, **fields):
     print(json.dumps({'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'event':event,**fields}),flush=True)
 def main():
+    global RUNTIME
+    RUNTIME=RuntimePaths(ROOT)
     started=time.time();last=started;preview_settings=PreviewSettings()
     # Preserve the idle clock when only this watchdog is restarted for maintenance.
     try:
-        prior=load(ROOT/'state/idle-status.json')
+        prior=RUNTIME.read_private('idle-status.json',{})
         last=min(started,prior['at']-prior['idleSeconds'])
     except (OSError,ValueError,KeyError,TypeError):pass
     while True:
@@ -95,23 +99,23 @@ def main():
             try:preview_settings.tick()
             except Exception as e:audit('preview_settings_error',error=type(e).__name__)
             cfg=load(ROOT/'root-secrets/guard.json')
-            now=time.time();life=load(ROOT/'state/lifecycle.json')
+            now=time.time();life=RUNTIME.read_agent('lifecycle.json')
             with urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=4) as r:model=json.load(r)
             app_path=ROOT/'state/applications/activity.json'
-            applications=load(app_path) if app_path.exists() else None
+            applications=RUNTIME.read_agent('applications/activity.json')
             app_cfg=ROOT/'apps-config.json'
             if app_cfg.exists() and load(app_cfg).get('enabled') and applications is None:raise RuntimeError('Enabled application service has no heartbeat')
-            jobs=jobs_running(cfg.get('ignoreDetachedPreviews',False),applications);lease=load(ROOT/'state/maintenance.json').get('until',0) if (ROOT/'state/maintenance.json').exists() else 0
+            jobs=jobs_running(cfg.get('ignoreDetachedPreviews',False),applications);lease=(RUNTIME.read_agent('maintenance.json',4096) or {}).get('until',0)
             if life.get('active') or model.get('busy') or model.get('queued') or jobs or applications and applications.get('active'):last=now
             stop,reason=decide(now,last,life,model,jobs,lease,cfg.get('idleSeconds',300),applications)
             state={'at':now,'canStop':stop,'reason':reason,'idleTimeoutSeconds':cfg.get('idleSeconds',300),'idleSeconds':max(0,int(now-max(last,life.get('lastActivity',now*1000)/1000,(applications or {}).get('lastActivity',0)/1000)))}
-            (ROOT/'state/idle-status.json').write_text(json.dumps(state))
+            RUNTIME.publish('idle-status.json',state)
             if stop and cfg.get('enabled',False):
                 # Second read prevents stopping across an observed new turn.
                 time.sleep(2)
-                life2=load(ROOT/'state/lifecycle.json')
+                life2=RUNTIME.read_agent('lifecycle.json')
                 with urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=4) as r:model2=json.load(r)
-                apps2=load(app_path) if app_path.exists() else None
+                apps2=RUNTIME.read_agent('applications/activity.json')
                 if not decide(time.time(),last,life2,model2,jobs_running(cfg.get('ignoreDetachedPreviews',False),apps2),lease,cfg.get('idleSeconds',300),apps2)[0]:continue
                 token=None
                 try:
@@ -119,9 +123,9 @@ def main():
                         prepared=application_call('prepare-sleep')
                         if prepared.get('ready') is not True or not prepared.get('token'):raise RuntimeError('Application sleep was not confirmed')
                         token=prepared['token']
-                    life3=load(ROOT/'state/lifecycle.json');apps3=load(app_path) if app_path.exists() else None
+                    life3=RUNTIME.read_agent('lifecycle.json');apps3=RUNTIME.read_agent('applications/activity.json')
                     with urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=4) as r:model3=json.load(r)
-                    lease3=load(ROOT/'state/maintenance.json').get('until',0) if (ROOT/'state/maintenance.json').exists() else 0
+                    lease3=(RUNTIME.read_agent('maintenance.json',4096) or {}).get('until',0)
                     if not decide(time.time(),last,life3,model3,jobs_running(cfg.get('ignoreDetachedPreviews',False),apps3),lease3,cfg.get('idleSeconds',300),apps3)[0]:
                         audit('sleep_cancelled',reason='new activity after Docker save');continue
                     if token and application_call('confirm-sleep',{'token':token},10).get('ready') is not True:raise RuntimeError('Application sleep token changed')
