@@ -78,6 +78,57 @@ test('snapshot baseline survives restart and repeated initialize never adopts ed
   assert.equal(lines(diff).includes('-first change'), false);
 });
 
+test('unreadable source files preserve other changes without inventing deletions', async t => {
+  const f = await fixture(t, {}, 'continue');
+  await f.write('blocked.txt', 'original private content\n'); await f.write('readable.txt', 'old\n');
+  await f.tracker.initialize('one', f.project);
+  await f.write('readable.txt', 'changed\n');
+  const open = fs.open.bind(fs);
+  for (const code of ['EACCES', 'EPERM']) {
+    const mock = t.mock.method(fs, 'open', async (file, ...args) => {
+      if (file === path.join(f.root, 'blocked.txt')) throw Object.assign(new Error('permission denied'), { code });
+      return open(file, ...args);
+    });
+    const result = await f.tracker.list('one', f.project);
+    assert.equal(result.partial, true); assert.ok(result.warnings.includes('CHANGING_OR_EXCLUDED_FILES'));
+    assert.equal(filesByPath(result).has('blocked.txt'), false);
+    assert.equal(filesByPath(result).get('readable.txt')?.status, 'modified');
+    const diff = await f.tracker.diff('one', f.project, { path: 'readable.txt' });
+    assert.ok(lines(diff).includes('+changed'));
+    mock.mock.restore();
+  }
+  await f.write('blocked.txt', 'now readable\n');
+  assert.equal(filesByPath(await f.tracker.list('one', f.project)).get('blocked.txt')?.status, 'modified');
+});
+
+test('an unreadable initial path stays unknown after snapshot creation', async t => {
+  const f = await fixture(t, {}, 'continue');
+  await f.write('blocked.txt', 'unrecorded initial text\n'); await f.write('readable.txt', 'old\n');
+  const open = fs.open.bind(fs), mock = t.mock.method(fs, 'open', async (file, ...args) => {
+    if (file === path.join(f.root, 'blocked.txt')) throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    return open(file, ...args);
+  });
+  await f.tracker.initialize('one', f.project); mock.mock.restore();
+  await f.write('readable.txt', 'changed\n');
+  const result = await f.tracker.list('one', f.project);
+  assert.equal(result.partial, true); assert.equal(filesByPath(result).has('blocked.txt'), false);
+  assert.equal(filesByPath(result).get('readable.txt')?.status, 'modified');
+  await assert.rejects(f.tracker.diff('one', f.project, { path: 'blocked.txt' }), { code: 'DIFF_FILE_NOT_CHANGED' });
+});
+
+test('permission-denied directories do not fail the complete changes request', async t => {
+  const f = await fixture(t); await f.tracker.initialize('one', f.project);
+  await f.write('blocked/file.txt', 'hidden\n'); await f.write('readable.txt', 'visible\n');
+  const readdir = fs.readdir.bind(fs);
+  t.mock.method(fs, 'readdir', async (directory, ...args) => {
+    if (directory === path.join(f.root, 'blocked')) throw Object.assign(new Error('permission denied'), { code: 'EPERM' });
+    return readdir(directory, ...args);
+  });
+  const result = await f.tracker.list('one', f.project);
+  assert.equal(result.partial, true); assert.equal(filesByPath(result).has('blocked/file.txt'), false);
+  assert.equal(filesByPath(result).get('readable.txt')?.status, 'added');
+});
+
 test('existing project using its source directory never claims a historical empty baseline', async t => {
   const f = await fixture(t); f.project.sourceRoot = f.root;
   await f.write('existing.txt', 'already there\n'); await f.tracker.initialize('one', f.project);

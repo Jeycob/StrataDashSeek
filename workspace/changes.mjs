@@ -61,7 +61,7 @@ export class LiveChanges {
     const walk = async (directory, prefix = '', depth = 0) => {
       if (depth > 32) { warnings.add('SOURCE_DEPTH_LIMIT'); complete = false; return; }
       let entries;
-      try { entries = await fs.readdir(directory, { withFileTypes: true }); } catch (error) { if (!['ENOENT', 'EACCES'].includes(error.code)) throw error; ignored.add(prefix); warnings.add('CHANGING_OR_EXCLUDED_FILES'); complete = false; return; }
+      try { entries = await fs.readdir(directory, { withFileTypes: true }); } catch (error) { if (!['ENOENT', 'EACCES', 'EPERM'].includes(error.code)) throw error; ignored.add(prefix); warnings.add('CHANGING_OR_EXCLUDED_FILES'); complete = false; return; }
       entries.sort((a, b) => a.name.localeCompare(b.name));
       for (const entry of entries) {
         this.lifetime.signal.throwIfAborted(); if (stopped) break;
@@ -80,7 +80,7 @@ export class LiveChanges {
           bytes += data.length;
           files[relative] = { hash: digest(data), gitHash: blobHash(data, algorithm), bytes: data.length, kind: text === null ? 'binary' : data.length > this.maxFileBytes ? 'oversized' : 'text', ...(text !== null && data.length <= this.maxFileBytes ? { text } : {}) };
         } catch (error) {
-          if (['ENOENT', 'DIFF_CHANGING_FILE', 'SYMLINK_REFUSED', 'ELOOP', 'OUTSIDE_PROJECT'].includes(error.code)) { ignored.add(relative); warnings.add('CHANGING_OR_EXCLUDED_FILES'); continue; }
+          if (['ENOENT', 'EACCES', 'EPERM', 'DIFF_CHANGING_FILE', 'SYMLINK_REFUSED', 'ELOOP', 'OUTSIDE_PROJECT'].includes(error.code)) { ignored.add(relative); warnings.add('CHANGING_OR_EXCLUDED_FILES'); continue; }
           throw error;
         }
       }
