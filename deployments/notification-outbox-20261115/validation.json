@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "scope": "Durable notification enqueue, bounded retries, restart-safe watcher cursors and subscription replacement",
+  "independentReview": "Root integration source review, including pre/post-publication subscription failure and SQLite sidecar fixes",
+  "isolatedPhoneSource": {"sha256": "3456561b268ece82eaff23ceca8101eadf46f5c136277e73ab7610cde13c0462", "newDeviceAndAppsRoutesExcluded": true},
+  "independentChecks": {"windowsNode": 47, "linuxNode": 18, "linuxPython": 7, "failed": 0, "skipped": 0, "overlappingSets": true},
+  "exercised": ["actual writer process termination", "durable enqueue before HTTP202", "provider503 retry across reopen and service restart", "late410 and pre/post-rename replacement failure", "no false durable acknowledgement on write/capacity failure", "read-only sidecar alias and private metadata refusal", "compressed watcher records and retained retry state"],
+  "limitations": ["No live iPhone delivery proof", "Provider acceptance is not confirmed user delivery", "No production activation claimed", "Matching phone service and watcher must be deployed together", "Device-v2 migration is a separate coherent cutover"]
+}

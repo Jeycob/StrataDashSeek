@@ -5,27 +5,29 @@ const http=require('http'),fs=require('fs'),path=require('path'),crypto=require(
 const {callApps,streamExport}=require('../vast/apps-cli.cjs');
 const {runtimeRequire,serviceDataRoot}=require('../runtime/require.cjs');
 const {createRuntimeReadiness}=require('./runtime-readiness.cjs');
+const {atomicJson}=require('./private-json.cjs');
+const {NotificationOutbox}=require('./notification-outbox.cjs');
 const ROOT=path.resolve(__dirname,'../..');
 const webpush=process.env.HARNESS_WEB_PUSH_MODULE?require(process.env.HARNESS_WEB_PUSH_MODULE):runtimeRequire('web-push');
-function atomicJson(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const tmp=file+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
 function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'))}catch(e){if(e.code==='ENOENT')return fallback;throw e;}}
-function createPushServer(cfg,adapter=webpush){
+function createPushServer(cfg,adapter=webpush,services={}){
  const dataRoot=serviceDataRoot();
  cfg={...cfg,secretDir:cfg.secretDir||(dataRoot?path.join(dataRoot,'secrets'):path.join(ROOT,'work/.secrets')),desktopLog:cfg.desktopLog||(dataRoot?path.join(dataRoot,'logs/harness.log'):path.join(ROOT,'work/.secrets/desktop-web.stdout.log'))};
  const origin='https://'+cfg.publicHost;
  const readiness=createRuntimeReadiness(cfg);
  if(!/^[a-z0-9.-]+\.ts\.net$/i.test(cfg.publicHost))throw Error('Invalid private HTTPS host');
  const secretDir=cfg.secretDir||path.join(ROOT,'work/.secrets');
- const files={keys:path.join(secretDir,'webpush-vapid.json'),subs:path.join(secretDir,'webpush-subscriptions.json'),pair:path.join(secretDir,'webpush-pair-code.json'),internal:path.join(secretDir,'webpush-internal.key')};
- fs.mkdirSync(secretDir,{recursive:true});
+ const files={keys:path.join(secretDir,'webpush-vapid.json'),subs:path.join(secretDir,'webpush-subscriptions.json'),pair:path.join(secretDir,'webpush-pair-code.json'),internal:path.join(secretDir,'webpush-internal.key'),outbox:path.join(secretDir,'notification-outbox.sqlite')};
+ fs.mkdirSync(secretDir,{recursive:true,mode:0o700});
  let keys=readJson(files.keys,null);if(!keys){keys=adapter.generateVAPIDKeys();atomicJson(files.keys,keys);}
  adapter.setVapidDetails(origin+'/phone/',keys.publicKey,keys.privateKey);
  if(!fs.existsSync(files.internal))fs.writeFileSync(files.internal,crypto.randomBytes(32).toString('hex'),{mode:0o600});
  const internalKey=fs.readFileSync(files.internal,'utf8').trim();
  const store=readJson(files.subs,{version:1,installations:{}});
+ if(!store||store.version!==1||!store.installations||typeof store.installations!=='object'||Array.isArray(store.installations))throw Error('Invalid private subscription store');
+ store.installations=Object.assign(Object.create(null),store.installations);
  let pair=readJson(files.pair,null),pairBusy=false,failures=0,failWindow=Date.now();
  let watcherAt=0;const stats={accepted:0,failed:0,lastStatus:null,lastAcceptedAt:null};
- const recent=new Map();
  function newPair(){pair={code:String(crypto.randomInt(10000000,100000000)),expiresAt:Date.now()+10*60000,used:false};atomicJson(files.pair,pair);return pair;}
  if(!pair||pair.used||pair.expiresAt<Date.now())newPair();
  function same(a,b){const x=Buffer.from(a||''),y=Buffer.from(b||'');return x.length===y.length&&crypto.timingSafeEqual(x,y);}
@@ -49,28 +51,28 @@ function createPushServer(cfg,adapter=webpush){
   try{const u=new URL(s.endpoint);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&['web.push.apple.com','webpush.push.apple.com','fcm.googleapis.com','updates.push.services.mozilla.com'].includes(u.hostname)&&/^[a-zA-Z0-9_\-=]+$/.test(s.keys.auth)&&s.keys.auth.length>=16&&/^[a-zA-Z0-9_\-=]+$/.test(s.keys.p256dh)&&s.keys.p256dh.length>=40;}catch{return false;}
  }
  const messages={done:{title:'Harness: hotovo',body:'Úloha je dokončená. Otevři Harness pro výsledek.'},attention:{title:'Harness: potřebuje vstup',body:'Úloha čeká na tvůj vstup nebo schválení.'},error:{title:'Harness: úloha se zastavila',body:'Otevři Harness a zkontroluj úlohu.'},test:{title:'Harness: test oznámení',body:'Push oznámení na tomto iPhonu fungují.'}};
- async function sendOne(id,category){
-  const entry=store.installations[id];if(!entry||!messages[category])return;
-  const payload=JSON.stringify(Object.assign({},messages[category],{url:cfg.notificationUrl||'/phone/',tag:'harness-'+category}));
-  for(let attempt=0;attempt<2;attempt++){
-   try{const r=await adapter.sendNotification(entry.subscription,payload,{TTL:300,urgency:'normal',timeout:10000});stats.accepted++;stats.lastStatus=r.statusCode||201;stats.lastAcceptedAt=new Date().toISOString();return;}
-   catch(e){const status=Number(e.statusCode)||0;stats.lastStatus=status;if(status===404||status===410){delete store.installations[id];atomicJson(files.subs,store);stats.failed++;return;}if(attempt===0&&(!status||status===429||status>=500)){await new Promise(r=>setTimeout(r,5000));continue;}stats.failed++;return;}
-  }
- }
- async function publish(category,id){
-  if(!messages[category]||category==='test')return;
-  if(recent.has(id))return;recent.set(id,Date.now());if(recent.size>512)recent.delete(recent.keys().next().value);
-  await Promise.all(Object.keys(store.installations).filter(k=>!store.installations[k].retiredAt).map(k=>sendOne(k,category)));
- }
+ const outbox=new NotificationOutbox(files.outbox,{...services.outboxPolicy,send:async(id,category,meta)=>{
+  const entry=store.installations[id];if(!entry||entry.retiredAt||!messages[category])throw{statusCode:410};
+  const tag='harness-'+crypto.createHash('sha256').update(meta.eventId).digest('hex').slice(0,32);
+  const payload=JSON.stringify({...messages[category],url:cfg.notificationUrl||'/phone/',tag});
+  try{const result=await adapter.sendNotification(entry.subscription,payload,{TTL:meta.ttlSeconds,urgency:'normal',timeout:10000});stats.lastStatus=Number(result?.statusCode)||null;return result;}
+  catch(error){stats.lastStatus=Number(error.statusCode)||null;throw error;}
+ }});
+ function snapshot(){const delivery=outbox.metrics();Object.assign(stats,{accepted:delivery.providerAcceptedTargets,failed:delivery.failedTargets+delivery.retiredTargets,lastAcceptedAt:delivery.lastAcceptedAt,deliveryConfirmed:false});return{...stats,outbox:delivery};}
+ function registered(id){const entry=store.installations[id];return !!entry&&!entry.retiredAt&&!outbox.isRetired(id);}
+ function enqueue(category,id,options){return outbox.enqueue(category,id,Object.keys(store.installations).filter(registered),options);}
+ async function publish(category,id){if(!messages[category]||category==='test')return;const receipt=enqueue(category,id);await outbox.tick();snapshot();return receipt;}
+ function drain(){return outbox.tick().then(snapshot).catch(()=>{});}
+ snapshot();
  const server=http.createServer(async(req,res)=>{
   try{
    const u=new URL(req.url,'http://loopback');
    if(u.pathname.startsWith('/internal/')){
     if(req.method!=='POST'||!same(req.headers['x-harness-notify-key'],internalKey))return json(res,403,{error:'Forbidden'});
-    if(u.pathname==='/internal/state')return json(res,200,{registrations:Object.values(store.installations).filter(v=>!v.retiredAt).length,retiredRegistrations:Object.values(store.installations).filter(v=>v.retiredAt).length,watcherOnline:Date.now()-watcherAt<30000,...stats});
+    if(u.pathname==='/internal/state')return json(res,200,{registrations:Object.keys(store.installations).filter(registered).length,retiredRegistrations:Object.keys(store.installations).filter(id=>!registered(id)).length,watcherOnline:Date.now()-watcherAt<30000,...snapshot()});
     if(u.pathname==='/internal/paircode'){const p=newPair();return json(res,200,{code:p.code,expiresAt:p.expiresAt});}
     if(u.pathname==='/internal/heartbeat'){watcherAt=Date.now();return json(res,200,{ok:true});}
-    if(u.pathname==='/internal/event'){const data=await body(req);if(!['done','error','attention'].includes(data.category)||typeof data.id!=='string'||data.id.length>180)return json(res,400,{error:'Invalid event'});void publish(data.category,data.id);return json(res,202,{queued:true});}
+    if(u.pathname==='/internal/event'){const data=await body(req);if(!['done','error','attention'].includes(data.category))return json(res,400,{error:'Invalid event'});const receipt=enqueue(data.category,data.id,{occurredAt:data.occurredAt});json(res,202,{...receipt,queued:receipt.queuedTargets>0,phase:'persisted'});void drain();return;}
     return json(res,404,{error:'Not found'});
    }
    if(!u.pathname.startsWith('/phone/'))return json(res,404,{error:'Not found'});
@@ -123,21 +125,31 @@ function createPushServer(cfg,adapter=webpush){
    }
    if(u.pathname==='/phone/api/monitor'&&req.method==='GET')return json(res,200,readJson(!cfg.telemetryFile||cfg.telemetryFile==='/data/harness/state/telemetry.json'?'/data/harness/runtime-status/telemetry.json':cfg.telemetryFile,{ready:false}));
    if(u.pathname==='/phone/api/wake-config'&&req.method==='GET')return json(res,200,{wakeUrl:cfg.wakeUrl,key:cfg.wakeKeyFile?fs.readFileSync(cfg.wakeKeyFile,'utf8').trim():null});
-   if(u.pathname==='/phone/api/state'&&req.method==='GET')return json(res,200,{authorized:true,registered:!!store.installations[u.searchParams.get('installationId')]&&!store.installations[u.searchParams.get('installationId')].retiredAt,vapidPublicKey:keys.publicKey,watcherOnline:Date.now()-watcherAt<30000,...stats});
+   if(u.pathname==='/phone/api/state'&&req.method==='GET')return json(res,200,{authorized:true,registered:registered(u.searchParams.get('installationId')),vapidPublicKey:keys.publicKey,watcherOnline:Date.now()-watcherAt<30000,...snapshot()});
    const data=await body(req);const id=String(data.installationId||'');if(!/^[a-zA-Z0-9_-]{16,80}$/.test(id))return json(res,400,{error:'Invalid installation'});
    if(u.pathname==='/phone/api/subscribe'&&req.method==='POST'){
     if(!validSubscription(data.subscription))return json(res,400,{error:'Invalid push endpoint'});
     if(!store.installations[id]&&Object.keys(store.installations).length>=4)return json(res,429,{error:'Installation limit reached'});
-    store.installations[id]={subscription:data.subscription,createdAt:Date.now()};atomicJson(files.subs,store);return json(res,200,{ok:true});
+    const old=store.installations[id],sameSubscription=old?.subscription?.endpoint===data.subscription.endpoint&&old?.subscription?.keys?.auth===data.subscription.keys.auth&&old?.subscription?.keys?.p256dh===data.subscription.keys.p256dh;
+    if(sameSubscription&&!old?.retiredAt&&!outbox.isRetired(id))return json(res,200,{ok:true});
+    // Fence old in-flight results durably before changing either subscription
+    // representation. An uncertain JSON write remains retired across restart;
+    // only an explicit successfully persisted retry may reactivate it.
+    outbox.retire(id,'SUBSCRIPTION_UPDATE_PENDING');
+    const replacement={subscription:data.subscription,createdAt:old?.createdAt||Date.now()},next={...store,installations:{...store.installations,[id]:replacement}};
+    atomicJson(files.subs,next);outbox.reinstate(id);store.installations[id]=replacement;return json(res,200,{ok:true});
    }
-   if(u.pathname==='/phone/api/disable'&&req.method==='POST'){delete store.installations[id];atomicJson(files.subs,store);return json(res,200,{ok:true});}
+   if(u.pathname==='/phone/api/disable'&&req.method==='POST'){outbox.retire(id,'SUBSCRIPTION_DISABLED');delete store.installations[id];atomicJson(files.subs,store);return json(res,200,{ok:true});}
    if(u.pathname==='/phone/api/test'&&req.method==='POST'){
-    const entry=store.installations[id];if(!entry)return json(res,409,{error:'Nejprve zapni oznámení.'});if(Date.now()-(entry.lastTestAt||0)<60000)return json(res,429,{error:'Test lze poslat jednou za minutu.'});entry.lastTestAt=Date.now();atomicJson(files.subs,store);setTimeout(()=>void sendOne(id,'test'),5000);return json(res,202,{ok:true,message:'Test se odešle za 5 sekund. Zamkni telefon.'});
+    const entry=store.installations[id];if(!registered(id))return json(res,409,{error:'Nejprve zapni oznámení.'});const now=outbox.now(),last=Math.max(entry.lastTestAt||0,outbox.lastEventAt('test',id)||0);if(now-last<60000)return json(res,429,{error:'Test lze poslat jednou za minutu.'});const receipt=outbox.enqueue('test','test:'+id+':'+crypto.randomUUID(),[id],{notBeforeAt:now+5000});return json(res,202,{ok:true,...receipt,message:'Test je uložený k odeslání za 5 sekund.'});
    }
    return json(res,404,{error:'Not found'});
   }catch(e){if(!res.headersSent)json(res,e.status||503,{error:'Služba není připravená. Zkus to znovu.'});else res.destroy();}
  });
- return {server,files,stats,publish,validSubscription};
+ server.once('listening',()=>{if(services.outboxAutoStart!==false){outbox.start();void drain();}});server.on('close',()=>{void outbox.stop().catch(()=>{});});
+ let closing;
+ function close(){return closing??=(async()=>{if(server.listening)await new Promise(resolve=>server.close(resolve));await outbox.stop();})();}
+ return {server,files,stats,publish,validSubscription,outbox,close};
 }
 module.exports={createPushServer};
 if(require.main===module){const cfg=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));const {server}=createPushServer(cfg);server.listen(cfg.port||3091,'127.0.0.1',()=>console.log('Private PWA push service ready on loopback'));}

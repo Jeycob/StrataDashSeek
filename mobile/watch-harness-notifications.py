@@ -1,25 +1,19 @@
 """Read committed Harness events locally. Never transmit message bodies or code."""
-try:
-    import compression.zstd as zstd
-except ImportError:
-    import zstandard as zstd
 import json
+import hashlib
 import pathlib
 import sys
 import time
 import urllib.request
 import argparse
+from notification_watcher_state import WatcherStateStore
 
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-options=argparse.ArgumentParser()
-options.add_argument('--session-root',type=pathlib.Path,default=pathlib.Path.home()/'.dsh/sessions')
-options.add_argument('--key-file',type=pathlib.Path,default=ROOT/'work/.secrets/webpush-internal.key')
-options.add_argument('--port',type=int,default=3091)
-args=options.parse_args()
-SESSION_ROOT=args.session_root
-KEY_FILE=args.key_file
-
 def read_rows(file):
+    try:
+        import compression.zstd as zstd
+    except ImportError:
+        import zstandard as zstd
     try:
         with zstd.open(file,'rt',encoding='utf-8') as stream:
             for line in stream:
@@ -27,11 +21,13 @@ def read_rows(file):
                 except json.JSONDecodeError: return
     except (OSError,EOFError,zstd.ZstdError): return
 
-def post(route,data):
-    key=KEY_FILE.read_text(encoding='utf-8').strip()
-    req=urllib.request.Request('http://127.0.0.1:'+str(args.port)+'/internal/'+route,data=json.dumps(data).encode(),headers={'Content-Type':'application/json','X-Harness-Notify-Key':key},method='POST')
+def post(route,data,*,key_file,port):
+    key=key_file.read_text(encoding='utf-8').strip()
+    req=urllib.request.Request('http://127.0.0.1:'+str(port)+'/internal/'+route,data=json.dumps(data).encode(),headers={'Content-Type':'application/json','X-Harness-Notify-Key':key},method='POST')
     with urllib.request.urlopen(req,timeout=5) as response:
-        return json.loads(response.read())
+        raw=response.read(65537)
+        if len(raw)>65536:raise ValueError('Internal receipt exceeds limit')
+        return json.loads(raw)
 
 def event_intent(event):
     """Only terminal outcomes and unresolved attention; no generated content."""
@@ -55,45 +51,92 @@ def event_intent(event):
         if call_id:return ('resolve','attention',str(call_id))
     return None
 
-def main():
-    started=int(time.time()*1000)
-    cursors={};fingerprints={};pending={};last_heartbeat=0
-    # Baseline all existing history, without replaying previous completions.
-    for file in SESSION_ROOT.glob('*/*/session.v4.jsonl.zstd'):
-        key=str(file);cursors[key]=max((r.get('seq',0) for r in read_rows(file)),default=0)
-    while True:
-        now=time.time()
-        if now-last_heartbeat>10:
-            try:post('heartbeat',{});last_heartbeat=now
+class NotificationWatcher:
+    def __init__(self, session_root, store, send, *, clock=time.time, reader=read_rows):
+        self.root=pathlib.Path(session_root);self.store=store;self.send=send;self.clock=clock;self.reader=reader
+        self.fingerprints={};self.last_heartbeat=0;self.state=store.load()
+        if self.state is None:
+            self.state={'version':1,'initializedAt':int(clock()*1000),'cursors':{},'pending':{}}
+            # Ignore pre-installation history exactly once. Subsequent process
+            # starts resume durable cursors rather than baselining away downtime.
+            for file in self.files():
+                self.state['cursors'][self.key(file)]=max((r.get('seq',0) for r in reader(file) if type(r.get('seq',0)) is int),default=0)
+            self.store.save(self.state)
+
+    def files(self):
+        files=[]
+        for file in self.root.glob('*/*/session.v4.jsonl.zstd'):
+            files.append(file)
+            if len(files)>10000:raise RuntimeError('Watcher session limit')
+        return sorted(files)
+
+    def key(self,file):return file.relative_to(self.root).as_posix()
+
+    def tick(self):
+        now=int(self.clock()*1000);dirty=False
+        if now-self.last_heartbeat>10000:
+            try:self.send('heartbeat',{});self.last_heartbeat=now
             except Exception:pass
-        for file in SESSION_ROOT.glob('*/*/session.v4.jsonl.zstd'):
-            key=str(file)
-            try:stat=file.stat();stamp=(stat.st_mtime_ns,stat.st_size)
+        files=self.files();present={self.key(file) for file in files}
+        for old in set(self.state['cursors'])-present:
+            del self.state['cursors'][old];dirty=True
+        for file in files:
+            key=self.key(file)
+            try:info=file.stat();stamp=(info.st_mtime_ns,info.st_size)
             except OSError:continue
-            if fingerprints.get(key)==stamp:continue
-            fingerprints[key]=stamp
-            sid=file.parent.name;last=cursors.get(key,0);highest=last;delegation=0
-            for event in read_rows(file):
+            if self.fingerprints.get(key)==stamp:continue
+            last=self.state['cursors'].get(key,0);highest=last;delegation=0;sid=file.parent.name
+            for event in self.reader(file):
                 if event.get('type')=='session':delegation=event.get('delegationDepth',0);continue
-                seq=event.get('seq',0);highest=max(highest,seq)
-                if seq<=last or event.get('time',0)<started or delegation>0:continue
+                sequence=event.get('seq',0)
+                if type(sequence) is not int or sequence<0:continue
+                highest=max(highest,sequence);occurred=event.get('time',0)
+                if sequence<=last or type(occurred) is not int or occurred<self.state['initializedAt'] or delegation>0:continue
                 intent=event_intent(event)
                 if not intent:continue
                 action,category,item=intent
-                pkey=(sid,item)
-                if action=='pending':pending[pkey]=(now+3,category,sid+':'+str(seq))
-                elif action=='resolve':pending.pop(pkey,None)
-                elif action=='outcome':
-                    for old in [p for p in pending if p[0]==sid]:pending.pop(old,None)
-                    try:post('event',{'id':sid+':'+str(seq),'category':category})
-                    except Exception:pending[(sid,'retry:'+str(seq))]=(now+5,category,sid+':'+str(seq))
-            cursors[key]=highest
-        for item,(due,category,event_id) in list(pending.items()):
-            if due>now:continue
-            try:post('event',{'id':event_id,'category':category});pending.pop(item,None)
-            except Exception:pending[item]=(now+10,category,event_id)
-        time.sleep(2)
+                pending_key=hashlib.sha256((sid+'\0'+item).encode()).hexdigest()
+                if action=='resolve':self.state['pending'].pop(pending_key,None)
+                elif action in ('pending','outcome'):
+                    if action=='outcome':
+                        for old in [p for p,row in self.state['pending'].items() if row['sessionId']==sid]:self.state['pending'].pop(old,None)
+                        pending_key='outcome:'+sid+':'+str(sequence)
+                    self.state['pending'][pending_key]={'sessionId':sid,'eventId':sid+':'+str(sequence),'category':category,'dueAt':now+(3000 if action=='pending' else 0),'occurredAt':occurred,'expiresAt':occurred+300000}
+            self.state['cursors'][key]=highest;self.fingerprints[key]=stamp;dirty=True
+        # Cursor advancement and pending intent are one durable snapshot before
+        # the first enqueue request. An uncertain receipt reuses the same ID.
+        if dirty:self.store.save(self.state)
+        for item,row in list(self.state['pending'].items()):
+            if row['expiresAt']<=now:self.state['pending'].pop(item,None)
+            elif row['dueAt']>now:continue
+            else:
+                try:
+                    receipt=self.send('event',{'id':row['eventId'],'category':row['category'],'occurredAt':row['occurredAt']})
+                    if receipt.get('persisted') is not True:raise RuntimeError('Durable receipt required')
+                    self.state['pending'].pop(item,None)
+                except Exception:row['dueAt']=now+10000
+            self.store.save(self.state)
+
+
+def main(argv=None):
+    options=argparse.ArgumentParser()
+    options.add_argument('--session-root',type=pathlib.Path,default=pathlib.Path.home()/'.dsh/sessions')
+    options.add_argument('--key-file',type=pathlib.Path,default=ROOT/'work/.secrets/webpush-internal.key')
+    options.add_argument('--port',type=int,default=3091)
+    options.add_argument('--state-file',type=pathlib.Path)
+    options.add_argument('--once',action='store_true')
+    args=options.parse_args(argv)
+    if not 1<=args.port<=65535:raise ValueError('Invalid internal port')
+    with WatcherStateStore(args.state_file or args.key_file.parent/'notification-watcher-state.json') as store:
+        watcher=NotificationWatcher(args.session_root,store,lambda route,data:post(route,data,key_file=args.key_file,port=args.port))
+        while True:
+            watcher.tick()
+            if args.once:return
+            time.sleep(2)
 
 if __name__=='__main__':
     try:main()
     except KeyboardInterrupt:sys.exit(0)
+    except Exception as error:
+        print('Notification watcher failed: '+type(error).__name__,file=sys.stderr)
+        sys.exit(1)
