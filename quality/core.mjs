@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { classifyToolOutcome } from '../workspace/tool-recovery.mjs';
 import testRuntime from '../development/test-command.cjs';
 import privateSource from '../workspace/source-private.cjs';
+import { acquireProcessLock } from '../workspace/process-lock.mjs';
 const { isPrivateSourcePath } = privateSource;
 
 export const KINDS = ['build', 'test', 'browser', 'acceptance'];
@@ -92,7 +93,7 @@ export function parseTestCounts(output) {
   return p === undefined || f === undefined ? null : { passed: Number(p), failed: Number(f) };
 }
 
-export async function runProgram(command, { cwd, env = process.env, signal, timeoutMs = 30000, outputLimit = 65536 } = {}) {
+export async function runProgram(command, { cwd, env = process.env, signal, timeoutMs = 30000, outputLimit = 65536, lockFd } = {}) {
   signal?.throwIfAborted();
   if (/^node(?:\.exe)?$/iu.test(path.basename(command[0])) && command[1] === '--test') {
     const normalized = await testRuntime.normalizeNodeTestArgs(command.slice(1), { cwd, projectRoot: env.DSH_PROJECT_ROOT ?? cwd, signal });
@@ -100,7 +101,7 @@ export async function runProgram(command, { cwd, env = process.env, signal, time
   }
   return new Promise(resolve => {
     let stdout = '', stderr = '', truncated = false, timedOut = false, aborted = false, settled = false;
-    const child = spawn(command[0], command.slice(1), { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command[0], command.slice(1), { cwd, env, shell: false, windowsHide: true, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe', ...(Number.isInteger(lockFd) ? [lockFd] : [])] });
     const stop = () => {
       if (!Number.isInteger(child.pid)) return;
       if (process.platform === 'win32') execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
@@ -125,9 +126,8 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
   if (!selected.length) throw new QualityError('NO_CHECKS', 'No checks of that kind were declared.');
   const outputDir = await confined(root, '.harness/quality', { missing: true }); await fs.mkdir(outputDir, { recursive: true });
   const lockPath = path.join(outputDir, 'verification.lock'); let lock;
-  try { lock = await fs.open(lockPath, 'wx', 0o600); } catch (e) { if (e.code === 'EEXIST') throw new QualityError('VERIFICATION_BUSY', 'A verification already owns this project.'); throw e; }
+  try { lock = await acquireProcessLock(lockPath, { timeoutMs: 0, signal }); } catch (e) { if (e.code === 'LOCK_BUSY') throw new QualityError('VERIFICATION_BUSY', 'A verification already owns this project.'); throw e; }
   try {
-    await lock.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }));
     // Keep every declared plan confined, but allow later stages to declare a
     // plan before creating it. Only selected stages require and hash its file.
     for (const check of contract.checks) if (check.plan !== undefined) await confined(root, check.plan, { missing: true });
@@ -142,7 +142,7 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
       const resultFile = check.kind === 'browser' ? `.harness/quality/${check.id}-browser.json` : check.resultFile;
       if (resultFile) await confined(root, resultFile, { missing: true });
       const command = check.kind === 'browser' ? [process.execPath, path.join(HERE, 'browser.mjs'), '--workspace', root, '--plan', check.plan, '--output', resultFile, '--run-id', runId] : check.command;
-      result = await run(command, { cwd, env: { ...env, ...check.env, HARNESS_QUALITY_RUN_ID: runId }, signal, timeoutMs: Math.min(check.timeoutMs ?? 30000, remaining) });
+      result = await run(command, { cwd, env: { ...env, ...check.env, HARNESS_QUALITY_RUN_ID: runId }, signal, timeoutMs: Math.min(check.timeoutMs ?? 30000, remaining), lockFd: lock.inheritedFd });
       if (result.aborted || signal?.aborted) throw signal?.reason ?? new QualityError('ABORTED', 'Verification cancelled.');
       if (result.exitCode !== 0 || result.timedOut) diagnostics.push(result.timedOut ? 'CHECK_TIMEOUT' : `EXIT_${result.exitCode ?? 'UNAVAILABLE'}`);
       if (result.error) diagnostics.push(result.error);
@@ -176,7 +176,7 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
     const report = { version: 1, runId, startedAt, finishedAt: Date.now(), sourceHash: after.hash, initialSourceHash: before.hash, contractHash: digest(JSON.stringify(contract)), stale, passed, complete: passed && contract.requiredKinds.every(k => verifiedKinds.includes(k)), verifiedKinds, missingKinds: contract.requiredKinds.filter(k => !verifiedKinds.includes(k)), results };
     const temp = path.join(outputDir, runId + '.json'); await fs.writeFile(temp, JSON.stringify(report, null, 2), { mode: 0o600 }); await fs.rename(temp, path.join(outputDir, 'latest.json'));
     return report;
-  } finally { await lock.close(); await fs.unlink(lockPath); }
+  } finally { await lock.release(); }
 }
 
 export function compactReport(report) {

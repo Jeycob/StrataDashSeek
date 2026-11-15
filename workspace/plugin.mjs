@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { createRuntimeCapabilities } from './runtime-capabilities.mjs';
 import { registerRuntimeCapabilities } from './runtime-tool.mjs';
 import { cleanupIdleProjectCaches } from './cache-cleanup.mjs';
+import { checkpointOperation } from './checkpoint-api.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -103,7 +104,8 @@ export async function apply(ctx, config = {}) {
       if (data.op === 'trash') return reply(await manager.inOrder(() => manager.trashSession(id)));
       if (data.op === 'restore') return reply(await manager.inOrder(() => manager.restoreSession(id)));
       if (data.op === 'resume') { await manager.reviewResume(id, data.strategy); return reply({ resumed: true }); }
-      if (data.op === 'checkpoint-restore') return reply(await manager.restoreCheckpoint(id, data.key, request.signal));
+      const checkpoint = await checkpointOperation(manager, data, request.signal);
+      if (checkpoint) return reply(checkpoint.value);
       throw new WorkbenchError('UNKNOWN_OPERATION', 'Unknown operation.', 400);
     } catch (error) { return reply({ code: error.code ?? 'WORKBENCH_FAILED', error: error.message }, error.status ?? (String(error.code).includes('STALE') ? 409 : 400)); }
   } }));

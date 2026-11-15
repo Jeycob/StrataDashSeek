@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY_VERSION, validationKind, relativeFile, within, operationFingerprint } from './policy.mjs';
 import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash } from './storage.mjs';
 import { LiveChanges } from './changes.mjs';
+import { previewCheckpointRestore, restoreCheckpointTransaction, recoverCheckpointRestore, checkpointRecoveryStatus } from './checkpoint-restore.mjs';
 import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
 import { guideFirstCheck, warnStageBudget } from './verification-guidance.mjs';
 import { verificationStatusMayBeMasked } from './shell-status.mjs';
@@ -139,6 +140,7 @@ export class WorkspaceManager {
       if (kind === 'web' && !environment.browser?.ok || kind === 'dotnet' && !environment.dotnet?.available) throw new WorkbenchError('ENVIRONMENT_UNAVAILABLE', 'Prepared environment preflight failed. Open Workspace → Environment; do not install replacements.', 503);
     }
     await this.locks.acquire(record.root, agent.id); this.running.set(agent.id, record.root);
+    await this.ensureRestoreRecovered(agent.id, record.root);
     const budget = this.budgets.get(agent.id), settings = this.settings(agent.session);
     if (initiator === agent.id && beginUserRequest(record, budget, { turn, messages })) {
       delete record.stageBudgetWarningStage; delete record.stageBudgetWarningInspection;
@@ -271,7 +273,8 @@ export class WorkspaceManager {
   }
   async pruneCheckpoints(id) {
     const directory = path.join(this.root, 'checkpoints', id), record = this.data.sessions[id];
-    const keep = new Set([...Object.values(record.checkpoints ?? {}).map(c => c.path), record.beforeRestore].filter(Boolean));
+    const recovery = await this.checkpointRecovery(id);
+    const keep = new Set([...Object.values(record.checkpoints ?? {}).map(c => c.path), record.beforeRestore, recovery.beforeRestore?.path].filter(Boolean));
     // Bound our own superseded cache generations; never touch project files.
     for (const entry of await fs.readdir(directory, { withFileTypes: true }).catch(() => [])) {
       if (!entry.isDirectory() || !/^(?:best|before-restore)\.[a-f0-9-]{36}$/u.test(entry.name)) continue;
@@ -282,8 +285,8 @@ export class WorkspaceManager {
   async review(id) {
     const agent = this.ctx.agents.get(id), owner = agent ? this.ownerAgent(agent) : undefined, record = this.data.sessions[owner?.id ?? id];
     if (!record) return undefined;
-    const manifest = await sourceManifest(record.root);
-    return { root: record.root, legacy: Boolean(record.legacy), sourceHash: manifest.sha256, budget: record.budget, checkpoints: record.checkpoints, ports: record.ports, databasePath: record.databasePath };
+    const restoreRecovery = await this.checkpointRecovery(owner?.id ?? id); const manifest = restoreRecovery.pending ? null : await sourceManifest(record.root);
+    return { root: record.root, legacy: Boolean(record.legacy), sourceHash: manifest?.sha256 ?? null, restoreRecovery, beforeRestore: record.beforeRestoreInfo ?? restoreRecovery.beforeRestore, budget: record.budget, checkpoints: record.checkpoints, ports: record.ports, databasePath: record.databasePath };
   }
   async reportVerification(report) {
     const agent = this.ctx.agents.get(report.sessionId); if (!agent) throw new WorkbenchError('SESSION_NOT_LIVE', 'A live conversation is required to record verification.');
@@ -308,30 +311,41 @@ export class WorkspaceManager {
     const budget = this.budgets.get(id); budget.resume(strategy); record.budget = budget; record.lastStep = null; await this.save();
     agent.followup(notice('The owner reviewed the paused run and chose this revised approach: ' + strategy + '. Continue the existing task in the isolated project and verify a small stage first.'));
   }
-  async restoreCheckpoint(id, key, signal) {
-    const record = this.data.sessions[id], checkpoint = record?.checkpoints?.[key];
+  restoreLocations(id) { if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(id)) throw new WorkbenchError('INVALID_SESSION', 'Invalid conversation.', 400); return { stateRoot: path.join(this.root, 'restores', id), checkpointRoot: path.join(this.root, 'checkpoints', id) }; }
+  async checkpointRecovery(id) {
+    if (!this.data.sessions[id]) throw new WorkbenchError('PROJECT_NOT_READY', 'Project is not registered.');
+    return checkpointRecoveryStatus(this.restoreLocations(id).stateRoot);
+  }
+  async ensureRestoreRecovered(id, root) {
+    const record = this.data.sessions[id]; if (!record) return;
+    if (record.root && await fs.realpath(record.root) !== await fs.realpath(root)) throw new WorkbenchError('PROJECT_CHANGED', 'Project registration changed.');
+    const status = await this.checkpointRecovery(id);
+    if (status.pending && (await recoverCheckpointRestore(root, this.restoreLocations(id))).pending) throw new WorkbenchError('RESTORE_RECOVERY_REQUIRED', 'Recovery must complete before project work.');
+  }
+  async checkpointForRestore(id, key) {
+    const record = this.data.sessions[id];
+    const checkpoint = key === 'beforeRestore' ? (await this.checkpointRecovery(id)).beforeRestore ?? record?.beforeRestoreInfo
+      : record?.checkpoints && Object.hasOwn(record.checkpoints, key) ? record.checkpoints[key] : undefined;
     if (!checkpoint || !within(path.join(this.root, 'checkpoints', id), checkpoint.path)) throw new WorkbenchError('CHECKPOINT_NOT_FOUND', 'Checkpoint not found.', 404);
-    return this.withFiles(id, async (root, policy) => {
-      const manifest = await readJSON(path.join(checkpoint.path, 'checkpoint-manifest.json'), null);
-      if (!manifest || hash(JSON.stringify(Object.entries(manifest.files).sort())) !== checkpoint.sha256) throw new WorkbenchError('CHECKPOINT_INVALID', 'Checkpoint manifest does not match.');
-      const current = await sourceManifest(root, { signal });
-      record.beforeRestore = await saveCheckpoint(root, path.join(this.root, 'checkpoints', id, 'before-restore'), current); await this.save();
-      let restoredFiles = 0, skippedPrivateFiles = 0;
-      for (const [relative, expected] of Object.entries(manifest.files)) {
-        if (isPrivateSourcePath(relative)) { skippedPrivateFiles++; continue; }
-        relativeFile(relative); const source = await canonicalInside(path.join(checkpoint.path, 'files'), relative), bytes = await fs.readFile(source);
-        if (hash(bytes) !== expected.sha256) throw new WorkbenchError('CHECKPOINT_INVALID', 'Checkpoint file checksum does not match.');
-        const destination = await canonicalInside(root, relative, true); await fs.mkdir(path.dirname(destination), { recursive: true });
-        const target = await this.ctx.fs.resolve(destination, { signal }), stat = await this.ctx.fs.stat(target, signal);
-        if (expected.binary) { const temp = destination + '.restore-' + crypto.randomUUID(); await fs.writeFile(temp, bytes, { flag: 'wx', mode: 0o600 }); await fs.rename(temp, destination); }
-        else await this.ctx.fs.writeText(target, bytes.toString('utf8'), stat ? { kind: 'replaceIfVersion', version: stat.version } : { kind: 'createIfAbsent' }, signal, policy);
-        restoredFiles++;
-      }
-      for (const relative of Object.keys(current.files)) if (!Object.hasOwn(manifest.files, relative)) {
-        const target = await this.ctx.fs.resolve(await canonicalInside(root, relative), { signal }), stat = await this.ctx.fs.stat(target, signal);
-        await this.ctx.fs.deleteFile(target, { version: stat.version }, signal, policy);
-      }
-      return { restored: true, files: restoredFiles, skippedPrivateFiles, previousVersionRetained: true };
+    return checkpoint;
+  }
+  async previewCheckpointRestore(id, key, signal) {
+    const checkpoint = await this.checkpointForRestore(id, key);
+    return this.withFiles(id, async root => {
+      const recovery = await this.checkpointRecovery(id);
+      if (recovery.pending) return { recoveryRequired: true, recovery };
+      return { ...await previewCheckpointRestore(root, checkpoint.path, { expectedHash: checkpoint.sha256, signal }), recovery };
+    });
+  }
+  async recoverCheckpoint(id) {
+    return this.withFiles(id, async root => { await this.ensureRestoreRecovered(id, root); return this.checkpointRecovery(id); }, true);
+  }
+  async restoreCheckpoint(id, key, signal, { expectedSourceHash } = {}) {
+    const record = this.data.sessions[id], checkpoint = await this.checkpointForRestore(id, key);
+    return this.withFiles(id, async root => {
+      if (this.data.sessions[id] !== record) throw new WorkbenchError('PROJECT_CHANGED', 'Project registration changed.');
+      return restoreCheckpointTransaction(root, checkpoint.path, { ...this.restoreLocations(id), expectedHash: checkpoint.sha256, expectedSourceHash, signal,
+        onPrepared: async info => { record.beforeRestore = info.path; record.beforeRestoreInfo = info; await this.save(); } });
     }, true);
   }
   async trashSession(id) {
@@ -364,7 +378,14 @@ export class WorkspaceManager {
       if (project.live && this.ctx.sandboxPolicy.resolve({ session: project.live }).mode === 'read-only') throw new WorkbenchError('READ_ONLY', 'The selected conversation is read-only.', 403);
       await this.locks.acquire(root, owner);
     }
-    try { return await action(root, { mode: 'workspace-write', workspaceRoot: root, sessionId: id }); }
+    try {
+      if (write) {
+        if (this.ctx.sessions.get(id) !== project.live || await fs.realpath(this.data.sessions[id]?.root ?? project.root) !== root) throw new WorkbenchError('PROJECT_CHANGED', 'Project or session changed while acquiring its lease.');
+        if (this.ctx.sandboxPolicy.resolve({ session: project.live }).mode === 'read-only') throw new WorkbenchError('READ_ONLY', 'The selected conversation is read-only.', 403);
+        await this.ensureRestoreRecovered(id, root);
+      }
+      return await action(root, { mode: 'workspace-write', workspaceRoot: root, sessionId: id });
+    }
     finally { if (write) await this.locks.release(owner); }
   }
   async files(id, operation, args, signal) {

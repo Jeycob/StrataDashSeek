@@ -50,5 +50,6 @@ test('restoring legacy source history preserves current runtime credentials and 
  assert.equal(result.files,1);assert.equal(result.skippedPrivateFiles,1);
  assert.equal(await fs.readFile(path.join(f.root,'app.js'),'utf8'),'original source\n');
  assert.equal(await fs.readFile(path.join(f.root,'secrets/session-secret'),'utf8'),'CURRENT_FIXTURE_CREDENTIAL');
- await assert.rejects(fs.stat(path.join(f.root,'toString')),{code:'ENOENT'});
+ assert.equal(await fs.readFile(path.join(f.root,'toString'),'utf8'),'extra source\n');
+ assert.equal(result.legacyOverlayOnly,true);
 });

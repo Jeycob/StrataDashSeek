@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "baseCommit": "c79a76696249e1266604747990acda941150143a",
+  "scope": "Inventory-aware source checkpoints, transactional restore/recovery, process locks and authenticated workbench routing",
+  "rootReview": "Reviewed checkpoint validation, retained rollback payloads, protected exclusions, stale-source refusal and lock ownership",
+  "workerReview": "Independent read-only review passed for checkpoint API integration and plugin route; reviewer did not rerun root tests",
+  "rootChecks": {
+    "windows": { "passed": 91, "failed": 0, "skipped": 0 },
+    "linux": { "passed": 54, "failed": 0, "skipped": 0 },
+    "coverageOverlaps": true,
+    "linuxIncludes": "Real process exits at11restore/rollback phases,5kernel lock checks, inherited checker descriptor, actual filesystem API roundtrip and stale preview refusal"
+  },
+  "http": {
+    "existingAuthenticationAndSameOriginPreserved": true,
+    "restoreRequiresPreviewHash": true,
+    "clientFilesystemPathsAccepted": false,
+    "recoveryAfterStartCompletesConsistencyWorkDespiteDisconnect": true
+  },
+  "limits": [
+    "Old writer processes must be quiescent during lock protocol upgrade",
+    "Ambiguous legacy locks require operator review, not automatic timed deletion",
+    "Portable mode refuses unverifiable stale takeover",
+    "Process crash tests do not emulate physical power loss",
+    "No production project restored and no live model invoked by these tests"
+  ]
+}
