@@ -232,7 +232,7 @@ export class WorkspaceManager {
     // A shell pipeline can hide the real check exit code. It cannot earn a pass.
     const managedCommand = exec.name === 'project_exec' || exec.managedProjectShell;
     const observedCommand = managedCommand ? normalizeVerificationCommand(command).command : command;
-    if (kind && exitCode === 0 && verificationStatusMayBeMasked(observedCommand)) {
+    if (kind && !structured && typeof command === 'string' && exitCode === 0 && verificationStatusMayBeMasked(observedCommand)) {
       const diagnostics = this.pendingDiagnostics.get(exec.agent.id) ?? new Map();
       diagnostics.set('VERIFICATION_STATUS_UNAVAILABLE', recoveryContext({ category: 'tool-error', code: 'VERIFICATION_STATUS_UNAVAILABLE' }));
       while (diagnostics.size > 4) diagnostics.delete(diagnostics.keys().next().value);
