@@ -133,3 +133,23 @@ capacity after cleanup remains a failure and the previous deployment is retained
 See [Docker builder prune](https://docs.docker.com/reference/cli/docker/builder/prune/).
 Host free-space success alone does not establish guest capacity. Build logs now
 identify the worker startup and image-building phases explicitly.
+
+### Capacity profile of the current Vast pilot
+
+The currently approved worker is QEMU/TCG with 1 vCPU, 2 GiB RAM and a fixed
+3 GiB persistent disk. Its Docker daemon uses `vfs`. Check the current worker
+configuration before applying these pilot limits to another backend. Docker's
+[VFS documentation](https://docs.docker.com/engine/storage/drivers/vfs-driver/)
+explains that creating another layer copies its parent directory. Temporary build
+usage can therefore greatly exceed the final image size. More stages and many
+small COPY/RUN layers can increase the peak even when the runtime image shrinks.
+
+Account for the build's peak working set, minimize unnecessary layers and remove
+package download caches within the same RUN step that creates them. Do not infer
+that a smaller final image fits this pilot. Host capacity, guest capacity and a
+completed image build are three different facts. If unused-cache cleanup still
+cannot fit the build, preserve the failed report and describe the capacity blocker;
+do not retry unchanged, weaken tests, remove retained images/data, change storage
+drivers or enlarge/rent infrastructure automatically. A storage/backend change
+must preserve existing application data and be planned separately. Successful
+native Node/Python tests do not imply that a Docker image already exists.
