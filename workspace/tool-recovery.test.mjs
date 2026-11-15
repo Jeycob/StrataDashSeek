@@ -61,6 +61,22 @@ test('timeouts and cancellation preserve incomplete status and actionable cleanu
   assert.equal(classifyToolOutcome({ kind: 'test', errorCode: 'TOOL_ABORTED_BEFORE_DISPATCH' }).category, 'cancelled');
 });
 
+test('browser navigation and locator timeout diagnostics remain incomplete verification', () => {
+  for (const text of [
+    'page.reload: Timeout 6000ms exceeded.\nCall log:\n  - waiting for navigation until "networkidle"\n  name: \'TimeoutError\'',
+    'locator.click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for a visible control',
+    'TimeoutError: waiting for application readiness',
+  ]) {
+    for (const kind of [undefined, 'browser', 'test']) {
+      const result = classifyToolOutcome({ kind, exitCode: 1, text });
+      assert.equal(result.category, 'timeout', text); assert.equal(result.code, 'EXECUTION_TIMEOUT');
+      assert.equal(result.verification, false); assert.equal(result.failed, true);
+    }
+    assert.equal(classifyToolOutcome({ exitCode: 0, text }).category, 'success');
+    assert.equal(classifyToolOutcome({ kind: 'test', exitCode: 1, text: 'AssertionError [ERR_ASSERTION]\n' + text }).category, 'verification');
+  }
+});
+
 test('exit zero cannot turn zero tests, all skipped tests or masked failures into a stage pass', () => {
   for (const text of ['# tests 0\n# pass 0\n# fail 0', 'ℹ tests 2\nℹ pass 0\nℹ skipped 2', 'No test files found', '[NODE_TEST_NO_FILES] No runnable Node test files were found in the requested directory', '# tests 1\n# pass 0\n# todo 1']) {
     const result = classifyToolOutcome({ kind: 'test', exitCode: 0, text });

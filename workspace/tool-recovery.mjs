@@ -8,7 +8,7 @@ const GUIDANCE = Object.freeze({
   invocation: 'The tool or library invocation is invalid. Read its installed signature or CLI help and correct the argument count, argument types or option spelling. Do not rewrite arbitrary JavaScript automatically.',
   configuration: 'Verification configuration was rejected before meaningful checks. Read the installed contract and browser-plan schema in /data/harness/app/quality/README.md. Use supported keys, direct program arguments and assigned project ports. Keep the stage unverified; do not replace real assertions with trivial checks.',
   'stale-edit': 'The edit target no longer matches the supplied old text. Reread the current relevant lines, then submit a small exact edit. Never fuzzy-apply, force an edit, or overwrite the whole file to bypass the mismatch.',
-  timeout: 'Execution exceeded its time limit; completion is unverified. Inspect the last visible progress, unresolved handles, pending requests and test cleanup. Stop only processes owned by this task. Keep the outer process deadline; do not turn a timeout into a pass or add force-exit to hide a hang.',
+  timeout: 'Execution exceeded its time limit; completion is unverified. Inspect the last visible progress, unresolved handles, pending requests and test cleanup. For browser waits, inspect the visible state and ongoing requests, then wait for the expected user-visible result; do not hide a busy application with sleeps or longer timeouts. Stop only processes owned by this task. Keep the outer process deadline; do not turn a timeout into a pass or add force-exit to hide a hang.',
   cancelled: 'Execution was cancelled. No verification completion is recorded. Respect cancellation and wait for the next requested action.',
   'empty-verification': 'No runnable tests were verified. Check the test selection, skipped-test totals and working directory. For Node --test, use actual test files or quoted supported glob patterns. Zero tests do not complete a verified stage.',
   'tool-error': 'The tool failed without a completed verification result. Inspect its exact diagnostic and current inputs, then choose a different concrete approach if the same error repeats.',
@@ -45,7 +45,7 @@ export function classifyToolOutcome(input = {}) {
     category = 'empty-verification'; code = 'NO_TESTS_EXECUTED';
   } else if (failed && /(?:^|\n)\s*(?:AbortError:|\[TOOL_ABORTED(?:_BEFORE_DISPATCH)?\])/u.test(text)) {
     category = 'cancelled'; code = 'EXECUTION_CANCELLED';
-  } else if (failed && /\b(?:ETIMEDOUT|ERR_TEST_TIMEOUT|CHECK_TIMEOUT|VERIFICATION_BUDGET_EXHAUSTED)\b|failureType:\s*['"]testTimeoutFailure['"]|\[(?:timed out|timeout)[^\]]*\]|(?:command|test|operation) timed out/iu.test(text)) {
+  } else if (failed && /\b(?:ETIMEDOUT|ERR_TEST_TIMEOUT|CHECK_TIMEOUT|VERIFICATION_BUDGET_EXHAUSTED)\b|failureType:\s*['"]testTimeoutFailure['"]|\[(?:timed out|timeout)[^\]]*\]|(?:command|test|operation) timed out|(?:^|\n)\s*(?:TimeoutError:|(?:[A-Z_$][\w$]*\.)*[A-Z_$][\w$]*:\s*Timeout\s+\d+(?:\.\d+)?ms exceeded\.)/imu.test(text)) {
     category = 'timeout'; code = 'EXECUTION_TIMEOUT';
   } else if (failed && (/\bERR_TEST_FAILURE\b/u.test(text) || /^\s*['"]test failed['"]\s*$/mu.test(text)) && /\b(?:ModuleJob\.run|Module\._compile|Module\._load|executeUserEntryPoint)\b/u.test(text)
     && !/\bat (?:async )?TestContext\b/u.test(text)
