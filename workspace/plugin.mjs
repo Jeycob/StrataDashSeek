@@ -114,6 +114,8 @@ export async function apply(ctx, config = {}) {
     catch (error) { return reply({ error: error.message }, error.status ?? 400); }
   } }));
   // Kept as a separate static contribution for a native client in addition to /phone/.
+  const sourceCommit = path.basename(await fs.realpath(root));
+  ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/health', methods: ['GET'], requestBody: 'buffered', fetch: async () => reply({ version: 1, workspaceReady: true, sourceCommit: /^[a-f0-9]{40}$/u.test(sourceCommit) ? sourceCommit : null }) }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/client', methods: ['GET'], requestBody: 'buffered', fetch: async () => new Response(await fs.readFile(path.join(root, 'workspace/client.js')), { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' } }) }));
   await fs.writeFile(path.join(manager.root, 'loaded.json'), JSON.stringify({ at: Date.now(), pid: process.pid, loaded: true, installedAt: manager.data.installedAt }), { mode: 0o600 });
 }

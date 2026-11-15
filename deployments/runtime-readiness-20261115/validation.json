@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "baseCommit": "846758039dd8165750ebdf05286882bec1cec7d4",
+  "scope": "Independent source/workbench/model readiness and bounded persistent service restarts",
+  "portableWindows": { "passed": 10, "failed": 0, "skipped": 0 },
+  "linux": { "passed": 11, "failed": 0, "skipped": 0 },
+  "actualPinnedNativeHost": {
+    "passed": 1,
+    "failed": 0,
+    "skipped": 0,
+    "worktreeProvider": "Existing installed @deepseek-ai/dsh-experimental-worktree, matching production profile",
+    "functionalRoute": "Anonymous401; authenticated200 with exact physical release identity; model unloaded keeps ready=false",
+    "sourceReport": "Synthetic fixture; actual signature gates are tested separately",
+    "modelGenerationSubmitted": false
+  },
+  "coverageOverlaps": true,
+  "peerReview": "Read-only review; persisted-backoff issue corrected with controller-restart regression",
+  "productionActivated": false,
+  "limits": [
+    "Harness readiness does not certify an application's Docker deployment",
+    "Signed source rollback is a separate pending transition",
+    "Existing production's pre-bootstrap log open requires a reviewed integrity preflight and explicit stable upgrade",
+    "Device authentication, Apps context and phone UI changes are separate active work"
+  ]
+}

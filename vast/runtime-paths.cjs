@@ -43,13 +43,14 @@ function identity(){return{uid:Number(cp.execFileSync('/usr/bin/id',['-u','harne
 function validIdentity(value){if(!Number.isInteger(value.uid)||value.uid<1||!Number.isInteger(value.gid)||value.gid<1)throw Error('A non-root service identity is required');return value;}
 function readPrivate(root,name,fallback=null){if(!NAME.test(name))throw Error('Invalid runtime state name');const p=control(root),file=path.join(p.privateState,name);if(!trustedFile(file,{optional:true}))return fallback;const fd=fs.openSync(file,flags.O_RDONLY|flags.O_NOFOLLOW|flags.O_NONBLOCK);try{const s=fs.fstatSync(fd);if(s.nlink!==1||s.uid!==0||!s.isFile()||s.size>2*1024**2)throw Error('Invalid private runtime state');return JSON.parse(fs.readFileSync(fd,'utf8'));}finally{fs.closeSync(fd);}}
 function writePrivate(root,name,value){if(!NAME.test(name))throw Error('Invalid runtime state name');atomic(path.join(control(root).privateState,name),value);}
-const PUBLIC_NAMES=new Set(['services.json','telemetry.json','idle-status.json','startup-update.json','preview-status.json','billing-status.json']);
+const PUBLIC_NAMES=new Set(['services.json','service-health.json','telemetry.json','idle-status.json','startup-update.json','preview-status.json','billing-status.json']);
 const publicString=value=>String(value).slice(0,500).replace(/https?:\/\/\S*[?&](?:token|key|secret)=[^\s]*/gi,'[redacted authentication URL]').replace(/Bearer\s+\S+/gi,'Bearer [redacted]');
 function sanitize(value){if(value===null||typeof value==='boolean')return value;if(typeof value==='number')return Number.isFinite(value)?value:null;if(typeof value==='string')return publicString(value);if(Array.isArray(value))return value.slice(0,60).map(sanitize);if(value&&typeof value==='object'){const out={};for(const[k,v]of Object.entries(value)){if(/secret|password|cookie|authorization|harness.?log|launch.?url/i.test(k)||/token/i.test(k)&&typeof v!=='number')continue;out[k]=sanitize(v);}return out;}return null;}
 function publicValue(name,value){
  if(!PUBLIC_NAMES.has(name))throw Error('Unsupported public runtime status');
  const keys={
   'services.json':['pids','names'],
+  'service-health.json':['version','at','sourceCommit','phase','reasonCode','failedService'],
   'startup-update.json':['version','enabled','phase','checkedAt','appliedCommit','targetCommit','error','signatureVerified','bootstrapUpgradeRequired'],
   'telemetry.json':['at','source','gpu','cpu','ram','disk','model','agentQueue','last','requests','history','liveTokensPerSecond','energyWhSinceMonitorStart','monitorStartedAt','idle'],
   'idle-status.json':['at','canStop','reason','idleTimeoutSeconds','idleSeconds'],

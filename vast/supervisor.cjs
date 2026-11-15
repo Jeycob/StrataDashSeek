@@ -1,15 +1,20 @@
 'use strict';
 const fs=require('node:fs'),http=require('node:http'),cp=require('node:child_process');
 const runtime=require('./runtime-paths.cjs');
+const {ServiceLifecycle}=require('./service-lifecycle.cjs');
 const R='/data/harness',cfg=JSON.parse(fs.readFileSync(R+'/config.json','utf8'));
 const uid=Number(cp.execFileSync('id',['-u','harness']).toString()),gid=Number(cp.execFileSync('id',['-g','harness']).toString());
 runtime.prepare(R,{uid,gid});
-runtime.adoptSignedStatus(R);
+const sourceStatus=runtime.adoptSignedStatus(R);
 const children=new Map();let closing=false;
+const previousRestarts=runtime.readPrivate(R,'service-restarts.json',{});
+const lifecycle=new ServiceLifecycle({initial:previousRestarts.sourceCommit===sourceStatus.appliedCommit?previousRestarts:{},changed:state=>{const report={...state,sourceCommit:sourceStatus.appliedCommit};runtime.writePrivate(R,'service-restarts.json',report);runtime.publish(R,'service-health.json',report);}});
+const healthTimer=setInterval(()=>runtime.publish(R,'service-health.json',{...lifecycle.snapshot(),sourceCommit:sourceStatus.appliedCommit}),3000);healthTimer.unref();
 const env={...process.env,HOME:R+'/home',DSH_HOME:R+'/home/.dsh',PATH:R+'/node/bin:/usr/local/bin:/usr/bin:/bin',STRATA_GATEWAY_KEY:'local-strata'};
 delete env.VAST_API_KEY;delete env.CLOUDFLARE_API_TOKEN;
-function save(){const state={pids:[...children.values()].map(p=>p.pid),names:Object.fromEntries([...children].map(([name,p])=>[name,p.pid]))};runtime.writePrivate(R,'services.json',state);runtime.publish(R,'services.json',state);}
+function save(){const current=[...children].filter(([,p])=>Number.isInteger(p.pid));const state={pids:current.map(([,p])=>p.pid),names:Object.fromEntries(current.map(([name,p])=>[name,p.pid]))};runtime.writePrivate(R,'services.json',state);runtime.publish(R,'services.json',state);}
 function launch(name,exe,args,asRoot=false){
+ const admission=lifecycle.admission(name);if(!admission.allowed){if(admission.retryAfterMs!==null)setTimeout(()=>{if(!closing)launch(name,exe,args,asRoot);},admission.retryAfterMs);return null;}
  // Only the existing phone/local-owner login flow needs Harness stdout.
  // Other services keep private logs even when the child itself is non-root.
  const out=runtime.openLog(R,name,{serviceGroup:name==='harness'?gid:null});
@@ -17,7 +22,9 @@ function launch(name,exe,args,asRoot=false){
  // bytecode to it; preserve the separate model runtime's existing cache policy.
  const childEnv=args.some(arg=>typeof arg==='string'&&arg.startsWith(R+'/app/'))?{...env,PYTHONDONTWRITEBYTECODE:'1'}:env;
  const child=cp.spawn(exe,args,{cwd:R+'/workspaces',env:childEnv,uid:asRoot?0:uid,gid:asRoot?0:gid,stdio:['ignore',out,out]});fs.closeSync(out);
- children.set(name,child);save();child.on('error',e=>console.log(name+': '+e.message));child.on('exit',(code)=>{children.delete(name);save();if(!closing){console.log(name+' exited '+code);setTimeout(()=>launch(name,exe,args,asRoot),3000);}});return child;
+ children.set(name,child);lifecycle.started(name);save();let exited=false;
+ const finish=code=>{if(exited)return;exited=true;children.delete(name);save();if(!closing){console.log(name+' exited '+code);const plan=lifecycle.exited(name);if(plan.restart)setTimeout(()=>{if(!closing)launch(name,exe,args,asRoot);},plan.delayMs);else console.error(name+': automatic restart limit reached; inspect runtime health.');}};
+ child.on('error',()=>finish('spawn-error'));child.on('exit',finish);return child;
 }
 function portOpen(port){return new Promise(resolve=>{const q=http.get('http://127.0.0.1:'+port+'/health',r=>{r.resume();resolve(true)});q.on('error',()=>resolve(false));q.setTimeout(2000,()=>{q.destroy();resolve(false)});});}
 (async()=>{

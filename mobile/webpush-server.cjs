@@ -4,6 +4,7 @@
 const http=require('http'),fs=require('fs'),path=require('path'),crypto=require('crypto');
 const {callApps,streamExport}=require('../vast/apps-cli.cjs');
 const {runtimeRequire,serviceDataRoot}=require('../runtime/require.cjs');
+const {createRuntimeReadiness}=require('./runtime-readiness.cjs');
 const ROOT=path.resolve(__dirname,'../..');
 const webpush=process.env.HARNESS_WEB_PUSH_MODULE?require(process.env.HARNESS_WEB_PUSH_MODULE):runtimeRequire('web-push');
 function atomicJson(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});const tmp=file+'.tmp';fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600});fs.renameSync(tmp,file);}
@@ -12,6 +13,7 @@ function createPushServer(cfg,adapter=webpush){
  const dataRoot=serviceDataRoot();
  cfg={...cfg,secretDir:cfg.secretDir||(dataRoot?path.join(dataRoot,'secrets'):path.join(ROOT,'work/.secrets')),desktopLog:cfg.desktopLog||(dataRoot?path.join(dataRoot,'logs/harness.log'):path.join(ROOT,'work/.secrets/desktop-web.stdout.log'))};
  const origin='https://'+cfg.publicHost;
+ const readiness=createRuntimeReadiness(cfg);
  if(!/^[a-z0-9.-]+\.ts\.net$/i.test(cfg.publicHost))throw Error('Invalid private HTTPS host');
  const secretDir=cfg.secretDir||path.join(ROOT,'work/.secrets');
  const files={keys:path.join(secretDir,'webpush-vapid.json'),subs:path.join(secretDir,'webpush-subscriptions.json'),pair:path.join(secretDir,'webpush-pair-code.json'),internal:path.join(secretDir,'webpush-internal.key')};
@@ -72,7 +74,7 @@ function createPushServer(cfg,adapter=webpush){
     return json(res,404,{error:'Not found'});
    }
    if(!u.pathname.startsWith('/phone/'))return json(res,404,{error:'Not found'});
-   if(u.pathname==='/phone/health'){try{const host=await harnessRequest('/');const ready=host.status===200||host.status===401;return json(res,ready?200:503,{ready,service:'harness-webpush'});}catch{return json(res,503,{ready:false,service:'harness-webpush'});}}
+   if(u.pathname==='/phone/health'){if(req.method!=='GET')return json(res,405,{error:'Method not allowed'},{Allow:'GET'});return json(res,200,await readiness.sample());}
    if(u.pathname==='/phone/config.json'&&req.method==='GET')return json(res,200,{wakeUrl:cfg.wakeUrl});
    if(u.pathname==='/phone/entry'&&req.method==='GET'){
     const token=u.searchParams.get('token');if(!token||token.length>256)return json(res,401,{error:'Invalid entry'});
