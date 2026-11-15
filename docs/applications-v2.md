@@ -175,6 +175,37 @@ establishes only the tested guest-kernel capability, not sufficient disk space
 or a successful Docker deployment. Local regression fixtures do not substitute
 for executing the diagnostic on the actual worker.
 
+### Slow container creation and uncertain responses
+
+Filesystem copying in a VFS worker can outlast a short API request even when
+there is enough disk space. Container create and delete use bounded 120-second
+deadlines, start uses 90 seconds, and stop allows its configured grace period
+plus time for the daemon to finish. Read requests retain short deadlines.
+Application and separate test containers follow the same creation path.
+
+Before create, Harness durably records a unique job/name/nonce and immutable
+image reference, without environment values. If the response is lost, it
+inspects that original name for up to 30 further seconds and never sends a
+second POST. Only the exact nonce-bound, never-started container can be adopted.
+An unknown result remains unresolved, including across service restarts and
+ordinary history trimming. A later operation must reconcile it first; absence
+alone does not prove the original request had no effect. Recovery can delete
+only that failed operation's matching, unreferenced, never-started container,
+without force, volume removal or image removal. Started or changed containers
+require inspection and are retained. A timeout is never successful deployment.
+
+Pre-journal candidate timeouts are reconciled only after a verified fresh worker
+boot, against the retained failed release's immutable image, unique job name,
+creation time, ownership and absence of mounts or project references. Cleanup
+requires a never-started, unprivileged container. Without that proof the old
+resource remains and another create is refused. Historical failure reports and
+their outcome stay available; unresolved records are retained beyond the normal
+hundred-job history limit.
+
+Before/after free-space differences measure net retained usage. They do not
+measure the maximum temporary build usage, which remains unknown unless it was
+observed separately.
+
 On 2026-11-15 the actual managed guest kernel `6.18.60-0-virt` passed all twelve
 diagnostic checks, including verified unmount and scratch cleanup. Docker still
 reported VFS. Automatic unused-cache cleanup increased guest free space from
