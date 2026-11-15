@@ -12,10 +12,11 @@ function commitPayload(input){
  return{signature,payload:kept.join('\n')+text.slice(split)};
 }
 function config(raw){
- if(raw.version!==1||raw.repository!==REPOSITORY||raw.branch!=='main')throw Error('Unsupported update source');
+ if(!raw||typeof raw!=='object'||Array.isArray(raw)||raw.version!==1||raw.repository!==REPOSITORY||raw.branch!=='main')throw Error('Unsupported update source');
  if(!Array.isArray(raw.signers)||!raw.signers.length||raw.signers.some(x=>!/^([A-F0-9]{40}|[A-F0-9]{64})$/.test(x)))throw Error('Pinned signing fingerprints are required');
  const minimumFreeBytes=raw.minimumFreeBytes??2*1024*MIB;
  if(!Number.isSafeInteger(minimumFreeBytes)||minimumFreeBytes<0)throw Error('Disk reserve must be a finite nonnegative integer');
+ if(raw.enabled!==true)throw Error('The signed startup update policy must be enabled before Harness can start');
  return{...raw,minimumFreeBytes:Math.max(minimumFreeBytes,2*1024*MIB)};
 }
 function safeEnvironment(root){return{PATH:process.env.PATH??'/usr/bin:/bin',HOME:path.join(root,'update-cache/home'),LANG:'C.UTF-8',GIT_TERMINAL_PROMPT:'0',GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:process.platform==='win32'?'NUL':'/dev/null'};}
@@ -63,12 +64,15 @@ function releaseDigest(directory){rootOwned(directory);const hash=crypto.createH
 function statusWriter(root){let state={version:1,enabled:true,phase:'checking',checkedAt:null,appliedCommit:readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{})?.commit??null,targetCommit:null,error:null,signatureVerified:false};return patch=>{state={...state,...patch,checkedAt:new Date().toISOString()};atomic(path.join(root,'state/startup-update.json'),state,0o644);return state;};}
 async function update(root='/data/harness',{checkOnly=false}={}){
  const configFile=path.join(root,'root-secrets/startup-update.json');
- if(!fs.existsSync(configFile))return{enabled:false};
- rootOwned(configFile);const settings=config(readJSON(configFile));let checked={};const write=checkOnly?(patch=>checked={...checked,...patch}):statusWriter(root);if(settings.enabled!==true)return write({enabled:false,phase:'ready'});
+ let checked={};const write=checkOnly?(patch=>checked={...checked,...patch}):statusWriter(root);
  const cache=path.join(root,'update-cache'),releases=path.join(root,'releases');
+ let work;try{
+ if(!fs.existsSync(configFile))throw Error('Signed startup update policy is missing; install the trusted startup gate before starting Harness');
+ // Parse only as data; trust ownership is still required before using policy,
+ // running any external command or staging a release.
+ const settings=config(readJSON(configFile));rootOwned(configFile);
  for(const directory of[cache,path.join(cache,'home'),releases]){fs.mkdirSync(directory,{recursive:true,mode:directory===releases?0o755:0o700});rootOwned(directory);}
  rootOwned(path.join(root,'root-secrets/startup-update-signers.gpg'));
- let work;try{
   if(checkOnly&&fs.existsSync(path.join(root,'root-secrets/startup-update-transaction.json')))throw Error('An unfinished activation requires startup recovery');
   if(!checkOnly&&restoreTransaction(root))write({phase:'rollback',error:'An interrupted activation was rolled back; checking current main again.'});
   write({phase:'checking',error:null});
@@ -96,7 +100,12 @@ async function update(root='/data/harness',{checkOnly=false}={}){
   // Keep recovery code stable; its upgrades are separate explicit maintenance.
   activate(root,candidate,sha);
   return write({phase:'ready',appliedCommit:sha,error:null});
- }catch(error){write({phase:'blocked',error:error.code?'Update filesystem operation failed ('+String(error.code).replace(/[^A-Z0-9_]/g,'')+').':error.message,appliedCommit:readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{})?.commit??null});throw error;}
+ }catch(error){
+  // A first installation may not have state/ yet. A failed diagnostic write
+  // must never turn rejected policy into success or hide its original error.
+  try{write({phase:'blocked',error:error.code?'Update filesystem operation failed ('+String(error.code).replace(/[^A-Z0-9_]/g,'')+').':error instanceof SyntaxError?'Startup update policy contains invalid JSON.':error.message,appliedCommit:readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{})?.commit??null});}catch{}
+  throw error;
+ }
  finally{if(work&&path.resolve(work).startsWith(path.resolve(cache)+path.sep+'stage-'))fs.rmSync(work,{recursive:true,force:true});}
 }
 module.exports={commitPayload,config,verifySignature,activate,restoreTransaction,sameRuntime,update,statusWriter,atomic,releaseDigest};

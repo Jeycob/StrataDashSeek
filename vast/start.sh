@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
-if [ -x /data/harness/bootstrap/start.sh ]; then
- exec bash /data/harness/bootstrap/start.sh
+BOOTSTRAP=/data/harness/bootstrap/start.sh
+if [ ! -f "$BOOTSTRAP" ] || [ ! -x "$BOOTSTRAP" ]; then
+ echo 'Signed startup bootstrap is missing or not executable; Harness remains stopped. Install or repair the trusted startup gate before starting services.' >&2
+ exit 1
 fi
-mkdir -p /data/harness/logs
-exec 9>/data/harness/supervisor.lock
-flock -n 9 || exit 0
-exec /data/harness/node/bin/node /data/harness/app/vast/supervisor.cjs
+exec bash "$BOOTSTRAP"

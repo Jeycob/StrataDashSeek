@@ -89,6 +89,18 @@ test('statfs capacity honors minimum plus 512MiB verify reserve exactly', async 
   for (const stat of [{ bavail: -1n, bsize: 1n }, { bavail: 2n ** 63n, bsize: 1n }, { bavail: 10n, bsize: 0n }]) assert.equal((await fixture({ fs: { ...f.fs, statfs: async () => stat } }).service.snapshot(project)).capacity.known, false);
 });
 
+test('exposes declared worker limits separately from observed driver and unknown build peak', async () => {
+  const profile = { vcpus: 1, memoryMiB: 2048, diskBytes: 3 * 1024 ** 3, acceleration: 'tcg', configuredStorageDriver: 'vfs', observedStorageDriver: 'vfs', storageObservedAt: 1234, observedInRunningBoot: true, privateKey: 'PRIVATE_PROFILE_CANARY', peakBuildBytesKnown: true };
+  const s = await fixture({ state: ownState({ worker: { phase: 'ready', profile } }) }).service.snapshot(project);
+  assert.equal(s.apps.workerProfile.diskBytes, 3 * 1024 ** 3); assert.equal(s.apps.workerProfile.vcpus, 1);
+  assert.equal(s.apps.workerProfile.configuredLayerCopies, 'full-parent-directory'); assert.equal(s.apps.workerProfile.peakBuildBytesKnown, false);
+  assert.equal(s.apps.workerProfile.observedInRunningBoot, true); assert.equal(s.guidance.finalImageSizeIsNotPeakBuildUsage, true);
+  assert.doesNotMatch(JSON.stringify(s), /PRIVATE_PROFILE_CANARY|privateKey/);
+  const bad = await fixture({ state: ownState({ worker: { phase: 'ready', profile: { ...profile, vcpus: -1, memoryMiB: '2048', diskBytes: Infinity, acceleration: 'SECRET', observedStorageDriver: 'PRIVATE_PROFILE_CANARY', configuredStorageDriver: 'PRIVATE_PROFILE_CANARY' } } }) }).service.snapshot(project);
+  for (const key of ['vcpus', 'memoryMiB', 'diskBytes', 'observedStorageDriver', 'configuredStorageDriver', 'acceleration']) assert.equal(bad.apps.workerProfile[key], null);
+  assert.equal(bad.apps.workerProfile.observedInRunningBoot, false); assert.equal(bad.apps.workerProfile.configuredLayerCopies, 'unknown');
+});
+
 test('context renderer is synchronous cache-only, TTL expires and failed refresh cannot fabricate fresh state', async () => {
   let calls = 0; const f = fixture({ readAppsState: async () => { calls++; if (calls === 2) throw Error('CANARY'); return ownState(); } });
   assert.equal(f.service.renderContext(project), runtimeCapabilitiesFallback); assert.equal(f.reads.length, 0);

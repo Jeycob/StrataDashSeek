@@ -1,6 +1,7 @@
 'use strict';
 // Explicitly approved pilot only. Never opens a host block device or overwrites a disk.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto'), cp = require('node:child_process');
+const {PILOT_WORKER_PROFILE}=require('../vast/apps-worker-profile.cjs');
 const root = '/data/harness/docker-worker', lab = '/data/harness/workspaces/docker-capability-lab';
 if (process.getuid() !== 0) throw Error('Preparation requires the server owner');
 if (fs.existsSync(root)) throw Error('Worker directory exists; inspect it instead of recreating');
@@ -13,9 +14,9 @@ const uid = Number(cp.execFileSync('id', ['-u', 'harness'])), gid = Number(cp.ex
 fs.mkdirSync(root, {mode:0o700}); fs.chownSync(root, uid, gid);
 for (const name of ['alpine.iso', 'vmlinuz-virt', 'initramfs-virt']) fs.linkSync(path.join(lab, name), path.join(root, name));
 const disk = fs.openSync(path.join(root, 'volume.raw'), 'wx', 0o600);
-fs.ftruncateSync(disk, 3 * 1024 ** 3);
-cp.execFileSync('fallocate',['--length',String(3*1024**3),'/proc/self/fd/3'],{stdio:['ignore','pipe','pipe',disk]});
+fs.ftruncateSync(disk, PILOT_WORKER_PROFILE.diskBytes);
+cp.execFileSync('fallocate',['--length',String(PILOT_WORKER_PROFILE.diskBytes),'/proc/self/fd/3'],{stdio:['ignore','pipe','pipe',disk]});
 fs.fsyncSync(disk); fs.fchownSync(disk, uid, gid); fs.closeSync(disk);
-const manifest = {version:1, volumeId:crypto.randomBytes(16).toString('hex'), diskBytes:3*1024**3, memoryMiB:2048, vcpus:1, alpineSHA256:isoHash, preparedAt:new Date().toISOString()};
+const manifest = {version:1, volumeId:crypto.randomBytes(16).toString('hex'), diskBytes:PILOT_WORKER_PROFILE.diskBytes, memoryMiB:PILOT_WORKER_PROFILE.memoryMiB, vcpus:PILOT_WORKER_PROFILE.vcpus, alpineSHA256:isoHash, preparedAt:new Date().toISOString()};
 fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest, null, 2), {mode:0o644, flag:'wx'});
 console.log(JSON.stringify(manifest));

@@ -13,6 +13,18 @@ const safeTime = value => Number.isFinite(value) && value >= 0 ? value : null;
 const pickEnum = (value, allowed) => allowed.includes(value) ? value : 'unknown';
 const jobStates = ['queued', 'running', 'passed', 'failed', 'interrupted'];
 const actions = ['verify', 'build', 'deploy', 'check', 'compose', 'export', 'rollback', 'remote-verify', 'remote-preflight'];
+function workerProfile(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const bounded = (n, max) => Number.isSafeInteger(n) && n > 0 && n <= max ? n : null;
+  const drivers = ['vfs', 'overlay2', 'overlayfs', 'btrfs', 'zfs', 'devicemapper', 'fuse-overlayfs'];
+  const driver = value => drivers.includes(value) ? value : null;
+  const observed = driver(value.observedStorageDriver), at = safeTime(value.storageObservedAt);
+  return { vcpus: bounded(value.vcpus, 256), memoryMiB: bounded(value.memoryMiB, 1024 * 1024), diskBytes: bounded(value.diskBytes, Number.MAX_SAFE_INTEGER),
+    acceleration: ['tcg', 'kvm'].includes(value.acceleration) ? value.acceleration : null,
+    configuredStorageDriver: driver(value.configuredStorageDriver), observedStorageDriver: observed,
+    storageObservedAt: observed ? at : null, observedInRunningBoot: Boolean(observed && at && value.observedInRunningBoot === true),
+    configuredLayerCopies: value.configuredStorageDriver === 'vfs' ? 'full-parent-directory' : 'unknown', peakBuildBytesKnown: false };
+}
 
 /** Only the server supplies canonicalProjectDirectory, never tool arguments.
  * readAppsState({signal}) MUST be side-effect-free (e.g. Apps GET /state), not
@@ -79,12 +91,13 @@ export function createRuntimeCapabilities({ workspaceRoot, capacityPath = '/data
           workerFreeBytes: Number.isSafeInteger(state.worker?.freeBytes) && state.worker.freeBytes >= 0 ? state.worker.freeBytes : null,
           workerFreeInodes: Number.isSafeInteger(state.worker?.freeInodes) && state.worker.freeInodes >= 0 ? state.worker.freeInodes : null,
           workerDiskCheckedAt: safeTime(state.worker?.diskCheckedAt),
+          workerProfile: workerProfile(state.worker?.profile),
         };
       } catch { apps = { ...apps, state: 'unreachable', reason: 'state-read-failed' }; }
     }
     const argv = (...args) => [...CLI, ...args];
     const recipes = { register: argv('register', relative), ...(apps.project ? Object.fromEntries(['verify', 'build', 'deploy', 'check'].map(action => [action, argv(action, apps.project.id)])) : {}) };
-    return deepFreeze({ version: 1, timestamp, sampledAt, ttlMs, project: { relativePath: relative }, existingFiles, unavailableFiles, capacity, apps, recipes, guidance: { reuseExistingFiles: true, managedDockerOnly: true, httpIsNotApplicationVerification: true, workerDiskRequiredBytes: 512 * MIB, capacityIsAdvisory: true, enforceCapacityAgainAtExecution: true, stateReadHasNoWake: true } });
+    return deepFreeze({ version: 1, timestamp, sampledAt, ttlMs, project: { relativePath: relative }, existingFiles, unavailableFiles, capacity, apps, recipes, guidance: { reuseExistingFiles: true, managedDockerOnly: true, httpIsNotApplicationVerification: true, workerDiskRequiredBytes: 512 * MIB, capacityIsAdvisory: true, finalImageSizeIsNotPeakBuildUsage: true, driverChangesRequireDataPreservationPlan: true, enforceCapacityAgainAtExecution: true, stateReadHasNoWake: true } });
   }
   function snapshot(canonicalProjectDirectory) {
     const key = keyFor(canonicalProjectDirectory);

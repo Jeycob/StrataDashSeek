@@ -1,6 +1,6 @@
 # Updates before the first Harness request
 
-The optional startup gate follows `main` in the public
+The required managed startup gate follows `main` in the public
 `Jeycob/StrataDashSeek` repository. It fetches only at instance startup, verifies
 the **actual Git commit signature** with a locally pinned public key, stages the
 signed source tree, and switches the application pointer before launching
@@ -35,6 +35,14 @@ The stable updater and extractor are not replaced by automatic code releases.
 Their upgrade requires a separate reviewed operator maintenance plan,
 so a failed code activation cannot leave a mixed recovery implementation.
 
+Install the gate before the first service start on a new instance. The normal
+`vast/start.sh` entry refuses a missing, non-file or non-executable stable
+bootstrap; it has no direct-supervisor fallback. The installer can prepare the
+gate while services remain stopped and publishes its executable entry only
+after policy, public trust and updater files are present. An existing stable
+updater is not silently overwritten: apply a reviewed operator upgrade before
+claiming that a running installation has these newer policy checks.
+
 Private policy is `/data/harness/root-secrets/startup-update.json`. Its source
 is fixed to this repository's `main` branch. The keyring is separately pinned
 in `startup-update-signers.gpg`. The bootstrap uses the existing supervisor
@@ -59,6 +67,11 @@ lock so parallel startup invocations cannot deploy twice.
 - Network, signature, dependency or disk errors block startup. They do not
   silently launch a stale release, change the rental or create another instance.
   An administrator can repair the cause and invoke the stable bootstrap again.
+- Missing, malformed or disabled update policy also blocks startup and check-only
+  validation. `enabled` must be the JSON boolean `true`; absent values and strings
+  cannot authorize stale-source startup. No offline or unsigned fallback permits
+  the first model request. Root-only maintenance primitives remain available for
+  controlled recovery; they are not an alternate normal service-start path.
 
 `node /data/harness/bootstrap/startup-update.cjs /data/harness --check` verifies
 and stages the current signed `main` without switching the live application or

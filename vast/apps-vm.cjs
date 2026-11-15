@@ -1,6 +1,8 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), cp = require('node:child_process'), net = require('node:net'), crypto = require('node:crypto');
 const {LABEL} = require('./apps-engine.cjs');
+const {PILOT_WORKER_PROFILE,validatePilot,workerProfile}=require('./apps-worker-profile.cjs');
+const {fixedguestOverlayProbe,parseOverlayProbe}=require('./apps-overlay-probe.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function atomic(file, value) { const tmp=file+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600}); fs.renameSync(tmp,file); }
 function controlFirewall(){return `
@@ -33,7 +35,7 @@ modprobe ext4
 mkdir -p /var/lib/harness
 if ! mountpoint -q /var/lib/harness; then
  if ! mount -t ext4 /dev/vda /var/lib/harness; then
-  ${initialize ? `test "$(blockdev --getsize64 /dev/vda)" = 3221225472
+  ${initialize ? `test "$(blockdev --getsize64 /dev/vda)" = ${PILOT_WORKER_PROFILE.diskBytes}
   if test -n "$(blkid /dev/vda)"; then echo REFUSE_EXISTING_FILESYSTEM; exit 1; fi
   apk add --no-cache e2fsprogs
   mkfs.ext4 -F -m 0 -L sdsh-docker /dev/vda
@@ -54,7 +56,7 @@ ${initialize||repairCache ? 'apk --cache-dir /var/lib/harness/apk-cache cache sy
 rc-service cgroups start
 rc-service acpid start
 if ! pidof dockerd >/dev/null; then
- dockerd --storage-driver=vfs --data-root=/var/lib/harness/docker --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --tls=false --label=io.stratadashseek.worker=${manifest.volumeId} > /tmp/docker.log 2>&1 &
+ dockerd --storage-driver=${PILOT_WORKER_PROFILE.storageDriver} --data-root=/var/lib/harness/docker --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --tls=false --label=io.stratadashseek.worker=${manifest.volumeId} > /tmp/docker.log 2>&1 &
 fi
 for n in $(seq 1 90); do
  if docker info >/dev/null 2>&1; then isolate_control_plane; sync; echo HARNESS_READY_${nonce}; exit 0; fi
@@ -71,14 +73,14 @@ class DockerVM {
   if(cfg.vm.root!=='/data/harness/docker-worker')throw Error('Unexpected pilot worker directory');
   this.cfg=cfg; this.engine=engine; this.root=cfg.vm.root; this.stateFile=path.join(cfg.stateDir,'vm.json');
   this.manifest=JSON.parse(fs.readFileSync(path.join(this.root,'manifest.json')));
-  if(this.manifest.diskBytes!==3*1024**3 || this.manifest.memoryMiB!==2048 || this.manifest.vcpus!==1) throw Error('Worker exceeds the approved pilot');
+  validatePilot(this.manifest);
   this.saved=fs.existsSync(this.stateFile)?JSON.parse(fs.readFileSync(this.stateFile)):{initialized:false,resumeIds:[],containers:[]};
   this.phase='asleep'; this.error=null; this.serial=null; this.pending=null; this.lastUsed=Date.now(); this.stopping=false; this.buffer='';
   if(this.pid()) this.phase='recovering';
  }
  save(){atomic(this.stateFile,this.saved);}
  pid(){try{const pid=Number(fs.readFileSync(path.join(this.root,'qemu.pid'),'utf8')); const args=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0');return args.includes('stratadashseek-docker') && args.includes('file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback')?pid:null;}catch{return null;}}
- status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,diskCheckedAt:this.diskCheckedAt??null,initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
+ status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,diskCheckedAt:this.diskCheckedAt??null,profile:workerProfile(this.manifest,{driver:this.observedStorageDriver,at:this.storageObservedAt,ready:this.phase==='ready'}),initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
  touch(){this.lastUsed=Date.now();}
  async ensure(){
   this.touch();const waitUntil=Date.now()+90000;while(this.stopping&&Date.now()<waitUntil)await pause(250);if(this.stopping)throw Error('Docker is still saving its state; retry shortly');
@@ -112,7 +114,7 @@ class DockerVM {
    const stat=fs.statfsSync(this.root);if(stat.bavail*stat.bsize<2*1024**3)throw Error('Less than 2 GiB host reserve; worker not started');
    const forwards=['hostfwd=tcp:127.0.0.1:19075-:2375'];
    for(let n=0;n<this.cfg.portCount;n++)forwards.push('hostfwd=tcp:127.0.0.1:'+(this.cfg.firstPort+n)+'-:'+(this.cfg.firstPort+n));
-   const args=['-name','stratadashseek-docker','-accel','tcg,thread=single','-smp','1','-m','2048','-cpu','max','-display','none','-monitor','none','-no-reboot',
+   const args=['-name','stratadashseek-docker','-accel',PILOT_WORKER_PROFILE.acceleration+',thread=single','-smp',String(PILOT_WORKER_PROFILE.vcpus),'-m',String(PILOT_WORKER_PROFILE.memoryMiB),'-cpu','max','-display','none','-monitor','none','-no-reboot',
     '-chardev','socket,id=console,path='+this.root+'/serial.sock,server=on,wait=off','-serial','chardev:console','-qmp','unix:'+this.root+'/qmp.sock,server=on,wait=off','-pidfile',this.root+'/qemu.pid',
     '-kernel',this.root+'/vmlinuz-virt','-initrd',this.root+'/initramfs-virt','-cdrom',this.root+'/alpine.iso','-drive','file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback',
     '-append','console=ttyS0 alpine_dev=cdrom:iso9660 modules=loop,squashfs,sd-mod,usb-storage,virtio_blk quiet','-netdev','user,id=net0,'+forwards.join(','),'-device','virtio-net-pci,netdev=net0'];
@@ -128,6 +130,7 @@ class DockerVM {
     try{
      const info=await this.engine.json('GET','/info',{timeout:2000});
      if(!info.Labels?.includes('io.stratadashseek.worker='+this.manifest.volumeId))throw Error('Unexpected Docker worker identity');
+     this.observedStorageDriver=info.Driver;this.storageObservedAt=Date.now();
      this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.save();
      for(const id of this.saved.resumeIds||[]){await this.engine.owned(id);await this.engine.request('POST','/containers/'+id+'/start');}
      this.phase='ready';this.touch();await this.diskFree();this.save();return;
@@ -141,6 +144,18 @@ class DockerVM {
   if(!this.serial||this.serial.destroyed)await this.connectSerial();const nonce=crypto.randomBytes(8).toString('hex');
   this.serial.write("printf 'HARNESS_FREE_"+nonce+"=%s\\n' \"$(df -Pk /var/lib/harness | tail -n 1 | awk '{print $4}')\"; printf 'HARNESS_INODES_"+nonce+"=%s\\n' \"$(df -Pi /var/lib/harness | tail -n 1 | awk '{print $4}')\"\n");
   const deadline=Date.now()+5000;while(Date.now()<deadline){const m=this.buffer.match(new RegExp('HARNESS_FREE_'+nonce+'=(\\d+)')),i=this.buffer.match(new RegExp('HARNESS_INODES_'+nonce+'=(\\d+)'));if(m&&i){this.freeBytes=Number(m[1])*1024;this.freeInodes=Number(i[1]);this.diskCheckedAt=Date.now();return this.freeBytes;}await pause(100);}throw Error('Worker disk space and inodes could not be verified');
+ }
+ async probeOverlay(){
+  if(this.phase!=='ready'||this.saved.controlIsolationVersion!==1||!this.pid()||!this.serial||this.serial.destroyed)throw Error('Overlay probe requires an already ready verified managed worker');
+  if(this.overlayProbePending)throw Error('An overlay probe is already running');
+  const nonce=crypto.randomBytes(8).toString('hex'),dir='/tmp/harness-overlay-'+nonce,script=Buffer.from(fixedguestOverlayProbe({volumeId32hex:this.manifest.volumeId,nonce16hex:nonce})).toString('base64');
+  this.overlayProbePending=nonce;
+  try{
+   // The fixed script is the only serial payload. A private, nonexisting guest
+   // directory and the outer hard timeout bound even interrupted diagnostics.
+   this.serial.write("( umask 077; if mkdir '"+dir+"'; then\nbase64 -d > '"+dir+"/probe.sh' <<'OVERLAY_SCRIPT_"+nonce+"'\n"+script.match(/.{1,512}/g).join('\n')+"\nOVERLAY_SCRIPT_"+nonce+"\ntimeout -s TERM -k 20 45 sh '"+dir+"/probe.sh'; probe_rc=$?\nif test ! -L '"+dir+"' && test \"$(readlink -f '"+dir+"')\" = '"+dir+"' && test \"$(stat -c %u '"+dir+"')\" = 0; then rm -f -- '"+dir+"/probe.sh' && rmdir -- '"+dir+"' || probe_rc=124; else probe_rc=124; fi\nprintf 'HARNESS_OVERLAY_DONE_"+nonce+"=%s\\n' \"$probe_rc\"; else printf 'HARNESS_OVERLAY_DONE_"+nonce+"=125\\n'; fi )\n");
+   const deadline=Date.now()+70000;while(Date.now()<deadline){const done=this.buffer.match(new RegExp('(?:^|\\n)HARNESS_OVERLAY_DONE_'+nonce+'=(\\d+)(?:\\r?\\n|$)'));if(done){const result=parseOverlayProbe(this.buffer,nonce),rc=Number(done[1]);if(rc===124||rc===125)throw Error('Overlay probe wrapper cleanup or preparation failed');if(result.supported&&rc!==0)throw Error('Overlay probe success conflicts with its exit status');const report={...result,checkedAt:Date.now()};this.saved.overlayProbe={...report,volumeId:this.manifest.volumeId,alpineSHA256:this.manifest.alpineSHA256};this.save();return report;}await pause(100);}throw Error('Bounded overlay probe did not return a complete result');
+  }finally{this.overlayProbePending=null;}
  }
  async remember(){if(this.phase!=='ready')return;const rows=(await this.engine.list()).filter(c=>c.Labels?.[LABEL+'.role']!=='test');this.saved.containers=rows;this.saved.resumeIds=rows.filter(c=>c.State==='running').map(c=>c.Id);this.save();}
  async stop(){

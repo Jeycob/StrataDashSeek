@@ -1,0 +1,504 @@
+{
+  "version": 1,
+  "scope": "Infrastructure regression for worker profile, bounded operator storage diagnostic and mandatory signed startup admission",
+  "testedAt": "2026-11-15T16:17:13.732Z",
+  "platform": "win32",
+  "node": "v24.22.1",
+  "source": {
+    "sha256": "d3e5d0fa05a9d4de0c4a9cb15053bb81f90690a563f46620c7df9bfab194d6fb",
+    "files": 272,
+    "definition": "Sorted tracked and nonignored untracked JS/Python/config/HTML/CSS/Markdown sources; path + NUL + LF-normalized UTF-8 + NUL. Deployment evidence subdirectories excluded."
+  },
+  "tests": {
+    "files": 58,
+    "passed": 442,
+    "failed": 0,
+    "skipped": 0,
+    "passedGate": true
+  },
+  "historicalBenchmark": {
+    "passed": 14,
+    "failed": 4,
+    "scope": "benchmarks/disposable-20261114/fixture/",
+    "reason": "Historical disposable CSV challenge input fixture, excluded from production infrastructure gate and reported independently."
+  },
+  "allDiscoveredPassed": false,
+  "liveStatus": {
+    "deployed": false,
+    "workerProbeExecuted": false,
+    "stableBootstrapUpgraded": false,
+    "reason": "Same existing Vast instance has no available startup capacity; local tests do not establish live guest capability or Docker deployment."
+  },
+  "limits": [
+    "No storage driver or builder selection changed",
+    "Approved pilot remains 1 vCPU, 2048 MiB RAM, 3 GiB disk and VFS",
+    "Probe accepts no model arguments and is not a model tool",
+    "No model weights, retained images, volumes, credentials or project data removed"
+  ],
+  "testFiles": [
+    {
+      "file": "cloudflare/application-target.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    {
+      "file": "cloudflare/benchmark-cleanup.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "cloudflare/instance-control.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    {
+      "file": "cloudflare/worker.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 7,
+        "failed": 0
+      }
+    },
+    {
+      "file": "desktop/open-harness.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "development/test-command.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 7,
+        "failed": 0
+      }
+    },
+    {
+      "file": "efficiency/core.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 18,
+        "failed": 0
+      }
+    },
+    {
+      "file": "efficiency/plugin.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 7,
+        "failed": 0
+      }
+    },
+    {
+      "file": "efficiency/sdk.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    {
+      "file": "mobile/notifications.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    {
+      "file": "mobile/phone-boot.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "file": "mobile/phone-shell.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    {
+      "file": "mobile/polling.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    {
+      "file": "quality/browser.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "quality/core.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 22,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/apps-cleanup.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/apps-overlay-job.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 9,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/apps-overlay-probe.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 12,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/apps-power.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 15,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/apps-scaffold.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 5,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/apps-worker-cleanup.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 12,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/apps-worker-profile.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/apps-workflow.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 14,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/apps.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 23,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/cgroup.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/completion-guard.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 5,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/homeai-profile.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/homeai-reliability.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/lifecycle.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/model-proxy.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/runtime-release.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 6,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/startup-update.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 8,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/telemetry.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 5,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/turn-queue/queue.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 25,
+        "failed": 0
+      }
+    },
+    {
+      "file": "vast/vault-migrate.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/cache-cleanup.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 19,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/changes.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 26,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/http.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 2,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/install.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/managed-shell-sdk.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 8,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/native-files.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 3,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/native-ui/install.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/native-ui/native.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/native-ui/phone.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/native-ui/views.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/owner-api.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 1,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/policy.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 24,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/project-process.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 12,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/project-tool.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 9,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/runtime-capabilities.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 13,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/runtime-tool.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 7,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/shell-status.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 14,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/source-private.test.cjs",
+      "passed": true,
+      "counts": {
+        "passed": 4,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/tool-recovery.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 16,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/tool-results.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 6,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/turn-budget.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 10,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/verification-guidance.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 9,
+        "failed": 0
+      }
+    },
+    {
+      "file": "workspace/verification-status.test.mjs",
+      "passed": true,
+      "counts": {
+        "passed": 9,
+        "failed": 0
+      }
+    }
+  ]
+}

@@ -26,6 +26,7 @@ function createAppsService(cfg={},injected){
   if(u.pathname==='/project-settings')return json(res,200,manager.projectSettings(data.id,data));
   if(u.pathname==='/target-settings')return json(res,200,await manager.targetSettings(data));
   if(u.pathname==='/worker-action')return json(res,202,manager.enqueuePower(data.action));
+  if(u.pathname==='/worker-probe'){if(!data||typeof data!=='object'||Array.isArray(data)||Object.keys(data).length)throw Error('The fixed worker probe accepts no arguments');return json(res,202,manager.enqueueWorkerProbe());}
   if(u.pathname==='/hold')return json(res,200,manager.hold(data.minutes));
   if(u.pathname==='/preview-settings')return json(res,202,manager.enqueuePreviewSettings(data.enabled));
   if(u.pathname==='/prepare-sleep')return json(res,200,await manager.prepareSleep());

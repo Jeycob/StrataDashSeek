@@ -153,3 +153,24 @@ do not retry unchanged, weaken tests, remove retained images/data, change storag
 drivers or enlarge/rent infrastructure automatically. A storage/backend change
 must preserve existing application data and be planned separately. Successful
 native Node/Python tests do not imply that a Docker image already exists.
+
+`runtime_capabilities.apps.workerProfile` reports the approved CPU, RAM, disk,
+acceleration and configured storage driver. The observed driver is populated
+only by a verified worker boot. Its timestamp and `observedInRunningBoot` flag
+distinguish that observation from configuration and from a sleeping worker.
+Neither these limits nor free-space samples predict peak build usage.
+
+An operator can explicitly submit an empty object to the authenticated, private
+Apps `POST /worker-probe` endpoint for a bounded OverlayFS capability diagnostic.
+It owns the Apps job lock, wakes the existing worker if needed, checks its
+identity and creates only its own small scratch fixture outside Docker's data
+directory. It tests mounting, copy-up and deletion, then verifies unmount and
+cleanup. A missing result, timeout, nonzero successful-result exit, or cleanup
+failure cannot pass. The endpoint accepts no commands, paths or options and is
+not exposed as a model tool. Reading state never runs this diagnostic.
+
+This diagnostic does not select OverlayFS, install a builder, change Docker's
+storage configuration or migrate retained application data. A positive result
+establishes only the tested guest-kernel capability, not sufficient disk space
+or a successful Docker deployment. Local regression fixtures do not substitute
+for executing the diagnostic on the actual worker.
