@@ -9,6 +9,23 @@ plan paths remain confined and become required when their stage or `all` is sele
 All declared source paths still need to exist. A partial pass leaves other required
 kinds missing and never means full completion.
 
+For requested authentication or localized behavior, include independent negative
+and language-specific checks before declaring completion:
+
+- Malformed session/CSRF proofs (missing, short, long and multibyte values) must
+  produce a controlled client rejection without a 5xx response, state changes or
+  secret disclosure. Check library input preconditions before calling it.
+  Node's [`timingSafeEqual`](https://nodejs.org/download/release/v24.21.0/docs/api/crypto.html#cryptotimingsafeequala-b)
+  requires equal buffer byte lengths; character counts alone are insufficient.
+- Assert user-visible sorting against the requested language's collation with
+  accented and mixed-case data. Do not replace this expectation with the current
+  database's ordering to obtain a pass. SQLite's built-in
+  [`NOCASE`](https://www.sqlite.org/datatype3.html#collation) handles ASCII case
+  folding and does not provide full Unicode case folding or language collation.
+
+Keep valid fixture corrections separate from weakening a required behavior.
+Report a missing requirement as incomplete, even when a narrower suite passes.
+
 Create `.harness-quality.json` in the project root (adapt commands and sources):
 
 ```json
