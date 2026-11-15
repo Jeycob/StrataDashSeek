@@ -97,6 +97,35 @@ test('ordinary non-verification commands do not receive an extra verification wa
   assert.equal(JSON.stringify(budget), before); assert.equal(manager.pendingDiagnostics.size, 0);
 });
 
+test('compacted display text cannot discard native test totals or hide genuine repair progress', async () => {
+  for (const name of ['bash','project_exec']) {
+    const {manager,budget}=fixture(); manager.save=async()=>{}; manager.pruneCheckpoints=async()=>{};
+    for (const failures of [12,10,3]) {
+      const output=`# tests 19\n# pass ${19-failures}\n# fail ${failures}\n`;
+      const value={exitCode:1,stdout:name==='bash'?{text:output,truncated:false,spillPath:'PRIVATE_UNUSED_SPILL_PATH'}:output,stderr:name==='bash'?{text:''}:''};
+      await manager.toolResult({name,managedProjectShell:true,agent:{id:'one'},arguments:{command:'npm test'}},
+        {value,content:[{type:'text',text:'Tool status: exitCode=1\nAssertionError: diagnostic excerpt; totals omitted'}]});
+      assert.equal(budget.checks.test.lastScore,failures); assert.equal(budget.checks.test.bestScore,failures);
+      assert.equal(budget.blocked,null);
+    }
+    assert.equal(budget.stalled,0); assert.equal(budget.stage,3);
+    assert(!JSON.stringify(budget).includes('PRIVATE_UNUSED_SPILL_PATH'));
+  }
+});
+
+test('text that names test commands inside code editors or ordinary output never earns a test stage', async () => {
+  for (const command of [
+    `node -e "const p={scripts:{}};p.scripts.test='node --test tests/unit.test.mjs';console.log(p.scripts)"`,
+    'echo npm test', 'grep "node --test" package.json', 'cat tests/unit.test.mjs',
+  ]) {
+    const {manager,budget}=fixture(),before=JSON.stringify(budget);
+    await manager.toolResult({name:'bash',managedProjectShell:true,agent:{id:'one'},arguments:{command}},
+      {value:{exitCode:0},content:[{type:'text',text:'node --test tests/unit.test.mjs'}]});
+    assert.equal(JSON.stringify(budget),before,command);
+    assert.equal(manager.pendingDiagnostics.size,0);
+  }
+});
+
 test('quoted verifier patterns, redirections and AND chains retain their completed result', async () => {
   for (const command of [
     "node --test --test-name-pattern 'a|b' tests/rules.test.mjs",

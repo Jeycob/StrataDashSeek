@@ -207,7 +207,13 @@ export class WorkspaceManager {
     if (!operationScope) try { operationScope = operationFingerprint(exec, record.root); } catch {}
     const command = exec.arguments?.command, kind = verificationKind ?? (structured ? exec.arguments?.kind ?? 'all' : exec.name === 'stage_check' ? 'test' : validationKind(command));
     const exitCode = structured && typeof value?.passed === 'boolean' ? value.passed ? 0 : 1 : value?.exitCode;
-    const text = result.content?.filter(x => x.type === 'text').map(x => x.text).join('\n') ?? result.error?.message ?? '';
+    const rendered = result.content?.filter(x => x.type === 'text').map(x => x.text).join('\n') ?? result.error?.message ?? '';
+    // Display compaction may omit the test totals. Use the executor's existing
+    // bounded streams for accounting; never reopen an output/spill path.
+    const streams = ['bash', 'project_exec', 'exec_command', 'terminal'].includes(exec.name)
+      ? [value?.stdout, value?.stderr].map(part => typeof part === 'string' ? part : typeof part?.text === 'string' ? part.text : '').filter(Boolean)
+      : [];
+    const text = [rendered, ...streams].join('\n');
     const input = { kind, exitCode, text, isError: result.isError, timedOut: value?.timedOut, aborted: value?.aborted, errorCode: result.error?.info?.code };
     const recovery = structured ? classifyVerificationOutcome(value, input) : classifyToolOutcome(input);
     if (recovery.category === 'cancelled') return;

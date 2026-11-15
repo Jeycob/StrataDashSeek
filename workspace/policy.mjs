@@ -1,6 +1,7 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { classifyToolOutcome } from './tool-recovery.mjs';
+import { shellVerificationKind } from './shell-status.mjs';
 
 export class WorkbenchError extends Error {
   constructor(code, message, status = 409) { super(message); this.code = code; this.status = status; }
@@ -67,10 +68,7 @@ function operationErrorPrefix(scope) {
   return typeof scope === 'string' && scope ? 'operation:' + crypto.createHash('sha256').update(scope).digest('hex') + ':' : null;
 }
 export function validationKind(command) {
-  if (typeof command !== 'string') return null;
-  if (/\b(?:pytest|cargo\s+test|go\s+test|dotnet\s+test|node\s+--test|(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+(?:test|check|typecheck)|playwright\s+test)\b/iu.test(command)) return 'test';
-  if (/\b(?:dotnet\s+build|cargo\s+(?:build|check)|go\s+build|(?:npm|pnpm|yarn|bun)(?:\s+run)?\s+(?:build|lint)|tsc\b|eslint\b)/iu.test(command)) return 'build';
-  return null;
+  return shellVerificationKind(command);
 }
 export function checkScore(exitCode, text) {
   if (exitCode === 0) return 0;

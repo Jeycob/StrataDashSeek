@@ -39,8 +39,11 @@ test('real SDK validates output schemas, preserves canonical status and enforces
   const denied=await f.call('write',{file_path:path.join(f.directory,'cart.js'),content:after});assert.equal(denied.isError,true);assert.match(JSON.stringify(denied),/REWRITE_EXPLANATION_REQUIRED/);assert.equal(await fs.readFile(path.join(f.directory,'cart.js'),'utf8'),before);
   const explanation=await f.call('explain_rewrite',{path:'cart.js',sha256:digest(before),reason:'The synthetic SDK fixture replaces a large table to exercise the exact native policy.',validationPlan:'Run the unchanged arithmetic test and the full current-source quality contract.'});assert.equal(explanation.isError,false,JSON.stringify(explanation));
   const written=await f.call('write',{file_path:path.join(f.directory,'cart.js'),content:after});assert.equal(written.isError,false);assert.equal(await fs.readFile(path.join(f.directory,'cart.js'),'utf8'),after);
-  f.ctx.tools.register({name:'project_exec',description:'SDK command output fixture',parameters:{type:'object',properties:{}},output:{schema:{type:'object',properties:{exitCode:{type:'integer'},stdout:{type:'string'}},required:['exitCode','stdout']},render:(_args,value)=>[{type:'text',text:value.stdout}]},execute:async()=>({exitCode:7,stdout:'noise '.repeat(4000)+'\nError: fixture failure'})});
+  const nativeOutput='noise '.repeat(3000)+'\n# tests 19\n# pass 7\n# fail 12\n'
+    +Array.from({length:12},(_,i)=>'Error: fixture diagnostic '+i+' '+'x'.repeat(600)).join('\n');
+  f.ctx.tools.register({name:'project_exec',description:'SDK command output fixture',parameters:{type:'object',properties:{}},output:{schema:{type:'object',properties:{exitCode:{type:'integer'},stdout:{type:'string'}},required:['exitCode','stdout']},render:(_args,value)=>[{type:'text',text:value.stdout}]},execute:async()=>({exitCode:7,stdout:nativeOutput})});
   const log=await f.call('project_exec',{});assert.equal(log.isError,false);assert.equal(log.value.exitCode,7);assert.match(log.content[0].text,/exitCode=7/);assert.ok(log.content[0].text.length<6500);
+  assert.doesNotMatch(log.content[0].text,/# fail 12/);assert.equal(log.value.stdout,nativeOutput);
 });
 test('real SDK appends changing work context without changing the reusable system text or tool order',async t=>{
   const f=await fixture(t),selection={provider:'strata-vast',model:'strata'},signal=new AbortController().signal;

@@ -92,6 +92,11 @@ of a milestone pass. Quoted pattern characters and ordinary redirections retain 
 meaning. Repeated tool-error counters distinguish operation targets; a completed
 success resolves only that operation's errors and never resumes a stopped run.
 
+Verification recognition inspects the actual command head and arguments. Text
+inside a code edit, `node -e`, `echo`, `grep` or a file read cannot earn a test stage.
+Repair accounting uses the executor's existing bounded stdout/stderr when display
+compaction omits test totals; it does not reopen arbitrary log or spill paths.
+
 Conventional private credential paths are excluded from source fingerprints,
 checkpoints, Changes and application build snapshots. This filename policy does not
 detect arbitrary embedded secrets or replace project isolation. Existing private
