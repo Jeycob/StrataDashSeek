@@ -30,6 +30,16 @@ test('reads only deployment file metadata, never contents, and returns reusable 
   assert.equal(s.guidance.managedDockerOnly, true); assert.equal(s.guidance.enforceCapacityAgainAtExecution, true);
 });
 
+test('deployment recipes follow actual built/deployed state instead of suggesting invalid manual actions', async () => {
+  for (const [built, deployed] of [[false, false], [true, false], [true, true]]) {
+    const registered = { id, path: path.relative(root, project), ...(built ? { imageId: 'sha256:' + cid } : {}), ...(deployed ? { containerId: cid } : {}) };
+    const s = await fixture({ state: ownState({ projects: [registered] }) }).service.snapshot(project);
+    assert.ok(s.recipes.verify); assert.ok(s.recipes.build);
+    assert.equal(Boolean(s.recipes.deploy), built); assert.equal(Boolean(s.recipes.check), deployed);
+    assert.match(runtimeCapabilitiesFallback, /For a user preview, prefer verify/);
+  }
+});
+
 test('does not disclose another project, secret, URL, job text, port or raw configuration', async () => {
   const state = ownState({ secret: 'CANARY_TOKEN', error: 'CANARY_ERROR', busy: 'CANARY_BUSY', previewSettings: { url: 'https://canary.invalid' },
     projects: [{ ...ownState().projects[0], name: 'CANARY_NAME', runtimeEnv: { key: 'CANARY_ENV' }, applicationUrl: 'https://canary.invalid/own' }, { id: otherId, path: 'projects/foreign', name: 'CANARY_FOREIGN' }],

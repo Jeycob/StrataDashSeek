@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "scope": "Offer manual deployment recipes only when their required selected image/deployment exists; prefer complete verify for user previews",
+  "baseInfrastructureGate": {
+    "commit": "bca06728a555311388bc724483309b3298c26466",
+    "passed": 454,
+    "failed": 0,
+    "skipped": 0,
+    "files": 60
+  },
+  "targetedValidation": {
+    "passed": 21,
+    "failed": 0,
+    "skipped": 0,
+    "files": [
+      "workspace/runtime-capabilities.test.mjs",
+      "workspace/runtime-tool.test.mjs"
+    ],
+    "realSDK": true
+  },
+  "sourceFiles": [
+    {
+      "path": "workspace/runtime-capabilities.mjs",
+      "sha256": "b5e5086274eb33729e2bcc814a7a4d4f66b45ad7120fd34cbe297b1f760d9215"
+    },
+    {
+      "path": "workspace/runtime-capabilities.test.mjs",
+      "sha256": "38a6f44a279770372768efc75e7970c63f21f31150853e69d1bd3f3a2440451b"
+    }
+  ],
+  "limits": [
+    "The preceding full infrastructure gate belongs to the stated base commit; only targeted capability/SDK checks were repeated for this small change",
+    "This guidance does not prove that a model will always choose the correct action",
+    "No service restart during the active user turn; activation pending"
+  ]
+}

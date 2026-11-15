@@ -102,6 +102,12 @@ the managed QEMU worker when needed. A sleeping worker is an available capabilit
 not a missing Docker installation. Wait for existing queued/running operations
 instead of repeating wake/build. Host capacity is checked before waking the VM.
 
+For a user preview, use `verify`, which can reuse image cache and requires the
+application and browser checks. Granular `build`, `deploy` and `check` operations
+are maintenance actions. Capability recipes offer standalone deploy only when
+the project has a selected image, and check only when it has a deployment.
+An image left by a failed release is not automatically a selected deployment.
+
 Before a capacity rejection, Apps automatically removes recognized terminal-job
 build copies, partial failed exports and failed-release source copies. It keeps
 release reports, browser evidence, successful releases and rollback sources.
