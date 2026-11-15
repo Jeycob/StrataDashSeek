@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "scope": "Prevent managed Python imports from adding bytecode to signed immutable releases",
+  "testedAt": "2026-11-15T16:23:28.743Z",
+  "platform": "win32",
+  "node": "v24.22.1",
+  "source": {
+    "sha256": "d3c531917bce67ff166dd7891a34e7b42866be9d9376b4dc544ba051db09b217",
+    "files": 273,
+    "definition": "Sorted tracked and nonignored untracked JS/Python/config/HTML/CSS/Markdown sources; path + NUL + LF-normalized UTF-8 + NUL. Deployment evidence subdirectories excluded."
+  },
+  "tests": {
+    "files": 59,
+    "passed": 443,
+    "failed": 0,
+    "skipped": 0
+  },
+  "historicalBenchmark": {
+    "passed": 14,
+    "failed": 4,
+    "scope": "benchmarks/disposable-20261114/fixture/"
+  },
+  "allDiscoveredPassed": false,
+  "liveFinding": {
+    "signedSourceFiles": 376,
+    "matchedSourceFiles": 376,
+    "changedSourceFiles": 0,
+    "missingSourceFiles": 0,
+    "extraBytecodeFiles": 1,
+    "gateBlockedStartup": true
+  },
+  "regression": "Actual supervisor launch environment and real Python import reproduce bytecode creation, then verify imports preserve the release; separate model launcher keeps its inherited cache policy",
+  "deployment": "Pending controlled activation after this signed release is published"
+}

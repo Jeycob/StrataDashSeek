@@ -11,7 +11,10 @@ function save(){fs.writeFileSync(R+'/state/services.json',JSON.stringify({pids:[
 function launch(name,exe,args,asRoot=false){
  const out=fs.openSync(R+'/logs/'+name+'.log','a',0o600);
  if(!asRoot)fs.fchownSync(out,uid,gid);
- const child=cp.spawn(exe,args,{cwd:R+'/workspaces',env,uid:asRoot?0:uid,gid:asRoot?0:gid,stdio:['ignore',out,out]});fs.closeSync(out);
+ // Managed source is an immutable signed release. Python imports must not add
+ // bytecode to it; preserve the separate model runtime's existing cache policy.
+ const childEnv=args.some(arg=>typeof arg==='string'&&arg.startsWith(R+'/app/'))?{...env,PYTHONDONTWRITEBYTECODE:'1'}:env;
+ const child=cp.spawn(exe,args,{cwd:R+'/workspaces',env:childEnv,uid:asRoot?0:uid,gid:asRoot?0:gid,stdio:['ignore',out,out]});fs.closeSync(out);
  children.set(name,child);save();child.on('error',e=>console.log(name+': '+e.message));child.on('exit',(code)=>{children.delete(name);save();if(!closing){console.log(name+' exited '+code);setTimeout(()=>launch(name,exe,args,asRoot),3000);}});return child;
 }
 function portOpen(port){return new Promise(resolve=>{const q=http.get('http://127.0.0.1:'+port+'/health',r=>{r.resume();resolve(true)});q.on('error',()=>resolve(false));q.setTimeout(2000,()=>{q.destroy();resolve(false)});});}

@@ -84,6 +84,11 @@ It contains no credentials, keyring paths, cookies or raw command output.
 `ready` describes verified source activation, not completion of model loading.
 Existing model health and application lifecycle checks remain separate.
 
+Supervisor services that execute managed release source disable Python bytecode
+writes, so imports cannot add `__pycache__` files to the signed tree. The separate
+model launcher keeps its existing cache policy. Integrity checks still include
+every release entry: unexpected files are not silently excluded from the digest.
+
 Service packages are loaded from the persistent runtime, independently of the
 release pointer (`HOMEAI_RUNTIME`, or `/data/harness/runtime`). No global module
 path is added to project processes. Push data defaults use `HOMEAI_ROOT`, the
