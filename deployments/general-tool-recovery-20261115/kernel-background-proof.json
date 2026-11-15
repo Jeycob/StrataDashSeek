@@ -1,0 +1,74 @@
+{
+  "sourceCommit": "4378f17d653b35f45e4279f34143183572f7c508",
+  "atUTC": "2026-11-15T00:36:49.648Z",
+  "platform": "linux",
+  "node": "v24.21.0",
+  "nonRootHarnessUid": true,
+  "passed": true,
+  "sourceHashes": {
+    "workspace/project-process.mjs": "3dc6c74883ac1b6f687e0cacb09ef35cfb614e454a7343f8f788677dabecc9ea",
+    "workspace/project-tool.mjs": "1df4b2a7cfd2c5a7d0f3cf56b7b9d7da2860fc1bf8cdb5f75847468af1b64e2f",
+    "workspace/managed-shell.mjs": "7f74c91e42e0f5a9642f0b9085d0b4dfead3b543661c78269e06ed1a68a4ec41",
+    "workspace/policy.mjs": "b205369619cb76dd7b5bd7314d0821fdda7716a743b1ef3e3015d7f64b2fc1b8",
+    "workspace/tool-recovery.mjs": "cd186d1a68f01f0f42fa6ba42fe76060f9181d2a68085c934d5e029ee4b3c221",
+    "development/project-run.cjs": "a1d2c2b889ef7a734e32df86f898c011e95feced06d66492652bcdeee1595cbf",
+    "development/test-command.cjs": "4fa4f1b40ab00f82cabc9d64f319484c23d867b4834aa0ff0d9fa55e2fbda22b"
+  },
+  "archiveSha256": "9d53fd771dd9822525241247e4986d80d3f4c7763b48fcd3ce5ded1f1cd1f918",
+  "fixtureSha256": "400cd19bcb4cb924bffe2aa5990c508fe01f450595eb4a73adeba19b43d78adf",
+  "realSdk": true,
+  "realProcessHandles": true,
+  "realKernelFilesystemConfinement": true,
+  "modelRequests": 0,
+  "existingServicesRestarted": false,
+  "scope": "Real SDK JobsLocal/Tools/native job tools plus real SubprocessLocal/SandboxLocal/SandboxBash. Filesystem write confinement only; no claim of malicious process-signal or read isolation.",
+  "checks": [
+    {
+      "name": "real canonical background acknowledgement preserves confined project cwd and assigned environment",
+      "passed": true
+    },
+    {
+      "name": "native job_output collects actual process logs",
+      "passed": true
+    },
+    {
+      "name": "cross-owner native job_kill is refused while the real owned process survives",
+      "passed": true
+    },
+    {
+      "name": "own native job_kill drains and removes the actual owned process",
+      "passed": true
+    },
+    {
+      "name": "actual nonzero background exit remains exit 7",
+      "passed": true
+    },
+    {
+      "name": "real kernel confinement denies background writes outside the assigned project",
+      "passed": true
+    },
+    {
+      "name": "real child read-only policy denies project writes without creating writable caches",
+      "passed": true
+    },
+    {
+      "name": "explicit one-second lifetime expires and drains a real project_exec background process",
+      "passed": true,
+      "fixtureLifetimeMs": 1000
+    },
+    {
+      "name": "pre-dispatch cancellation starts no real process or job",
+      "passed": true
+    },
+    {
+      "name": "executor teardown awaits release of its real owned process",
+      "passed": true
+    },
+    {
+      "name": "all owned fixture processes are gone and the verified fixture directory is removed",
+      "passed": true
+    }
+  ],
+  "passedChecks": 11,
+  "failedChecks": 0
+}

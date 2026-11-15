@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "codeCommit": "4378f17d653b35f45e4279f34143183572f7c508",
+  "sourceSha256": "8e56e44543d7c49592fb58334279acce3aa2d935ef3289837042af6f910e91f5",
+  "sourceFiles": 250,
+  "sourceHashStableBeforeAfter": true,
+  "infrastructure": {
+    "filesExecuted": 46,
+    "passed": 292,
+    "failed": 0,
+    "skipped": 0,
+    "actualNativeHostAndChromium": true,
+    "platform": "win32",
+    "node": "24.22.1"
+  },
+  "linux": {
+    "passedChecks": 11,
+    "failedChecks": 0,
+    "actualNativeSdkJobs": true,
+    "actualKernelWriteConfinement": true,
+    "node": "24.21.0",
+    "modelRequests": 0,
+    "servicesRestarted": false,
+    "details": "kernel-background-proof.json"
+  },
+  "archivedCsvFixture": {
+    "includedInProductionGate": false,
+    "publicPassed": 14,
+    "edgeFailed": 4,
+    "sourceUnchanged": true
+  },
+  "allDiscoveredTestsPass": false,
+  "privacy": "Aggregate infrastructure verification only. Raw logs, private application source, run identifiers and host addresses are excluded."
+}
