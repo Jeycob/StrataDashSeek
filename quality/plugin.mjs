@@ -57,7 +57,7 @@ export async function executeVerification(ctx, args, execution, config = {}) {
 export function apply(ctx, config = {}) {
   ctx.tools.register({
     name: 'verify_project',
-    description: 'Verify the current isolated project against .harness-quality.json. Declare build/test/browser/acceptance checks early, then verify a small working slice before expanding. Uses real exit codes and real Chromium, rejects zero-test or stale success, saves compact evidence under .harness/quality/, and reports to the single workspace repair budget. A passing stage is not full completion: require complete:true for all required stages. Missing browser is BLOCKED, never a simulated pass. This does not install dependencies or change model settings.',
+    description: 'Verify the current isolated project against .harness-quality.json. Installed contract and browser-plan schema: /data/harness/app/quality/README.md. Read that file directly before declaring checks or browser plans. Declare build/test/browser/acceptance checks early, then verify a small working slice before expanding. Uses real exit codes and real Chromium, rejects zero-test or stale success, saves compact evidence under .harness/quality/, and reports to the single workspace repair budget. A passing stage is not full completion: require complete:true for all required stages. Missing browser is BLOCKED, never a simulated pass. This does not install dependencies or change model settings.',
     parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['all','build','test','browser','acceptance'] } }, additionalProperties: false },
     isConcurrencySafe: () => false,
     output: {
