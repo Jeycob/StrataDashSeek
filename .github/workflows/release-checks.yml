@@ -1,0 +1,85 @@
+name: Linux release checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      HOMEAI_RUNTIME: ${{ github.workspace }}/runtime
+      EFFICIENCY_SDK_ROOT: ${{ github.workspace }}/runtime/node_modules
+      HARNESS_NATIVE_CLI: ${{ github.workspace }}/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js
+      HARNESS_WEB_PUSH_MODULE: ${{ github.workspace }}/runtime/node_modules/web-push
+      HARNESS_PLAYWRIGHT_MODULE: ${{ github.workspace }}/development/ci/node_modules/playwright
+      HARNESS_WRANGLER_CLI: ${{ github.workspace }}/development/ci/node_modules/wrangler/bin/wrangler.js
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
+      PYTHONDONTWRITEBYTECODE: '1'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, verified 2026-11-15
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.22.1'
+          cache: npm
+          cache-dependency-path: |
+            runtime/package-lock.json
+            development/ci/package-lock.json
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12.12'
+          cache: pip
+          cache-dependency-path: development/ci/requirements.txt
+      - name: Record all test inventory before dependency admission
+        run: node development/release-ci.mjs --inventory --output "$RUNNER_TEMP/release-ci"
+      - name: Install exact production SDK and isolated test tooling
+        id: dependencies
+        run: |
+          npm ci --prefix runtime --no-audit --no-fund
+          npm ci --prefix development/ci --no-audit --no-fund
+          python -m pip install --no-deps --requirement development/ci/requirements.txt
+          node development/ci/node_modules/playwright/cli.js install --with-deps chromium
+          echo "HARNESS_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
+      - name: Build the Worker without uploading or provisioning
+        id: worker-build
+        run: node development/ci/node_modules/wrangler/bin/wrangler.js deploy --dry-run --config cloudflare/wrangler.example.jsonc --outdir "$RUNNER_TEMP/release-ci/worker-bundle"
+      - name: Execute portable source and literal bundle suites
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.worker-build.outcome == 'success' }}
+        run: node development/release-ci.mjs --lane portable --output "$RUNNER_TEMP/release-ci/portable"
+      - name: Execute privileged synthetic Linux and Python fixtures
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.worker-build.outcome == 'success' }}
+        run: |
+          CI_NODE_EXE=$(command -v node)
+          sudo -n --preserve-env=PATH,HOMEAI_RUNTIME,EFFICIENCY_SDK_ROOT,HARNESS_NATIVE_CLI,HARNESS_WEB_PUSH_MODULE,HARNESS_PLAYWRIGHT_MODULE,HARNESS_WRANGLER_CLI,HARNESS_PYTHON,PLAYWRIGHT_BROWSERS_PATH,PYTHONDONTWRITEBYTECODE,WRANGLER_SEND_METRICS env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$GITHUB_WORKSPACE" "$CI_NODE_EXE" development/release-ci.mjs --lane linux-root --output "$RUNNER_TEMP/release-ci/linux-root"
+      - name: Execute actual local workerd and SQLite restart proof when present in this revision
+        if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.worker-build.outcome == 'success' && hashFiles('development/device-workerd-check.mjs') != '' }}
+        run: node development/release-ci.mjs --lane local-engine --output "$RUNNER_TEMP/release-ci/local-engine"
+      - name: Combine exact-source evidence and require every inventoried suite
+        if: always()
+        run: node development/release-ci.mjs --combine --output "$RUNNER_TEMP/release-ci"
+      - name: Mark incomplete setup or interrupted runner as unrunnable
+        if: always()
+        run: |
+          if [ ! -f "$RUNNER_TEMP/release-ci/report.json" ]; then
+            node --input-type=module -e 'import fs from "node:fs/promises";import path from "node:path";const out=path.join(process.env.RUNNER_TEMP,"release-ci");await fs.mkdir(out,{recursive:true});await fs.writeFile(path.join(out,"report.json"),JSON.stringify({passed:false,outcome:"unrunnable",reason:"CI_SETUP_OR_RUNNER_DID_NOT_COMPLETE",commit:process.env.GITHUB_SHA},null,2));'
+          fi
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: release-checks-${{ github.sha }}
+          path: ${{ runner.temp }}/release-ci
+          if-no-files-found: error
+          retention-days: 7

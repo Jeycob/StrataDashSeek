@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "scope": "Complete test inventory, fail-closed evidence aggregation, exact-source and generated-bundle identity",
+  "independentReview": "Source/workflow review plus eight runner contract tests, including an actual Git child with isolated home/config",
+  "checks": {"tests": 8, "failed": 0, "skipped": 0},
+  "workflowActions": {"count": 4, "fullCommitPinsResolveToOfficialRepositories": true, "checkedAt": "2026-11-15"},
+  "inventoryDuringIntegration": {"candidates": 120, "unclassified": 0, "dirtyIntegrationCheckout": true, "releaseAcceptance": false},
+  "limitations": ["The complete clean-commit gate has not run yet", "GitHub Actions execution has not been observed", "Uncommitted deployment/device/Apps work is not certified by runner unit tests", "Production acceptance remains separate"]
+}
