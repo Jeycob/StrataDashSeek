@@ -4,6 +4,10 @@
 It does not change inference parameters, install packages, start application servers,
 or create a second repair loop. Native shell confinement and the shared repair budget
 remain authoritative. Declare the contract early and verify a thin working slice.
+Selecting one kind requires only that kind's browser plans to exist. Other declared
+plan paths remain confined and become required when their stage or `all` is selected.
+All declared source paths still need to exist. A partial pass leaves other required
+kinds missing and never means full completion.
 
 Create `.harness-quality.json` in the project root (adapt commands and sources):
 

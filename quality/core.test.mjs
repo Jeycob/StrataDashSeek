@@ -42,6 +42,33 @@ test('partial stage differs from full completion', async t => {
   assert.equal(partial.passed,true); assert.equal(partial.complete,false); assert.deepEqual(partial.missingKinds,['build']);
   const all = await verifyProject({workspace}); assert.equal(all.complete,true);
 });
+
+test('a partial test stage does not require a future browser plan but cannot complete the project', async t => {
+  const workspace = await project(t,[passing,{id:'browser',kind:'browser',plan:'plans/browser.json'}],['test','browser']);
+  const partial = await verifyProject({workspace,kind:'test'});
+  assert.equal(partial.passed,true); assert.equal(partial.complete,false);
+  assert.deepEqual(partial.verifiedKinds,['test']); assert.deepEqual(partial.missingKinds,['browser']);
+  let launched = 0; const run = async () => { launched++; throw Error('Missing plans must fail before execution'); };
+  for (const kind of ['browser','all']) await assert.rejects(verifyProject({workspace,kind,run}),e=>e.code==='ENOENT');
+  assert.equal(launched,0);
+  // Failed preflights release the lock and never replace the successful partial report.
+  const latest = JSON.parse(await fs.readFile(path.join(workspace,'.harness/quality/latest.json'),'utf8'));
+  assert.equal(latest.runId,partial.runId); assert.equal(latest.complete,false);
+  assert.equal((await verifyProject({workspace,kind:'test'})).passed,true);
+});
+
+test('unselected browser plans retain traversal and symlink protection without requiring their files', async t => {
+  const workspace = await project(t,[passing,{id:'browser',kind:'browser',plan:'../outside.json'}],['test','browser']);
+  let launched = 0; const run = async () => { launched++; throw Error('Unsafe paths must fail before execution'); };
+  await assert.rejects(verifyProject({workspace,kind:'test',run}),e=>e.code==='OUTSIDE_PROJECT');
+  const outside = await fs.mkdtemp(path.join(os.tmpdir(),'quality-outside-'));
+  t.after(()=>fs.rm(outside,{recursive:true,force:true}));
+  await fs.symlink(outside,path.join(workspace,'linked'),process.platform==='win32'?'junction':'dir');
+  const file = path.join(workspace,'.harness-quality.json'),contract=JSON.parse(await fs.readFile(file,'utf8'));
+  contract.checks[1].plan='linked/missing.json';await fs.writeFile(file,JSON.stringify(contract));
+  await assert.rejects(verifyProject({workspace,kind:'test',run}),e=>e.code==='SYMLINK_REFUSED');
+  assert.equal(launched,0);
+});
 test('source mutation makes a passing test stale', async t => {
   const workspace = await project(t,[{...passing,command:command("require('fs').writeFileSync('source.txt','changed');console.log('# pass 1\\n# fail 0')")}]);
   const r = await verifyProject({workspace}); assert.equal(r.stale,true); assert.equal(r.passed,false);

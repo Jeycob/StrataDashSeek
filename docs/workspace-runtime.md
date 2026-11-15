@@ -162,8 +162,8 @@ automatic side-effect retry or injected force-exit.
 
 The same test-directory compatibility also applies to direct Node commands in
 the quality runner. Literal display-only pipelines composed of `head`, `tail`
-and quoted `grep -vE` filters are removed from known verification commands;
-arbitrary pipelines, positive grep assertions and file-producing commands are
+and quoted literal `grep -E`/`grep -vE` display filters are removed from known
+verification commands; arbitrary pipelines, quiet/file-input grep checks and file-producing commands are
 left intact. The original command remains in the audit trail. Structured
 verification uses the final SDK outcome exactly once, with per-check diagnostic
 categories and measured assertion counts. Configuration rejection, file/module

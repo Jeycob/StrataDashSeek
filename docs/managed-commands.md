@@ -45,7 +45,8 @@ create project cache directories while preparing the environment. Platform
 temporary-directory exceptions still belong to the installed sandbox provider.
 
 Known literal verification commands can drop display-only `tail`, `head` or
-quoted `grep -vE` filters so the first failure and final summary stay visible.
+quoted literal `grep -E`/`grep -vE` display filters without file operands or
+quiet mode so the first failure and final summary stay visible.
 The output announces this adaptation and the original admitted arguments remain
 in the audit trail. Direct `node --test` directory operands expand to bounded
 test-file selections, including in the quality runner. Unsupported shell forms,

@@ -128,7 +128,10 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
   try { lock = await fs.open(lockPath, 'wx', 0o600); } catch (e) { if (e.code === 'EEXIST') throw new QualityError('VERIFICATION_BUSY', 'A verification already owns this project.'); throw e; }
   try {
     await lock.writeFile(JSON.stringify({ pid: process.pid, at: Date.now() }));
-    const inputs = [...contract.sources, contractPath, ...contract.checks.filter(c => c.plan).map(c => c.plan)];
+    // Keep every declared plan confined, but allow later stages to declare a
+    // plan before creating it. Only selected stages require and hash its file.
+    for (const check of contract.checks) if (check.plan !== undefined) await confined(root, check.plan, { missing: true });
+    const inputs = [...contract.sources, contractPath, ...selected.filter(c => c.plan).map(c => c.plan)];
     const before = await fingerprint(root, inputs), startedAt = Date.now(), runId = crypto.randomUUID(), results = [];
     for (const check of selected) {
       signal?.throwIfAborted();
