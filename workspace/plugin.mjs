@@ -8,14 +8,33 @@ import { createProjectCommandRunner, registerProjectTool } from './project-tool.
 import { createManagedShell } from './managed-shell.mjs';
 import { sameRequestOrigin, boundedJSON } from './http.mjs';
 import { createRequire } from 'node:module';
+import { createRuntimeCapabilities } from './runtime-capabilities.mjs';
+import { registerRuntimeCapabilities } from './runtime-tool.mjs';
+import { cleanupIdleProjectCaches } from './cache-cleanup.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
-export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees'];
+export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt'];
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 export async function apply(ctx, config = {}) {
   const manager = new WorkspaceManager(ctx, config); await manager.initialize();
+  const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
+  const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
+  const capabilities = createRuntimeCapabilities({ workspaceRoot: config.appsWorkspaceRoot ?? appsConfig?.workspaceRoot ?? path.dirname(manager.projectsRoot), capacityPath: appsConfig?.stateDir ?? '/data/harness/state/applications', minFreeBytes: appsConfig?.minFreeBytes ?? 2 * 1024 ** 3,
+    ...(appsConfig ? { readAppsState: ({ signal }) => callApps('/state', undefined, { ...appsConfig, signal, timeoutMs: 1500 }) } : {}) });
+  registerRuntimeCapabilities(ctx, manager, capabilities);
+  let lastCacheCleanup = 0, cacheCleanupPending;
+  const cleanupCaches = () => {
+    if (cacheCleanupPending || Date.now() - lastCacheCleanup < 60000) return cacheCleanupPending;
+    lastCacheCleanup = Date.now();
+    cacheCleanupPending = manager.inOrder(async () => {
+      for (const id of manager.running.keys()) await manager.releaseIfIdle(id);
+      const report = await cleanupIdleProjectCaches(manager, { minFreeBytes: (appsConfig?.minFreeBytes ?? 2 * 1024 ** 3) + 768 * 1024 ** 2 });
+      await fs.writeFile(path.join(manager.root, 'cache-cleanup.json'), JSON.stringify({ ...report, at: Date.now() }), { mode: 0o600 });
+    }).catch(() => { ctx.logger?.warn('Automatic package-cache cleanup deferred; project data retained.'); }).finally(() => { cacheCleanupPending = undefined; });
+    return cacheCleanupPending;
+  };
   ctx.effect(() => () => manager.changes.dispose());
   // Local, bounded checks only: never install or download during a cold start.
   const environmentReport = config.environmentReport ?? '/data/harness/state/development.json';
@@ -46,10 +65,13 @@ export async function apply(ctx, config = {}) {
   }, { global: true });
   ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
   ctx.on('workspace-runtime/review', async ({ sessionId }, next) => (await manager.review(sessionId)) ?? next());
-  ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.releaseIfIdle(session.id).catch(() => {}), 0); });
+  ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.releaseIfIdle(session.id).then(cleanupCaches).catch(() => {}), 0); });
   ctx.on('agent/disposed', ({ agent }) => { managedShell.remove(agent); manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); manager.pendingDiagnostics.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
   const timer = setInterval(() => { for (const id of manager.running.keys()) void manager.releaseIfIdle(id).catch(() => {}); }, 10000); timer.unref();
   ctx.effect(() => () => clearInterval(timer));
+  const cleanupTimer = setInterval(() => void cleanupCaches(), 60000); cleanupTimer.unref();
+  const initialCleanup = setTimeout(() => void cleanupCaches(), 2000); initialCleanup.unref();
+  ctx.effect(() => () => { clearInterval(cleanupTimer); clearTimeout(initialCleanup); });
   ctx.on('llm-pi-ai/request-headers', (request, headers, next) => {
     headers = next();
     if (request.provider !== 'strata-vast' || request.purpose === 'compaction') return headers;
