@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "observedAt": "2026-11-15T17:13:03.120Z",
+  "activeRuntimeRevision": "0f9548a2dea390f25fb8465f45d9f2b757bd316a",
+  "dockerServiceImplementation": "bca06728a555311388bc724483309b3298c26466",
+  "signedAndActivated": true,
+  "protectedModelAndNineOtherServicesPreservedDuringLastNativeUpdate": true,
+  "chatsPreserved": 56,
+  "projectsPreserved": 5,
+  "genericRecovery": {
+    "previousNeverStartedCandidateRemovedAfterVerifiedFreshBoot": true,
+    "oldFailureReportRetained": true,
+    "imagesVolumesAndProjectDataNotDeleted": true
+  },
+  "actualAttempt": {
+    "imageBuildPassed": true,
+    "candidateCreated": true,
+    "candidateStarted": true,
+    "applicationAvailabilityCheckPassed": true,
+    "applicationTestContainerCreated": false,
+    "applicationTestsRan": false,
+    "browserTestsRan": false,
+    "promoted": false,
+    "verifiedApplicationUrl": null,
+    "terminalStatus": "failed",
+    "failedStage": "tests",
+    "error": "Docker 500: no space left on device",
+    "durationMs": 54945
+  },
+  "imageBytes": 186843663,
+  "failedCandidateWritableBytes": 57424,
+  "failedCandidateRetained": true,
+  "failedCandidateHasMounts": false,
+  "failedCandidateReferencedByPublishedProject": false,
+  "limitations": [
+    "Image size and free-space deltas are not peak physical VFS usage measurements",
+    "Mutation journal requested-at timestamp is not confirmation latency",
+    "No new driver, builder, larger disk or paid instance was used",
+    "Candidate-exec test mode is only a proposal pending owner consent; not implemented",
+    "A proposed application-data export was rejected by automatic approval review and was not performed; the proposed next plan preserves that data on the server"
+  ],
+  "validation": {
+    "baseFullInfrastructure": {
+      "commit": "bca06728a555311388bc724483309b3298c26466",
+      "passed": 454,
+      "failed": 0,
+      "skipped": 0,
+      "files": 60
+    },
+    "runtimeRecipeChange": {
+      "commit": "0f9548a2dea390f25fb8465f45d9f2b757bd316a",
+      "targetedSDKAndCapabilityChecks": 21,
+      "failed": 0,
+      "skipped": 0
+    },
+    "historicalCSV": {
+      "passed": 14,
+      "failed": 4
+    }
+  }
+}
