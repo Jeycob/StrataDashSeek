@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "scope": "Native checkpoint preview/recovery controls, grouped settings and safe settings drafts",
+  "independentRootChecks": {
+    "passed": 28,
+    "failed": 0,
+    "skipped": 0,
+    "environment": "Actual pinned Native Host and Chromium, source plus generated bundle, controlled application APIs",
+    "includes": [
+      "Editor save/rename races and actual SDK file move/write CAS",
+      "Checkpoint protected-file refusal, stale preview, retained version and rollback wording",
+      "Newer settings drafts survive pending saves, language change and workspace switch",
+      "Native General language slot, read-only runtime status and narrow settings layout"
+    ]
+  },
+  "requires": "Checkpoint backend API from the immediately preceding signed integration commit",
+  "notIncluded": "Apps project-context integration, revocable device authentication and completed Apps localization are separate active work",
+  "productionActivated": false
+}

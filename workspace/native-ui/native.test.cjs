@@ -27,11 +27,12 @@ test('rc.2 Native Settings, CtrlAltP, Docker and EN/CZ compose on desktop and mo
   const preview=page.getByRole('button',{name:'Continue',exact:true});await preview.waitFor({timeout:4000}).catch(()=>{});if(await preview.isVisible()){await preview.click();await preview.waitFor({state:'hidden'});}
   const onboarding=page.getByRole('dialog').filter({hasText:'Get started'});await onboarding.waitFor({timeout:3000}).catch(()=>{});if(await onboarding.isVisible())await onboarding.getByRole('button',{name:'Close',exact:true}).click();
   assert.equal(await page.evaluate(()=>window.HarnessNativeUI.openSettings('harness-workspaces')),true);
-  await page.getByRole('combobox').filter({has:page.locator('option[value="medium"]')}).waitFor();await page.locator('[data-harness-update-status]').waitFor();
-  assert.match(await page.locator('[data-harness-update-status]').innerText(),/ready.*aaaaaaaaaaaa/);
+  await page.getByRole('combobox').filter({has:page.locator('option[value="medium"]')}).waitFor();assert.equal(await page.locator('[data-harness-settings-group="workspace"] > label > select').count(),1);
   await page.locator('.wb-form [name="model"]').fill('unsaved-model-choice');
   await page.evaluate(()=>window.HarnessI18n.setLanguage('cs'));await page.getByRole('button',{name:'Výchozí nastavení projektů',exact:true}).waitFor();assert.equal(await page.locator('.wb-form [name="model"]').inputValue(),'unsaved-model-choice');
   await page.evaluate(()=>window.HarnessI18n.setLanguage('en'));await page.getByRole('button',{name:'Workspace defaults',exact:true}).waitFor();assert.equal(await page.locator('.wb-form [name="model"]').inputValue(),'unsaved-model-choice');
+  await page.getByRole('button',{name:'General',exact:true}).click();await page.getByLabel('Interface language',{exact:true}).waitFor();assert.equal(await page.locator('[data-harness-settings-group="general"] select').count(),1);
+  await page.getByRole('button',{name:'Advanced runtime status',exact:true}).click();await page.locator('[data-harness-update-status]').waitFor();assert.match(await page.locator('[data-harness-update-status]').innerText(),/ready[\s\S]*aaaaaaaaaaaa/);assert.equal(await page.locator('[data-harness-settings-group="advanced"] input').count(),0);
   await page.getByRole('button',{name:'Applications and Docker',exact:true}).click();await page.getByText('Credential vault',{exact:true}).waitFor();
   await page.getByRole('button',{name:'Notifications',exact:true}).click();await page.getByText('Open the installed Harness app',{exact:false}).waitFor();
   await page.screenshot({path:path.join(evidence,'native-settings.png'),fullPage:true});await page.keyboard.press('Escape');
