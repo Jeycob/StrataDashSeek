@@ -15,6 +15,44 @@ test('three failed repairs pause even when files change; a lower failure score i
   b.observe({ kind: 'test', exitCode: 1, text: '2 failed' }); assert.equal(b.stalled, 0);
   b.observe({ kind: 'test', exitCode: 0, text: 'all passed' }); assert.equal(b.steps, 0); assert.equal(b.blocked, null);
 });
+
+test('a passed check does not prevent recognizing progress in subsequent failed checks', () => {
+  const budget = new RepairBudget();
+  budget.observe({ kind: 'test', exitCode: 0, text: '# tests 4\n# pass 4\n# fail 0' });
+  const stage = budget.stage;
+  for (const failed of [5, 4, 3, 2]) {
+    budget.observe({ kind: 'test', exitCode: 1, text: `# tests 10\n# pass ${10 - failed}\n# fail ${failed}` });
+    assert.equal(budget.blocked, null, `decreasing failure count ${failed} is progress`);
+  }
+  assert.equal(budget.stage, stage, 'partial progress never passes a stage');
+  assert.equal(budget.checks.test.bestScore, 2);
+  assert.equal(budget.stalled, 0);
+});
+
+test('a new failure series after a pass retains repeated-error and stage limits', () => {
+  const budget = new RepairBudget();
+  budget.observe({ kind: 'test', exitCode: 0, text: '# tests 4\n# pass 4\n# fail 0' });
+  for (let i = 0; i < 3; i++) {
+    budget.step(60);
+    budget.observe({ kind: 'test', exitCode: 1, text: '# tests 10\n# pass 5\n# fail 5', manifestHash: String(i) });
+  }
+  assert.equal(budget.blocked?.code, 'REPAIR_NO_PROGRESS'); assert.equal(budget.steps, 3);
+  const limited = new RepairBudget(); limited.observe({ kind: 'test', exitCode: 0, text: 'passed' });
+  for (let i = 0; i < 10; i++) limited.step(10);
+  assert.equal(limited.step(10), false); assert.equal(limited.blocked.code, 'STAGE_BUDGET');
+});
+
+test('persisted zero minima recover comparisons without resuming a blocked run', () => {
+  const saved = { stage: 2, steps: 7, stalled: 2, errors: {}, checks: { test: { bestScore: 0, lastScore: 5 } } };
+  const budget = new RepairBudget(JSON.parse(JSON.stringify(saved)));
+  budget.observe({ kind: 'test', exitCode: 1, text: '# tests 10\n# pass 6\n# fail 4' });
+  assert.equal(budget.steps, 7); assert.equal(budget.stalled, 0); assert.equal(budget.checks.test.bestScore, 4);
+  budget.observe({ kind: 'test', exitCode: 1, text: '# tests 10\n# pass 7\n# fail 3' });
+  assert.equal(budget.blocked, null); assert.equal(budget.stalled, 0);
+  const blocked = new RepairBudget({ ...saved, blocked: { code: 'REPAIR_NO_PROGRESS' } });
+  blocked.observe({ kind: 'test', exitCode: 0, text: 'passed' });
+  assert.equal(blocked.blocked.code, 'REPAIR_NO_PROGRESS'); assert.equal(blocked.stage, 2);
+});
 test('stage step budget is enforced even without recognizable checks', () => { const b = new RepairBudget(); for (let i = 0; i < 10; i++) assert.equal(b.step(10), true); assert.equal(b.step(10), false); });
 test('setup errors are not combined into failed repairs before implementation', () => {
   const b = new RepairBudget(); b.step(60);

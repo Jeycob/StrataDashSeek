@@ -61,12 +61,18 @@ export class RepairBudget {
       return { improved: false, key: 'tool-error', category: classification.category, blocked: this.blocked };
     }
     const key = kind ?? 'tool-error', previous = this.checks[key], score = failed ? Number.isSafeInteger(classification.evidence?.failed) && classification.evidence.failed > 0 ? classification.evidence.failed : checkScore(exitCode === 0 ? 1 : exitCode, text) : 0;
+    // A prior pass ends its repair series. A later failure must establish a
+    // new baseline: no positive failure count can improve on historical zero.
+    // This also repairs persisted zero minima without clearing any stop budget.
+    const comparison = failed && previous?.bestScore === 0
+      ? Number.isFinite(previous.lastScore) && previous.lastScore > 0 ? { ...previous, bestScore: previous.lastScore } : undefined
+      : previous;
     const fingerprint = failed ? errorFingerprint(text) : null;
     if (fingerprint) this.errors[fingerprint] = (this.errors[fingerprint] ?? 0) + 1;
-    const improved = !previous || score < previous.bestScore;
-    this.checks[key] = { bestScore: improved ? score : previous.bestScore, lastScore: score, fingerprint, manifestHash };
+    const improved = !comparison || score < comparison.bestScore;
+    this.checks[key] = { bestScore: improved ? score : comparison.bestScore, lastScore: score, fingerprint, manifestHash };
     if (!failed) { this.steps = 0; this.stalled = 0; this.errors = {}; this.stage++; }
-    else if (improved && previous) this.stalled = 0;
+    else if (improved && comparison) this.stalled = 0;
     else this.stalled++;
     if (failed && (this.stalled >= limit || this.errors[fingerprint] >= limit)) this.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Repeated repairs did not improve verification. Review the checkpoint and choose a different approach.' };
     return { improved, score, key, blocked: this.blocked };
