@@ -91,7 +91,7 @@
     "previousManagedContainerCount": 7,
     "allPreviousManagedContainersPresent": true,
     "currentManagedContainerCount": 13,
-    "countExplanation": "Ready daemon includes retained managed test containers which remembered sleep state excludes.",
+    "countExplanation": "The earlier sleep snapshot contained seven containers; the later ready-daemon inventory contained thirteen. All seven earlier IDs were explicitly matched; these are different snapshot scopes.",
     "capacityMeasurements": [
       "Docker worker before capacity check: freeBytes=252125184, freeInodes=138748; requiredBytes=536870912, requiredInodes=16384.",
       "Docker worker after unused build-cache cleanup: freeBytes=1039491072, freeInodes=155589; requiredBytes=536870912, requiredInodes=16384."
