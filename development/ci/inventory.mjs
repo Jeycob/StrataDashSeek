@@ -14,7 +14,7 @@ const hostFixtures = new Map([
   ['vast/completion-guard-smoke.cjs', 'Legacy fixture requires an installed /data/harness profile and fixed local ports; never run against production from CI.'],
   ['workspace/reasoning-smoke.cjs', 'Legacy fixture requires installed host profiles; current-source unit/SDK checks are separate.']
 ]);
-const linuxChecks = new Set(['vast/runtime-paths-linux-check.cjs', 'vast/startup-update-linux-check.cjs', 'workspace/process-lock-linux-check.mjs', 'workspace/checkpoint-restore-linux-check.mjs', 'mobile/runtime-readiness-native-check.cjs', 'vast/apps-context-linux-check.cjs']);
+const linuxChecks = new Set(['vast/runtime-paths-linux-check.cjs', 'vast/startup-update-linux-check.cjs', 'workspace/process-lock-linux-check.mjs', 'workspace/checkpoint-restore-linux-check.mjs', 'mobile/runtime-readiness-native-check.cjs', 'vast/apps-context-linux-check.cjs','vast/runtime-lease-linux-check.cjs','vast/startup-hook-linux-check.cjs']);
 const rootTests = new Set(['mobile/runtime-readiness.test.cjs', 'vast/apps-data-linux-check.cjs']);
 export function candidate(name) {
   const base = path.posix.basename(name);
@@ -26,6 +26,11 @@ export function classify(name) {
   if (helpers.has(name)) return {file: name, kind: 'helper', lane: 'outside-ci', required: false, reason: helpers.get(name)};
   if (hostFixtures.has(name)) return {file: name, kind: 'existing-host-fixture', lane: 'outside-ci', required: false, outcome: 'unrunnable', reason: hostFixtures.get(name)};
   if (name === 'development/device-workerd-check.mjs') return {file: name, kind: 'workerd', lane: 'local-engine', required: true, timeoutMs: 120000};
+  if (name === 'workspace/runtime-admission-native.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:180000,minTests:2};
+  if (name === 'vast/runtime-recovery.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_RECOVERY_ROOT_TEST:'1'},minTests:12};
+  if (name === 'workspace/runtime-admission.test.mjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_ADMISSION_ROOT_TEST:'1'},minTests:9};
+  if (name === 'vast/runtime-admission-server.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_ADMISSION_SERVER_ROOT_TEST:'1'},minTests:6};
+  if (name === 'vast/runtime-release-attestation.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_RELEASE_ROOT_TEST:'1'},minTests:3};
   if (linuxChecks.has(name) || rootTests.has(name)) return {file: name, kind: 'node', lane: 'linux-root', required: true, timeoutMs: 120000};
   if (name.endsWith('.py')) return {file: name, kind: 'python', lane: 'linux-root', required: true, timeoutMs: 90000};
   if (/\.test\.[cm]js$/u.test(name)) return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 180000};

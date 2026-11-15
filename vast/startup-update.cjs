@@ -63,7 +63,7 @@ function activate(root,candidate,sha,{afterSwitch=()=>{}}={}){
 function sameRuntime(candidate,root){return['package.json','package-lock.json'].every(name=>fs.readFileSync(path.join(candidate,'runtime',name)).equals(fs.readFileSync(path.join(root,'runtime',name))));}
 function releaseDigest(directory){rootOwned(directory);const hash=crypto.createHash('sha256');function visit(relative){for(const entry of fs.readdirSync(path.join(directory,relative),{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name),file=path.join(directory,name),info=rootOwned(file);hash.update(name.split(path.sep).join('/')+'\0');if(entry.isDirectory()){hash.update('directory\0');visit(name);}else if(entry.isFile()){hash.update('file:'+(info.mode&0o111?'x':'-')+'\0');hash.update(fs.readFileSync(file));hash.update('\0');}else throw Error('Unsafe release entry');}}visit('');return hash.digest('hex');}
 function statusWriter(root){let state={version:1,enabled:true,phase:'checking',checkedAt:null,appliedCommit:readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{})?.commit??null,targetCommit:null,error:null,signatureVerified:false};return patch=>{state={...state,...patch,checkedAt:new Date().toISOString()};runtime.writePrivate(root,'startup-update.json',state);runtime.publish(root,'startup-update.json',state);return state;};}
-async function update(root='/data/harness',{checkOnly=false}={}){
+async function update(root='/data/harness',{checkOnly=false,onVerified=async()=>{},beforeActivate=async()=>{}}={}){
  const configFile=path.join(root,'root-secrets/startup-update.json');
  let checked={};const write=checkOnly?(patch=>checked={...checked,...patch}):statusWriter(root);
  const cache=path.join(root,'update-cache'),releases=path.join(root,'releases');
@@ -85,7 +85,7 @@ async function update(root='/data/harness',{checkOnly=false}={}){
   verifySignature(program('git',[...gitArgs,'cat-file','commit',sha],{root,maxBuffer:MIB}),path.join(root,'root-secrets/startup-update-signers.gpg'),settings.signers,work,{root});
   write({signatureVerified:true});
   const applied=readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{});
-  if(applied.commit===sha&&fs.realpathSync(path.join(root,'app'))===path.join(releases,sha)){if(!applied.digest||releaseDigest(path.join(releases,sha))!==applied.digest)throw Error('Applied release differs from its verified source');return write({phase:'ready',appliedCommit:sha});}
+  if(applied.commit===sha&&fs.realpathSync(path.join(root,'app'))===path.join(releases,sha)){if(!applied.digest||releaseDigest(path.join(releases,sha))!==applied.digest)throw Error('Applied release differs from its verified source');if(!checkOnly)await onVerified({commit:sha,digest:applied.digest});return write({phase:'ready',appliedCommit:sha});}
   const space=fs.statfsSync(root);if(Number(space.bavail)*Number(space.bsize)<settings.minimumFreeBytes+96*MIB)throw Error('Insufficient disk reserve for a safe code update');
   write({phase:'staging'});const archive=path.join(work,'release.tar');fs.writeFileSync(archive,program('git',[...gitArgs,'archive','--format=tar',sha],{root}));
   const candidate=path.join(releases,sha);
@@ -98,6 +98,7 @@ async function update(root='/data/harness',{checkOnly=false}={}){
   if(fs.existsSync(candidate)&&releaseDigest(candidate)!==releaseDigest(staging))throw Error('An existing release differs from its signed source');
   if(checkOnly)return{...checked,checkOnly:true,verified:true,commit:sha};
   if(!fs.existsSync(candidate))fs.renameSync(staging,candidate);
+  const digest=releaseDigest(candidate);await onVerified({commit:sha,digest});await beforeActivate({commit:sha,digest});
   // Keep recovery code stable; its upgrades are separate explicit maintenance.
   activate(root,candidate,sha);
   return write({phase:'ready',appliedCommit:sha,error:null});

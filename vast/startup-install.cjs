@@ -17,9 +17,10 @@ function install({root='/data/harness',keyring,signers,onstart='/root/onstart.sh
  fs.mkdirSync(bootstrap,{recursive:true,mode:0o755});
  const bootstrapStat=fs.lstatSync(bootstrap);if(bootstrapStat.isSymbolicLink()||bootstrapStat.uid!==0||(bootstrapStat.mode&0o022))throw Error('Bootstrap directory must be protected');
  // Publish a new dependency before its consumer; the executable entry is last.
- const files=[['runtime-paths.cjs','runtime-paths.cjs'],['startup-extract.py','startup-extract.py'],['startup-update.cjs','startup-update.cjs'],['start.sh','startup-bootstrap.sh']];
+ const files=[['runtime-paths.cjs','runtime-paths.cjs'],['process-lock.mjs','../workspace/process-lock.mjs'],['runtime-recovery.cjs','runtime-recovery.cjs'],['runtime-admission-server.cjs','runtime-admission-server.cjs'],['runtime-release.cjs','runtime-release.cjs'],['runtime-launcher.cjs','runtime-launcher.cjs'],['startup-extract.py','startup-extract.py'],['startup-update.cjs','startup-update.cjs'],['start.sh','startup-bootstrap.sh']];
  const changed=files.filter(([name,source])=>fs.existsSync(path.join(bootstrap,name))&&!fs.readFileSync(path.join(bootstrap,name)).equals(fs.readFileSync(path.join(__dirname,source))));
  if(changed.length&&!upgradeBootstrap)throw Error('Stable bootstrap differs; an explicit reviewed upgrade is required');
+ if(changed.length)require('./runtime-launcher.cjs').assertNoAgentProcesses(account?.uid??Number(require('node:child_process').execFileSync('id',['-u','harness'],{encoding:'utf8'})));
  if(changed.length){const backup=path.join(privateRoot,'bootstrap-before-runtime-'+Date.now()+'-'+crypto.randomBytes(6).toString('hex'));runtime.ensureDirectory(backup);for(const[name]of changed){const target=path.join(bootstrap,name);runtime.trustedFile(target);runtime.atomic(path.join(backup,name),fs.readFileSync(target));}}
  runtime.prepare(root,account);const log=runtime.openLog(root,'supervisor');fs.closeSync(log);
  for(const[name,source]of files.filter(([name])=>name!=='start.sh'))atomic(path.join(bootstrap,name),fs.readFileSync(path.join(__dirname,source)),0o644);

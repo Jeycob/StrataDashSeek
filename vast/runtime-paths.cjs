@@ -3,6 +3,10 @@
 // copied into the stable bootstrap only by an explicit operator upgrade.
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),crypto=require('node:crypto');
 const flags=fs.constants,NAME=/^[a-z0-9][a-z0-9.-]{0,100}$/;
+// FD9 is the inherited root supervisor flock. libuv may preserve a pre-existing
+// non-CLOEXEC descriptor outside the requested stdio range. Explicitly replace
+// it for every helper and privilege drop; only the UI supervisor inherits it.
+function withoutRootLease(stdout='pipe',stderr=stdout){return['ignore',stdout,stderr,'ignore','ignore','ignore','ignore','ignore','ignore','ignore'];}
 function paths(root='/data/harness'){
  root=path.resolve(root);const control=path.join(root,'root-secrets/runtime');
  return{root,control,privateState:path.join(control,'state'),privateLogs:path.join(control,'logs'),legacy:path.join(control,'legacy'),publicState:path.join(root,'runtime-status'),serviceLogs:path.join(root,'logs'),agentState:path.join(root,'state')};
@@ -39,11 +43,11 @@ function atomic(file,value,mode=0o600){
 function control(root){
  const p=paths(root);if(directoryTree(p.root).mode&0o022)throw Error('Runtime root is writable outside root');ensureDirectory(path.join(p.root,'root-secrets'));ensureDirectory(p.control);ensureDirectory(p.privateState);ensureDirectory(p.privateLogs);ensureDirectory(p.legacy);ensureDirectory(p.publicState,0o755);return p;
 }
-function identity(){return{uid:Number(cp.execFileSync('/usr/bin/id',['-u','harness'],{encoding:'utf8'})),gid:Number(cp.execFileSync('/usr/bin/id',['-g','harness'],{encoding:'utf8'}))};}
+function identity(){return{uid:Number(cp.execFileSync('/usr/bin/id',['-u','harness'],{encoding:'utf8',stdio:withoutRootLease()})),gid:Number(cp.execFileSync('/usr/bin/id',['-g','harness'],{encoding:'utf8',stdio:withoutRootLease()}))};}
 function validIdentity(value){if(!Number.isInteger(value.uid)||value.uid<1||!Number.isInteger(value.gid)||value.gid<1)throw Error('A non-root service identity is required');return value;}
 function readPrivate(root,name,fallback=null){if(!NAME.test(name))throw Error('Invalid runtime state name');const p=control(root),file=path.join(p.privateState,name);if(!trustedFile(file,{optional:true}))return fallback;const fd=fs.openSync(file,flags.O_RDONLY|flags.O_NOFOLLOW|flags.O_NONBLOCK);try{const s=fs.fstatSync(fd);if(s.nlink!==1||s.uid!==0||!s.isFile()||s.size>2*1024**2)throw Error('Invalid private runtime state');return JSON.parse(fs.readFileSync(fd,'utf8'));}finally{fs.closeSync(fd);}}
 function writePrivate(root,name,value){if(!NAME.test(name))throw Error('Invalid runtime state name');atomic(path.join(control(root).privateState,name),value);}
-const PUBLIC_NAMES=new Set(['services.json','service-health.json','telemetry.json','idle-status.json','startup-update.json','preview-status.json','billing-status.json']);
+const PUBLIC_NAMES=new Set(['services.json','service-health.json','telemetry.json','idle-status.json','startup-update.json','preview-status.json','billing-status.json','runtime-recovery.json']);
 const publicString=value=>String(value).slice(0,500).replace(/https?:\/\/\S*[?&](?:token|key|secret)=[^\s]*/gi,'[redacted authentication URL]').replace(/Bearer\s+\S+/gi,'Bearer [redacted]');
 function sanitize(value){if(value===null||typeof value==='boolean')return value;if(typeof value==='number')return Number.isFinite(value)?value:null;if(typeof value==='string')return publicString(value);if(Array.isArray(value))return value.slice(0,60).map(sanitize);if(value&&typeof value==='object'){const out={};for(const[k,v]of Object.entries(value)){if(/secret|password|cookie|authorization|harness.?log|launch.?url/i.test(k)||/token/i.test(k)&&typeof v!=='number')continue;out[k]=sanitize(v);}return out;}return null;}
 function publicValue(name,value){
@@ -51,6 +55,7 @@ function publicValue(name,value){
  const keys={
   'services.json':['pids','names'],
   'service-health.json':['version','at','sourceCommit','phase','reasonCode','failedService'],
+  'runtime-recovery.json':['version','sourceCommit','phase','reasonCode','observedAt','candidateCommit','servingCommit','lastGoodCommit','acceptedWork','deadline'],
   'startup-update.json':['version','enabled','phase','checkedAt','appliedCommit','targetCommit','error','signatureVerified','bootstrapUpgradeRequired'],
   'telemetry.json':['at','source','gpu','cpu','ram','disk','model','agentQueue','last','requests','history','liveTokensPerSecond','energyWhSinceMonitorStart','monitorStartedAt','idle'],
   'idle-status.json':['at','canStop','reason','idleTimeoutSeconds','idleSeconds'],
@@ -74,13 +79,13 @@ function adoptSignedStatus(root){
  const p=control(root),file=path.join(p.root,'root-secrets/startup-update-applied.json');trustedFile(file);const applied=JSON.parse(fs.readFileSync(file,'utf8'));
  if(!/^[a-f0-9]{40}$/.test(applied.commit||''))throw Error('Missing verified applied release');const release=fs.realpathSync(path.join(p.root,'app'));
  if(release!==path.join(p.root,'releases',applied.commit)||require('./startup-update.cjs').releaseDigest(release)!==applied.digest)throw Error('Applied source differs from the verified release');
- const entries=[['start.sh','startup-bootstrap.sh'],['runtime-paths.cjs','runtime-paths.cjs'],['startup-update.cjs','startup-update.cjs'],['startup-extract.py','startup-extract.py']];
+ const entries=[['start.sh','startup-bootstrap.sh'],['runtime-paths.cjs','runtime-paths.cjs'],['startup-update.cjs','startup-update.cjs'],['startup-extract.py','startup-extract.py'],['process-lock.mjs','../workspace/process-lock.mjs'],['runtime-recovery.cjs','runtime-recovery.cjs'],['runtime-admission-server.cjs','runtime-admission-server.cjs'],['runtime-release.cjs','runtime-release.cjs'],['runtime-launcher.cjs','runtime-launcher.cjs']];
  const bootstrapUpgradeRequired=entries.some(([name,source])=>{const target=path.join(p.root,'bootstrap',name);return!trustedFile(target,{optional:true})||!fs.readFileSync(target).equals(fs.readFileSync(path.join(__dirname,source)));});
  const state={version:1,enabled:true,phase:'ready',checkedAt:new Date().toISOString(),appliedCommit:applied.commit,targetCommit:applied.commit,error:null,signatureVerified:true,bootstrapUpgradeRequired};writePrivate(root,'startup-update.json',state);publish(root,'startup-update.json',state);return state;
 }
 function readAgent(root,relative,{uid,gid}=identity(),limit=1024*1024){
  validIdentity({uid,gid});if(typeof relative!=='string'||relative.split('/').some(x=>!x||x==='.'||x==='..')||!Number.isInteger(limit)||limit<1||limit>2*1024**2)throw Error('Invalid agent-state read');
- const result=cp.spawnSync('/usr/bin/setpriv',['--reuid',String(uid),'--regid',String(gid),'--clear-groups','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--',process.execPath,__filename,'read-agent',path.resolve(root),relative,String(limit)],{encoding:'utf8',timeout:5000,maxBuffer:limit+4096,env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'}});
+ const result=cp.spawnSync('/usr/bin/setpriv',['--reuid',String(uid),'--regid',String(gid),'--clear-groups','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--',process.execPath,__filename,'read-agent',path.resolve(root),relative,String(limit)],{encoding:'utf8',timeout:5000,maxBuffer:limit+4096,stdio:withoutRootLease(),env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'}});
  if(result.status!==0)throw Error('Agent state is unavailable or unsafe');return JSON.parse(result.stdout);
 }
 function agentCLI(root,relative,limit){
@@ -116,9 +121,9 @@ function prepare(root='/data/harness',account=identity(),{afterLogMove}={}){
   try{const s=fs.lstatSync(directory);if(!s.isDirectory()||s.isSymbolicLink()||![0,account.uid].includes(s.uid))throw Error('Agent data must be a real service-owned directory');if(s.uid===0){const fd=fs.openSync(directory,flags.O_RDONLY|flags.O_DIRECTORY|flags.O_NOFOLLOW);try{fs.fchownSync(fd,account.uid,account.gid);}finally{fs.closeSync(fd);}}}catch(e){if(e.code!=='ENOENT')throw e;fs.mkdirSync(directory,{mode:0o700});fs.chownSync(directory,account.uid,account.gid);}
  }
  atomic(marker,layout);
- const aliases=cp.spawnSync('/usr/bin/setpriv',['--reuid',String(account.uid),'--regid',String(account.gid),'--clear-groups','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--',process.execPath,__filename,'compat',p.root],{encoding:'utf8',timeout:5000,maxBuffer:4096,env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'}});
+ const aliases=cp.spawnSync('/usr/bin/setpriv',['--reuid',String(account.uid),'--regid',String(account.gid),'--clear-groups','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--',process.execPath,__filename,'compat',p.root],{encoding:'utf8',timeout:5000,maxBuffer:4096,stdio:withoutRootLease(),env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'}});
  if(aliases.status!==0)throw Error('Unprivileged compatibility setup failed; original state remains retained');
  return{version:1,privateState:p.privateState,publicState:p.publicState,logsPrepared:true,legacyLogsRetained:!!layout.logsBackup,bootstrapAutomaticallyUpgraded:false};
 }
-module.exports={paths,directoryTree,ensureDirectory,trustedFile,atomic,control,prepare,openLog,lockFile,adoptSignedStatus,readPrivate,writePrivate,publish,readAgent,publicValue};
+module.exports={paths,directoryTree,ensureDirectory,trustedFile,atomic,control,prepare,openLog,lockFile,adoptSignedStatus,readPrivate,writePrivate,publish,readAgent,publicValue,withoutRootLease};
 if(require.main===module){try{const[action,root,relative,limit]=process.argv.slice(2);if(action==='read-agent')agentCLI(root,relative,Number(limit));else if(action==='compat')compatibility(root);else if(action==='prepare')console.log(JSON.stringify(prepare(root)));else if(action==='lock-file')lockFile(root);else throw Error('Supported operation: prepare ROOT');}catch(error){console.error(error.message);process.exitCode=1;}}

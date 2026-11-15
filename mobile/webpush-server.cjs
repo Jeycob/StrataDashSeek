@@ -5,6 +5,8 @@ const http=require('http'),fs=require('fs'),path=require('path'),crypto=require(
 const {callApps,streamExport}=require('../vast/apps-cli.cjs');
 const {runtimeRequire,serviceDataRoot}=require('../runtime/require.cjs');
 const {createRuntimeReadiness}=require('./runtime-readiness.cjs');
+const {createDeviceWake}=require('./device-wake.cjs');
+const {createAppsContextGateway,readWorkbench}=require('./apps-context.cjs');
 const {atomicJson}=require('./private-json.cjs');
 const {NotificationOutbox}=require('./notification-outbox.cjs');
 const ROOT=path.resolve(__dirname,'../..');
@@ -13,6 +15,8 @@ function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf
 function createPushServer(cfg,adapter=webpush,services={}){
  const dataRoot=serviceDataRoot();
  cfg={...cfg,secretDir:cfg.secretDir||(dataRoot?path.join(dataRoot,'secrets'):path.join(ROOT,'work/.secrets')),desktopLog:cfg.desktopLog||(dataRoot?path.join(dataRoot,'logs/harness.log'):path.join(ROOT,'work/.secrets/desktop-web.stdout.log'))};
+ const appsConnection={keyFile:cfg.appsKeyFile||'/data/harness/secrets/apps-internal.key',port:cfg.appsPort||3093};
+ const appsGateway=createAppsContextGateway({workspaceRoot:cfg.appsWorkspaceRoot||'/data/harness/workspaces',loadWorkbench:({cookie,signal})=>readWorkbench({port:cfg.harnessPort||3090,publicHost:cfg.publicHost,cookie,signal}),callApps:(route,data,{signal}={})=>callApps(route,data,{...appsConnection,signal})});
  const origin='https://'+cfg.publicHost;
  const readiness=createRuntimeReadiness(cfg);
  if(!/^[a-z0-9.-]+\.ts\.net$/i.test(cfg.publicHost))throw Error('Invalid private HTTPS host');
@@ -46,6 +50,17 @@ function createPushServer(cfg,adapter=webpush,services={}){
   if(!req.headers.cookie)return false;
   try{const r=await harnessRequest('/',req.headers.cookie);return r.status===200;}catch{return false;}
  }
+ async function pairedCookie(req){
+  if(typeof req.headers.cookie!=='string'||req.headers.cookie.length>16384)return null;
+  const names=cfg.nativeAuthCookieName?[cfg.nativeAuthCookieName]:[cfg.publicHost,origin].map(authority=>'dsh-auth-'+crypto.createHash('sha256').update(authority).digest('base64url'));
+  for(const name of names){
+   const candidates=req.headers.cookie.split(';').map(value=>value.trim()).filter(value=>value.slice(0,value.indexOf('='))===name);
+   if(candidates.length!==1)continue;
+   if((await harnessRequest('/',candidates[0])).status===200)return candidates[0];
+  }
+  return null;
+ }
+ const devices=createDeviceWake(cfg,{fetch:services.deviceFetch||globalThis.fetch,pairedCookie});
  function validSubscription(s){
   if(!s||typeof s.endpoint!=='string'||s.endpoint.length>8192||!s.keys||typeof s.keys.p256dh!=='string'||typeof s.keys.auth!=='string')return false;
   try{const u=new URL(s.endpoint);return u.protocol==='https:'&&!u.username&&!u.password&&!u.port&&['web.push.apple.com','webpush.push.apple.com','fcm.googleapis.com','updates.push.services.mozilla.com'].includes(u.hostname)&&/^[a-zA-Z0-9_\-=]+$/.test(s.keys.auth)&&s.keys.auth.length>=16&&/^[a-zA-Z0-9_\-=]+$/.test(s.keys.p256dh)&&s.keys.p256dh.length>=40;}catch{return false;}
@@ -96,6 +111,9 @@ function createPushServer(cfg,adapter=webpush,services={}){
     // Serve strips supplied identity headers and inserts the authenticated user's login.
     const login=req.headers['tailscale-user-login'];
     if(!Array.isArray(cfg.tailscaleAutoLoginUsers)||typeof login!=='string'||!cfg.tailscaleAutoLoginUsers.includes(login))return json(res,403,{error:'Tailscale identity not allowed'});
+    // Reusing an authenticated pairing must not mint a new Native cookie and
+    // thereby change its device identity after a wake credential was revoked.
+    if(await authorized(req))return json(res,200,{ok:true,alreadyPaired:true});
     const log=fs.readFileSync(cfg.desktopLog,'utf8');const match=[...log.matchAll(/https:\/\/[^\s]+\?token=[^\s]+/g)].at(-1);
     if(!match)throw Error('Entry unavailable');const entry=new URL(match[0]);if(entry.host!==cfg.publicHost)throw Error('Authority mismatch');
     const response=await harnessRequest('/?token='+encodeURIComponent(entry.searchParams.get('token')));const cookies=response.headers['set-cookie']||[];
@@ -117,14 +135,21 @@ function createPushServer(cfg,adapter=webpush,services={}){
    }
    if(!await authorized(req))return json(res,401,{error:'Tento prohlížeč ještě není propojený s Harness serverem.'});
    if(u.pathname.startsWith('/phone/api/apps/')){
-    const route=u.pathname.slice('/phone/api/apps'.length),getRoutes=['/state','/job-log','/container-log','/releases','/release'],postRoutes=['/register','/scaffold','/vault-config','/project-settings','/target-settings','/project-action','/container-action','/worker-action','/hold','/preview-settings'];
-    if(req.method==='GET'&&route==='/export-download')return streamExport(u.searchParams.get('id'),res,{keyFile:cfg.appsKeyFile||'/data/harness/secrets/apps-internal.key',port:cfg.appsPort||3093});
+    const route=u.pathname.slice('/phone/api/apps'.length),getRoutes=['/state','/job-log','/container-log','/releases','/release','/export-download'],postRoutes=['/register','/scaffold','/vault-config','/project-settings','/target-settings','/project-action','/container-action','/worker-action','/hold','/preview-settings'];
     if(!(req.method==='GET'&&getRoutes.includes(route)||req.method==='POST'&&postRoutes.includes(route)))return json(res,404,{error:'Not found'});
-    const payload=req.method==='POST'?await body(req):undefined;
-    return json(res,req.method==='POST'&&['/project-action','/worker-action','/preview-settings'].includes(route)?202:200,await callApps(route+(req.method==='GET'?u.search:''),payload,{keyFile:cfg.appsKeyFile||'/data/harness/secrets/apps-internal.key',port:cfg.appsPort||3093}));
+    const payload=req.method==='POST'?await body(req):{},controller=new AbortController(),closed=()=>{if(!res.writableEnded)controller.abort();};res.once('close',closed);
+    try{
+     const result=await appsGateway({route,method:req.method,query:u.searchParams,payload,cookie:req.headers.cookie,signal:controller.signal});
+     if(result.exportId)return streamExport(result.exportId,res,{...appsConnection,...(result.context.scope==='project'?{contextProjectId:result.context.projectId}:{})});
+     return json(res,req.method==='POST'&&['/project-action','/worker-action','/preview-settings'].includes(route)?202:200,result.value);
+    }finally{res.removeListener('close',closed);}
    }
    if(u.pathname==='/phone/api/monitor'&&req.method==='GET')return json(res,200,readJson(!cfg.telemetryFile||cfg.telemetryFile==='/data/harness/state/telemetry.json'?'/data/harness/runtime-status/telemetry.json':cfg.telemetryFile,{ready:false}));
-   if(u.pathname==='/phone/api/wake-config'&&req.method==='GET')return json(res,200,{wakeUrl:cfg.wakeUrl,key:cfg.wakeKeyFile?fs.readFileSync(cfg.wakeKeyFile,'utf8').trim():null});
+   if(u.pathname==='/phone/api/wake-config'&&req.method==='GET')return json(res,410,{code:'AUTH_UPGRADE_REQUIRED'});
+   if(u.pathname==='/phone/api/wake-credential'&&req.method==='POST')return json(res,200,await devices.provision(req,await body(req)));
+   if(u.pathname==='/phone/api/devices'&&req.method==='GET')return json(res,200,await devices.list());
+   if(u.pathname==='/phone/api/devices/revoke'&&req.method==='POST')return json(res,200,await devices.revoke(await body(req)));
+   if(u.pathname==='/phone/api/devices/claim-reenrollment'&&req.method==='POST')return json(res,200,await devices.provision(req,await body(req),{claim:true}));
    if(u.pathname==='/phone/api/state'&&req.method==='GET')return json(res,200,{authorized:true,registered:registered(u.searchParams.get('installationId')),vapidPublicKey:keys.publicKey,watcherOnline:Date.now()-watcherAt<30000,...snapshot()});
    const data=await body(req);const id=String(data.installationId||'');if(!/^[a-zA-Z0-9_-]{16,80}$/.test(id))return json(res,400,{error:'Invalid installation'});
    if(u.pathname==='/phone/api/subscribe'&&req.method==='POST'){
@@ -144,7 +169,7 @@ function createPushServer(cfg,adapter=webpush,services={}){
     const entry=store.installations[id];if(!registered(id))return json(res,409,{error:'Nejprve zapni oznámení.'});const now=outbox.now(),last=Math.max(entry.lastTestAt||0,outbox.lastEventAt('test',id)||0);if(now-last<60000)return json(res,429,{error:'Test lze poslat jednou za minutu.'});const receipt=outbox.enqueue('test','test:'+id+':'+crypto.randomUUID(),[id],{notBeforeAt:now+5000});return json(res,202,{ok:true,...receipt,message:'Test je uložený k odeslání za 5 sekund.'});
    }
    return json(res,404,{error:'Not found'});
-  }catch(e){if(!res.headersSent)json(res,e.status||503,{error:'Služba není připravená. Zkus to znovu.'});else res.destroy();}
+  }catch(e){if(!res.headersSent)json(res,e.status||503,{error:'Služba není připravená. Zkus to znovu.',...(typeof e.code==='string'&&/^(?:DEVICE_|INVALID_DEVICE|AUTH_UPGRADE_REQUIRED|PAIRING_REQUIRED|PROJECT_|CONTEXT_|GLOBAL_|AMBIGUOUS_CONTEXT|METHOD_REFUSED|INVALID_OPERATION|WORKBENCH_)/.test(e.code)?{code:e.code}:{}),...(typeof e.deviceId==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(e.deviceId)?{deviceId:e.deviceId}:{})});else res.destroy();}
  });
  server.once('listening',()=>{if(services.outboxAutoStart!==false){outbox.start();void drain();}});server.on('close',()=>{void outbox.stop().catch(()=>{});});
  let closing;

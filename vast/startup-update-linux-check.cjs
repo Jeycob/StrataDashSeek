@@ -4,7 +4,7 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),cp=require('node:child_process');
 const {activate,restoreTransaction,releaseDigest}=require('./startup-update.cjs');
 const {install:installGate}=require('./startup-install.cjs');
-const install=options=>installGate({...options,account:{uid:65534,gid:65534}});
+const install=options=>installGate({...options,account:{uid:60056,gid:60056}});
 if(process.platform!=='linux'||process.getuid()!==0)throw Error('Run these checks as root in an isolated Linux test environment');
 function temporary(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'harness-update-linux-'));fs.chmodSync(root,0o755);t.after(()=>{if(path.resolve(root).startsWith(path.resolve(os.tmpdir())+path.sep+'harness-update-linux-'))fs.rmSync(root,{recursive:true,force:true});});for(const directory of['root-secrets','releases','app','workspaces'])fs.mkdirSync(path.join(root,directory));return root;}
 test('activation failure restores the previous app and preserves project data',t=>{

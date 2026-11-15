@@ -1,5 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs/promises';import http from 'node:http';import path from 'node:path';import {createRequire} from 'node:module';
 import {client} from '../cloudflare/client.mjs';
+import {devicePanel} from '../cloudflare/device-page.mjs';
 const load=createRequire(import.meta.url),playwright=load(process.env.HARNESS_PLAYWRIGHT_MODULE??path.join(process.env.HOMEAI_RUNTIME??'/data/harness/runtime','node_modules/playwright'));
 const settle=()=>new Promise(r=>setTimeout(r,80));
 async function fixture(t,{monitor=false}={}){
@@ -8,8 +9,8 @@ async function fixture(t,{monitor=false}={}){
   if(req.url==='/phone/api/monitor')return res.end(JSON.stringify({at:Date.now(),model:{loaded:true,busy}}));
   if(req.url==='/api/wake')return res.end('{"ok":true,"queued":false}');
   res.setHeader('etag','"state1"');if(req.headers['if-none-match']==='"state1"'){res.writeHead(304);return res.end();}return res.end('{"status":"exited","harnessUrl":"https://example.ts.net/phone/"}');}
-  res.setHeader('content-type','text/html');res.end('<html lang="cs"><body><select id="language"></select><form id="login"></form><section id="control"><button id="wake"></button><a id="open"></a></section><input id="key"><p id="status"></p><p id="message"></p><script>'+script+'</script>');
- });await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await playwright.chromium.launch({headless:true});t.after(async()=>{await browser.close();await new Promise(r=>server.close(r));});const page=await browser.newPage();await page.clock.install();
+  res.setHeader('content-type','text/html');res.end('<html lang="cs"><body><select id="language"></select><form id="login"></form><section id="control"><button id="wake"></button><a id="open"></a></section><input id="key"><p id="status"></p><p id="message"></p>'+devicePanel+'<script>'+script+'</script>');
+ });await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await playwright.chromium.launch({headless:true,...(process.env.HARNESS_BROWSER_CHANNEL?{channel:process.env.HARNESS_BROWSER_CHANNEL}:{})});t.after(async()=>{await browser.close();await new Promise(r=>server.close(r));});const page=await browser.newPage();await page.clock.install();
  await page.addInitScript(()=>{window.testHidden=true;Object.defineProperty(document,'hidden',{get:()=>window.testHidden});});await page.goto('http://127.0.0.1:'+server.address().port);
  async function visible(value){await page.evaluate(value=>{window.testHidden=!value;document.dispatchEvent(new Event('visibilitychange'));},value);await settle();}
  return{page,calls,visible,busy:value=>{busy=value;},advance:async ms=>{await page.clock.runFor(ms);await settle();}};

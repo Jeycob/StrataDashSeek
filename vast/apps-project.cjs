@@ -1,6 +1,7 @@
 'use strict';
 const fs=require('node:fs/promises'),path=require('node:path'),crypto=require('node:crypto');
 const {isPrivateSourcePath}=require('../workspace/source-private.cjs');
+const {dataPolicy}=require('./apps-data-policy.cjs');
 const inside=(root,file)=>file===root||file.startsWith(root+path.sep);
 const blocked=new Set(['.git','.secrets','secrets','root-secrets','.ssh','.aws','.npmrc','.pypirc','.netrc','node_modules','.venv','venv','.next','.cache','.harness','.harness-quality','bin','obj']);
 function excluded(name){return blocked.has(name)||isPrivateSourcePath(name)||/^\.env(?:\.|$)/i.test(name)||/\.(?:key|pem|p12|pfx)$/i.test(name);}
@@ -20,7 +21,7 @@ async function projectAt(relative,cfg){
  const testCommand=data.testCommand??null;if(testCommand!==null&&(!Array.isArray(testCommand)||!testCommand.length||testCommand.length>30||testCommand.some(v=>typeof v!=='string'||!v||v.length>2048||v.includes('\0'))))throw Error('testCommand must be a bounded argv array');
  const browserPlan=data.browserPlan??null;if(browserPlan!==null&&(typeof browserPlan!=='string'||path.isAbsolute(browserPlan)||browserPlan.split(/[\\/]/).some(p=>p==='..'||excluded(p))))throw Error('Invalid browser plan path');
  const composeFile=data.composeFile??null;if(composeFile!==null&&(typeof composeFile!=='string'||path.isAbsolute(composeFile)||composeFile.split(/[\\/]/).some(p=>p==='..'||excluded(p))||!/^[-a-zA-Z0-9_.]{1,63}$/.test(data.entryService||'')))throw Error('Declare a project-relative composeFile and entryService');
- return{id,path:path.relative(root,dir),directory:dir,name:data.name.trim(),dockerfile,port:data.port,healthPath,memoryMiB,cpus,testCommand,browserPlan,composeFile,entryService:data.entryService||null};
+ return{id,path:path.relative(root,dir),directory:dir,name:data.name.trim(),dockerfile,port:data.port,healthPath,memoryMiB,cpus,testCommand,browserPlan,composeFile,entryService:data.entryService||null,dataPolicy:dataPolicy(data.dataPolicy)};
 }
 async function snapshot(project,destination,{maxBytes=128*1024*1024,maxFiles=12000}={}){
  let bytes=0,files=0;const hash=crypto.createHash('sha256');await fs.mkdir(destination,{recursive:false});

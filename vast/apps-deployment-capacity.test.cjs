@@ -12,6 +12,11 @@ test('missing measurements or any single byte/inode/memory deficit refuses admis
  for(const key of Object.keys(enough)){assert.throws(()=>admit(b,{...enough,[key]:undefined}),{code:'DEPLOYMENT_CAPACITY_UNKNOWN'});assert.throws(()=>admit(b,{...enough,[key]:enough[key]-1}),error=>error.code==='DEPLOYMENT_CAPACITY_INSUFFICIENT'&&error.details[key].missing===1);}
  assert.throws(()=>budget({...spec,images:[{Id:spec.images[0].Id}]}),{code:'DEPLOYMENT_CAPACITY_UNKNOWN'});
 });
+test('all four retained SQLite helper filesystems and their real inode and RAM costs are reserved before creating one',()=>{
+ const ordinary=budget(spec),helper={Id:'sha256:'+'b'.repeat(64),Size:150*MIB,InodeCount:7500,copies:4,memoryMiB:128},withHelpers=budget({...spec,auxiliaryImages:[helper]});
+ assert.equal(withHelpers.guestBytes-ordinary.guestBytes,600*MIB);assert.equal(withHelpers.hostBytes-ordinary.hostBytes,600*MIB);assert.equal(withHelpers.guestInodes-ordinary.guestInodes,30000);assert.equal(withHelpers.memoryBytes-ordinary.memoryBytes,128*MIB);
+ for(const patch of [{copies:0},{Size:undefined},{InodeCount:0},{memoryMiB:0}])assert.throws(()=>budget({...spec,auxiliaryImages:[{...helper,...patch}]}),{code:'DEPLOYMENT_CAPACITY_UNKNOWN'});
+});
 test('an unowned operation or unverified daemon cannot measure, wake or prune its way around admission',async()=>{
  let touched=0;const manager={busy:'another',cfg:{},worker:{status(){touched++;return{};}}};await assert.rejects(verifyCapacity(manager,{id:'job'},spec),{code:'DEPLOYMENT_OPERATION_NOT_OWNED'});assert.equal(touched,0);manager.busy='job';await assert.rejects(verifyCapacity(manager,{id:'job'},spec),{code:'DEPLOYMENT_CAPACITY_UNKNOWN'});assert.equal(touched,1);
 });

@@ -1,9 +1,11 @@
 # Deployment transaction foundations
 
-The new modules are not yet the application deployment workflow. The existing
-Compose workflow must not be described as data-isolated until its adapter and
-reconciliation are integrated and tested. No production deployment proof is
-claimed by the local foundation checks.
+The candidate wires these modules through `apps-deployment-orchestrator.cjs`
+after the workflow installer. `verify`, `deploy` and `check` all use isolated
+candidate tests and a fresh final container. Compose uses normalized build
+configuration and owned per-generation API resources; it never calls the old
+stable-volume `compose up` path. Real Docker/capability and production workload
+acceptance remain required; controlled Docker fixtures are not that proof.
 
 `apps-deployment-state.cjs` stores immutable project/release/source/data identities
 and append-only phase events in a private SQLite WAL database with FULL sync.
@@ -31,7 +33,13 @@ and its WAL/SHM/journal are supported; uploads, other files, links and special
 files are refused. Online backup includes committed WAL pages. The published
 copy is validated and fsynced, with exclusive publication and preserved owner
 and mode. Source content is not changed. A schema fingerprint mismatch refuses
-an update; arbitrary database migrations and PostgreSQL/MySQL are unsupported.
+an update unless the frozen additive SQL migration is explicitly declared.
+Migration statements run on the helper-owned copy before ownership transfer;
+existing table values must be unchanged. Existing-table DML, destructive schema
+changes, attachments, triggers and arbitrary transactions are rejected. The
+same SQL hash/version transition runs on shadow and latest final copies.
+PostgreSQL/MySQL and mixed upload/database volumes require another verified
+data adapter and are refused before stopping production.
 
 The integration must first clone active data to an isolated test generation.
 Candidate and final generations are distinct even on the first deployment.
@@ -53,6 +61,24 @@ already verified guest, only for the immutable image's Docker-reported VFS
 SourceDir. Unknown data refuses admission. The orchestrator must call admission
 before candidate/test creation and remeasure before promotion; these helpers do
 not silently prune data, wake a worker or enlarge the approved pilot.
+
+SQLite admission additionally measures the operator-pinned helper image and
+reserves four retained helper VFS copies, their inodes and 128 MiB helper RAM
+before the first data inspection. Helpers have no network, no app image code,
+read-only rootfs and source mount, and only CHOWN/DAC_READ_SEARCH capabilities.
+The final-copy operation is durable and single-use. Even a completed final copy
+cannot be replayed after a writer resumes; a new attempt needs a new release and
+both new generations. Unknown jobs/journals prevent VM restoration and any new
+deployment. Only currently published generations may resume or start.
+
+The manifest declares `dataPolicy:{"kind":"stateless"}` or a SQLite policy with
+`kind`, logical `volume`, flat `database`, `mountPath`, optional `maxBytes`
+(4 KiB–256 MiB), and optional `migration:{file,fromVersion,toVersion}`. SQL files
+are frozen with source and limited to 16 KiB. First initialization may copy the
+image data directory into a fresh shadow volume to obtain its UID/mode; a
+separate pre-test baseline supplies final data. Every helper, update and final
+mount uses `NoCopy:true`. Reports show `publishing` until the pointer and journal
+are active; uncertain outcomes remain `recovery_required` with retained data.
 
 Local validation includes a real WAL database, isolated test mutations, later
 production writes, schema/size/link refusal, a dropped-privilege read-only WAL

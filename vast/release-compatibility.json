@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "securityEpoch": 2,
+  "abi": {
+    "admission": 1,
+    "bootstrap": 2,
+    "checkpoint": 2,
+    "notificationOutbox": 1,
+    "deviceCredentials": 2,
+    "deploymentData": 1
+  }
+}

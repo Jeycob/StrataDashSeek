@@ -1,0 +1,13 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),{EventEmitter}=require('node:events');
+test('the root IPC recovery path drains UI services while leaving the model and Tailscale alive',async()=>{
+ const handlers={},children=[],killed=[],messages=[];let exited=false,pid=100;
+ const files={readFileSync:()=>JSON.stringify({publicHost:'fixture.example.ts.net'}),existsSync:()=>false,unlinkSync(){},closeSync(){}};
+ const runtime={atomic(){},withoutRootLease:require('./runtime-paths.cjs').withoutRootLease,prepare(){},adoptSignedStatus:()=>({appliedCommit:'a'.repeat(40)}),readPrivate:()=>({}),writePrivate(){},publish(){},openLog:()=>3,lockFile:()=>'/fixture/lock'};
+ const childProcess={execFileSync(exe){if(exe==='id')return Buffer.from('1001');throw Error('fixture tailscale absent');},spawn(exe,args,options){const child=new EventEmitter();child.pid=++pid;child.exe=exe;child.args=args;child.options=options;child.kill=()=>{killed.push(child);queueMicrotask(()=>child.emit('exit',0));};children.push(child);return child;}};
+ const http={get(){const req={on(event,fn){if(event==='error')queueMicrotask(()=>fn(Error('fixture model absent')));return req;},setTimeout(){},destroy(){}};return req;}};
+ const processMock={env:{},on(event,fn){handlers[event]=fn;},send(value,fn){messages.push(value);fn?.();},exit(code){assert.equal(code,0);exited=true;}};
+ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'supervisor.cjs'),'utf8'),{require(name){return({'node:fs':files,'node:http':http,'node:child_process':childProcess,'./runtime-paths.cjs':runtime,'./service-lifecycle.cjs':require('./service-lifecycle.cjs')})[name]??assert.fail(name);},process:processMock,console:{log(){},error(){assert.fail('unexpected startup error');}},setTimeout,setInterval,clearInterval,Date,Map,Set});
+ await new Promise(setImmediate);const model=children.find(c=>c.args.includes('/data/start-strata.sh')),tailscale=children.find(c=>c.exe==='/usr/sbin/tailscaled');assert(model);assert(tailscale);assert(children.find(c=>c.args.includes('3090')).args.includes('127.0.0.1'));
+ handlers.message({op:'shutdown-for-runtime-recovery',id:'11111111-2222-4333-8444-555555555555'});const deadline=Date.now()+1000;while(!exited&&Date.now()<deadline)await new Promise(r=>setTimeout(r,5));assert.equal(exited,true);assert(killed.length>=7);assert.equal(killed.includes(model),false);assert.equal(killed.includes(tailscale),false);assert.equal(messages[0].op,'runtime-ui-stopped');
+});

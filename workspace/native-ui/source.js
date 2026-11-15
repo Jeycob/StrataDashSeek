@@ -1,4 +1,4 @@
-const inject=['slots','sidebarRightTabs','sidebarRight','uiWorkspace'];
+const inject=['slots','sidebarRightTabs','sidebarRight','uiWorkspace','locale'];
 const h=React.createElement;
 const copy={en:{docker:'Applications and Docker',workspaces:'Workspace defaults',notifications:'Notifications',newDocker:'Prepare Docker from this project',noRoot:'Open a conversation with a project inside the application workspace.',outsideRoot:'This project is outside the application workspace. Choose a project from the configured workspace.',preparing:'Preparing…',language:'Language',files:'Workspace files',filesHelp:'Browse, edit, upload and delete files in this conversation’s isolated project.',dockerHelp:'Containers, logs and releases. Reading status does not wake Docker.',openPhone:'Open the installed Harness app to configure iPhone notifications.',workspace:'Workspace',noWorkspace:'Create a workspace first.',ready:'Docker project prepared.'},cs:{docker:'Aplikace a Docker',workspaces:'Výchozí nastavení projektů',notifications:'Oznámení',newDocker:'Připravit Docker z tohoto projektu',noRoot:'Otevři konverzaci s projektem ve složce aplikací.',outsideRoot:'Projekt je mimo složku aplikací. Vyber projekt v nastaveném pracovním prostoru.',preparing:'Připravuji…',language:'Jazyk',files:'Soubory projektu',filesHelp:'Procházení, úpravy, nahrávání a mazání souborů odděleného projektu této konverzace.',dockerHelp:'Kontejnery, logy a vydání. Čtení stavu Docker neprobouzí.',openPhone:'Pro nastavení oznámení na iPhonu otevři nainstalovanou aplikaci Harness.',workspace:'Pracovní prostor',noWorkspace:'Nejprve vytvoř pracovní prostor.',ready:'Docker projektu je připravený.'}};
 const text=key=>copy[window.HarnessI18n.language][key]||copy.en[key]||key;
@@ -6,6 +6,8 @@ Object.assign(copy.en,{general:'General',advanced:'Advanced runtime status',inte
 Object.assign(copy.cs,{general:'Obecné',advanced:'Pokročilé: stav prostředí',interfaceLanguage:'Jazyk rozhraní',generalHelp:'Platí pro tento prohlížeč a jeho nainstalovanou aplikaci. Jazyk úloh pracovního prostoru se nastavuje zvlášť.',workspaceHelp:'Výchozí hodnoty nových konverzací ve vybraném pracovním prostoru. Ruční volba modelu v existující konverzaci zůstává zachovaná.',runtimeHelp:'Pozorovaný stav serveru. Požadavky na podpis, instalovaná kapacita a chráněné cesty jsou pouze ke čtení.',noRuntime:'Stav prostředí zatím není ověřený.',updates:'Aktualizace',disabled:'Vypnuto',verifiedSignature:'Podpis ověřen',unverifiedSignature:'Podpis zatím není ověřený',lastObserved:'Poslední pozorování',sourceCommit:'Použitý commit zdrojů'});
 copy.en.bootstrapUpgrade='A protected bootstrap upgrade requires an operator. The verified source release can remain active.';
 copy.cs.bootstrapUpgrade='Chráněný spouštěč vyžaduje aktualizaci správcem. Ověřené vydání zdrojů může dál běžet.';
+Object.assign(copy.en,{notifications:'Devices and notifications',devices:'Devices and automatic wake',devicesHelp:'Revocation removes automatic wake permission. It does not cancel server jobs or revoke the separate Harness login.',devicesRefresh:'Refresh devices',deviceRevoke:'Revoke automatic wake',deviceConfirm:'Confirm revocation',deviceCancel:'Cancel',deviceConfirmHelp:'Revoke automatic wake for this device?',deviceRevoked:'Wake access revoked',deviceActive:'Wake access active',deviceExpired:'Wake credential expired',deviceExpires:'Expires',deviceEmpty:'No devices registered.',deviceFailed:'Device operation was not confirmed. Refresh the list before retrying.',deviceRevokedSaved:'Wake revocation was stored.',deviceOwner:'Open owner wake portal',deviceClaim:'Apply approved reconnection',deviceClaimHelp:'Approve this device in the owner portal first, then return here. Reconnection requires this device’s existing Harness pairing.',deviceClaimed:'This device can wake the server again.',deviceScope:'Permissions: status and wake only'});
+Object.assign(copy.cs,{notifications:'Zařízení a oznámení',devices:'Zařízení a automatické probouzení',devicesHelp:'Odebrání ruší oprávnění automaticky probouzet server. Neruší běžící úlohy ani samostatné přihlášení do Harnessu.',devicesRefresh:'Obnovit seznam zařízení',deviceRevoke:'Odebrat automatické probouzení',deviceConfirm:'Potvrdit odebrání',deviceCancel:'Zrušit',deviceConfirmHelp:'Odebrat tomuto zařízení automatické probouzení?',deviceRevoked:'Probouzení odebráno',deviceActive:'Probouzení povoleno',deviceExpired:'Platnost přístupu k probouzení skončila',deviceExpires:'Platnost do',deviceEmpty:'Zatím nejsou registrovaná zařízení.',deviceFailed:'Operace se zařízením není potvrzená. Než ji zopakuješ, obnov seznam.',deviceRevokedSaved:'Odebrání probouzení bylo uložené.',deviceOwner:'Otevřít portál vlastníka budíčku',deviceClaim:'Převzít schválené připojení',deviceClaimHelp:'Nejprve toto zařízení schval v portálu vlastníka a vrať se sem. Obnova vyžaduje existující propojení tohoto zařízení s Harnessem.',deviceClaimed:'Toto zařízení může znovu probouzet server.',deviceScope:'Oprávnění: pouze stav a probuzení'});
 Object.assign(copy.en,{changesSinceGit:'Changes from Git base',newlineChanged:'The final newline changed.',changes:'Changes',changesHelp:'Follow changed files and their diffs as the model works.',live:'Live',idle:'Idle',refresh:'Refresh',loadingChanges:'Loading changes…',noChanges:'No file changes yet.',selectChange:'Choose a file to compare.',changesSinceProject:'Changes since project start',changesSinceTracking:'Changes since tracking started',partialChanges:'Some files could not be included in this comparison.',changedFiles:'Changed files',added:'Added',modified:'Modified',deleted:'Deleted',binary:'Binary file — no text diff.',oversized:'This file is too large for a text diff.',coarse:'The comparison timed out; whole-file replacements are shown.',truncatedDiff:'Only the first part of this comparison is shown.',diffEmpty:'No text differences.',diffLoading:'Loading comparison…',changesError:'Could not refresh changes.',oldLine:'Before',newLine:'After',fileChanges:'Changed files',comparison:'File comparison'});
 Object.assign(copy.cs,{changesSinceGit:'Změny oproti Git základu',newlineChanged:'Změnil se koncový znak nového řádku.',changes:'Změny',changesHelp:'Sleduj upravené soubory a jejich rozdíly během práce modelu.',live:'Průběžně',idle:'Nečinný',refresh:'Obnovit',loadingChanges:'Načítám změny…',noChanges:'Zatím nejsou žádné změny souborů.',selectChange:'Vyber soubor k porovnání.',changesSinceProject:'Změny od začátku projektu',changesSinceTracking:'Změny od zapnutí sledování',partialChanges:'Některé soubory nejsou součástí tohoto porovnání.',changedFiles:'Změněné soubory',added:'Přidáno',modified:'Upraveno',deleted:'Smazáno',binary:'Binární soubor — bez textového porovnání.',oversized:'Soubor je příliš velký pro textové porovnání.',coarse:'Porovnání překročilo časový limit; zobrazuje se nahrazení celých souborů.',truncatedDiff:'Zobrazuje se pouze první část porovnání.',diffEmpty:'Žádné textové rozdíly.',diffLoading:'Načítám porovnání…',changesError:'Změny se nepodařilo obnovit.',oldLine:'Před',newLine:'Po',fileChanges:'Změněné soubory',comparison:'Porovnání souboru'});
 
@@ -103,10 +105,21 @@ function relativeProject(root,base){
  return relative&&!relative.split('/').some(p=>!p||p==='.'||p==='..')?relative:null;
 }
 function useLanguage(){const [language,set]=React.useState(window.HarnessI18n.language);React.useEffect(()=>{const change=()=>set(window.HarnessI18n.language);window.addEventListener('harness-language-change',change);return()=>window.removeEventListener('harness-language-change',change);},[]);return language;}
-function translateView(root){const originals=new WeakMap();const apply=()=>{const walk=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);let n;while((n=walk.nextNode())){if(n.parentElement?.closest('script,style,pre,code,textarea,.workspace-workbench,[data-no-translate],.apps-project h4,.apps-project p:first-of-type,td:first-child'))continue;const prior=originals.get(n),original=prior?.last===n.nodeValue?prior.original:n.nodeValue,last=window.HarnessCopy.translate(original,window.HarnessI18n.language);originals.set(n,{original,last});if(n.nodeValue!==last)n.nodeValue=last;}};let pending=false;const schedule=()=>{if(!pending){pending=true;queueMicrotask(()=>{pending=false;if(root.isConnected)apply();});}};const observer=new MutationObserver(schedule);observer.observe(root,{childList:true,subtree:true,characterData:true});window.addEventListener('harness-language-change',schedule);apply();return()=>{observer.disconnect();window.removeEventListener('harness-language-change',schedule);};}
 function apply(ctx,config={}){
  const ROOT=config.appsWorkspaceRoot||'/data/harness/workspaces';
  const views=new Set();
+ const ownsCzech=!ctx.locale.getSnapshot().locales.some(row=>row.id==='cs');
+ if(ownsCzech){
+  ctx.effect(()=>ctx.locale.addLanguage({id:'cs',label:'Čeština',fallback:'en'}),'native-workbench: Czech language');
+  ctx.effect(()=>ctx.locale.register('common','cs',{ok:'OK',cancel:'Zrušit',close:'Zavřít',copy:'Kopírovat',copied:'Zkopírováno',retry:'Zkusit znovu',loading:'Načítám…',submit:'Odeslat',next:'Další',previous:'Předchozí',skip:'Přeskočit',delete:'Smazat',edit:'Upravit',save:'Uložit',search:'Hledat',more:'Další',back:'Zpět',unknown:'Neznámý stav',none:'Žádné','workspace.defaultName':'Výchozí pracovní prostor'}),'native-workbench: Czech common dictionary');
+  ctx.effect(()=>ctx.locale.register('settings.locale','cs',{'language.title':'Jazyk'}),'native-workbench: Czech language row');
+  ctx.effect(()=>ctx.locale.register('settings','cs',{'general.nav':'Obecné',trigger:'Nastavení','shortcut.open':'Otevřít nastavení'}),'native-workbench: Czech settings dictionary');
+ }
+ ctx.effect(()=>{
+  const incoming=()=>{const language=ctx.locale.getSnapshot().active;if((language==='en'||language==='cs')&&window.HarnessI18n.language!==language)window.HarnessI18n.setLanguage(language);};
+  const outgoing=()=>{if(ctx.locale.getSnapshot().active!==window.HarnessI18n.language)ctx.locale.setLocale(window.HarnessI18n.language);};
+  const stop=ctx.locale.subscribe(incoming);window.addEventListener('harness-language-change',outgoing);incoming();return()=>{stop();window.removeEventListener('harness-language-change',outgoing);};
+ },'native-workbench: Native locale synchronization');
  ctx.effect(()=>{
   const previous=window.HarnessNativeTheme,style=document.createElement('style');
   style.dataset.plugin='@stratadashseek/native-workbench';style.dataset.pluginCss='native-workbench/theme.css';
@@ -134,9 +147,9 @@ function apply(ctx,config={}){
   const ref=React.useRef(null),view=React.useRef(null),info=useTabInfo?.(),visible=React.useRef(true);
   visible.current=info?info.tab.visible:true;
   React.useEffect(()=>{const host=ref.current;
-   const instance=kind==='apps'?window.HarnessApps.mount(host,{settings:section==='settings',visible:()=>visible.current}):window.HarnessWorkbench.mount(host,{sessionId,workspaceId,section,instanceId:info?.tab.id});
-   view.current=instance;views.add(instance);const stop=translateView(host);
-   return()=>{stop();views.delete(instance);instance.destroy();view.current=null;};
+   const instance=kind==='apps'?window.HarnessApps.mount(host,{settings:section==='settings',scope:section==='settings'?'global':'project',sessionId,workspaceId,visible:()=>visible.current}):window.HarnessWorkbench.mount(host,{sessionId,workspaceId,section,instanceId:info?.tab.id});
+   view.current=instance;views.add(instance);
+   return()=>{views.delete(instance);instance.destroy();view.current=null;};
   },[kind,sessionId,workspaceId,section]);
   React.useEffect(()=>{if(visible.current)void view.current?.refresh();},[info?.tab.visible]);
   React.useEffect(()=>{if(info?.tab.visible)view.current?.notifyChange?.();},[info?.tab.navigation.revision]);
@@ -147,13 +160,10 @@ function apply(ctx,config={}){
  function Docker(props){
   const info=props.useTabInfo(),[message,setMessage]=React.useState(''),[busy,setBusy]=React.useState(false);useLanguage();
   const view=React.useRef(null),host=React.useRef(null),visible=React.useRef(info.tab.visible);visible.current=info.tab.visible;
-  React.useEffect(()=>{const instance=window.HarnessApps.mount(host.current,{visible:()=>visible.current});view.current=instance;views.add(instance);const stop=translateView(host.current);return()=>{stop();views.delete(instance);instance.destroy();};},[props.sessionId]);
+  React.useEffect(()=>{const instance=window.HarnessApps.mount(host.current,{sessionId:props.sessionId,visible:()=>visible.current});view.current=instance;views.add(instance);return()=>{views.delete(instance);instance.destroy();};},[props.sessionId]);
   React.useEffect(()=>{if(info.tab.visible)void view.current?.refresh();},[info.tab.visible]);
   async function prepare(){setBusy(true);setMessage('');try{const s=await state(),relative=relativeProject(s.projects?.[props.sessionId]?.root,ROOT);if(!relative)throw Error(text('outsideRoot'));const ok=await view.current.useProject(relative);if(ok)setMessage(text('ready'));}catch(e){setMessage(e.message);}finally{setBusy(false);}}
   return h('div',{className:'harness-native-surface',style:{height:'100%',overflow:'auto',minWidth:0}},h('div',{className:'harness-native-docker-prepare'},h('button',{className:'harness-native-action',onClick:prepare,disabled:busy||!props.sessionId},text(busy?'preparing':'newDocker')),message&&h('p',{role:'status'},message)),h('div',{ref:host}));
- }
- function GeneralSettings(){
-  useLanguage();return h('section',{className:'harness-native-surface harness-native-settings','data-harness-settings-group':'general'},h('label',{htmlFor:'harness-interface-language'},text('interfaceLanguage')),h('select',{id:'harness-interface-language',value:window.HarnessI18n.language,onChange:e=>window.HarnessI18n.setLanguage(e.target.value)},h('option',{value:'en'},'English'),h('option',{value:'cs'},'Čeština')),h('p',{className:'hc-meta'},text('generalHelp')));
  }
  function WorkspaceSettings(){
   const [rows,setRows]=React.useState([]),[id,setId]=React.useState(window.HarnessNativeWorkspaceSelection||''),[error,setError]=React.useState('');useLanguage();
@@ -170,7 +180,41 @@ function apply(ctx,config={}){
   const ref=React.useRef(null);useLanguage();
   React.useEffect(()=>{try{return window.parent.HarnessPhoneSettings?.mount(ref.current);}catch{}},[]);
   let bridge=false;try{bridge=Boolean(window.parent.HarnessPhoneSettings);}catch{}
-  return h('section',{ref,className:'harness-native-surface'},!bridge&&h('p',null,text('openPhone')));
+  return h('section',{className:'harness-native-surface'},h('div',{ref},!bridge&&h('p',null,text('openPhone'))),h(Devices));
+ }
+ function Devices(){
+  useLanguage();const [rows,setRows]=React.useState(null),[owner,setOwner]=React.useState(''),[error,setError]=React.useState(''),[notice,setNotice]=React.useState(''),[busy,setBusy]=React.useState(false),[confirmation,setConfirmation]=React.useState(null);
+  const active=React.useRef(false),requests=React.useRef(new Set()),generation=React.useRef(0),pendingAction=React.useRef(false);
+  let credentials=null;try{credentials=window.parent.HarnessWakeCredentials||null;}catch{}const identity=credentials?.identity?.()||{};
+  const request=React.useCallback(async(route,data)=>{
+   const controller=new AbortController();requests.current.add(controller);const timer=setTimeout(()=>controller.abort(),10000);
+   try{const response=await fetch('/phone/api/'+route,{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined}),result=await response.json();if(!active.current||controller.signal.aborted)throw new DOMException('View closed','AbortError');if(!response.ok)throw Object.assign(Error('Device operation failed'),{code:/^[A-Z0-9_]{1,80}$/.test(result.code||'')?result.code:'DEVICE_REQUEST_FAILED'});return result;}
+   finally{clearTimeout(timer);requests.current.delete(controller);}
+  },[]);
+  const load=React.useCallback(async()=>{
+   const ticket=++generation.current;
+   try{const data=await request('devices');if(!active.current||ticket!==generation.current)return;if(data.version!==2||!Array.isArray(data.devices)||data.devices.length>50)throw Error('Invalid device list');
+    setRows(data.devices.map(row=>{if(typeof row.deviceId!=='string'||!/^[A-Za-z0-9_-]{8,128}$/.test(row.deviceId))throw Error('Invalid device identity');return{deviceId:row.deviceId,name:typeof row.name==='string'?row.name.slice(0,80):row.deviceId,createdAt:row.createdAt,expiresAt:row.expiresAt,revokedAt:row.revokedAt};}));
+    let url=null;try{url=new URL(data.ownerUrl);if(url.protocol!=='https:'||url.username||url.password||url.hash||url.pathname!=='/'||url.searchParams.get('devices')!=='1'||[...url.searchParams.keys()].some(key=>key!=='devices'))url=null;}catch{}setOwner(url?.href||'');setError('');
+   }catch(error){if(active.current&&ticket===generation.current&&error.name!=='AbortError')setError(error.code||'DEVICE_REQUEST_FAILED');}
+  },[request]);
+  React.useEffect(()=>{active.current=true;void load();return()=>{active.current=false;++generation.current;for(const controller of requests.current)controller.abort();};},[load]);
+  async function revoke(device){
+   if(pendingAction.current)return;pendingAction.current=true;setBusy(true);setError('');setNotice('');
+   try{const result=await request('devices/revoke',{deviceId:device.deviceId});if(result.deviceId!==device.deviceId||!Number.isFinite(Number(result.revokedAt))||Number(result.revokedAt)<=0)throw Error('Unconfirmed revocation');
+    if(credentials?.identity?.().deviceId===device.deviceId)credentials.clear();setRows(previous=>previous?.map(row=>row.deviceId===device.deviceId?{...row,revokedAt:result.revokedAt}:row));setConfirmation(null);setNotice('deviceRevokedSaved');await load();
+   }catch(error){if(active.current&&error.name!=='AbortError')setError(error.code||'DEVICE_REQUEST_FAILED');}
+   finally{pendingAction.current=false;if(active.current)setBusy(false);}
+  }
+  async function claim(){
+   if(pendingAction.current||!credentials?.claimReenrollment)return;pendingAction.current=true;setBusy(true);setError('');setNotice('');
+   try{await credentials.claimReenrollment();if(!active.current)return;setNotice('deviceClaimed');await load();try{void window.parent.harnessPrepare?.({retry:true});}catch{}}
+   catch(error){if(active.current)setError(error.code||'DEVICE_REQUEST_FAILED');}finally{pendingAction.current=false;if(active.current)setBusy(false);}
+  }
+  return h('section',{className:'harness-native-devices','data-harness-settings-group':'devices'},h('h3',null,text('devices')),h('p',null,text('devicesHelp')),h('button',{type:'button',className:'harness-native-action',disabled:busy,onClick:()=>void load()},text('devicesRefresh')),error&&h('p',{role:'alert'},text('deviceFailed')+' '+error),notice&&h('p',{role:'status'},text(notice)),
+   ...(rows||[]).map(device=>h('article',{key:device.deviceId,className:'harness-device-card','data-device-id':device.deviceId},h('h4',null,device.name),h('p',null,device.deviceId),h('p',null,text(device.revokedAt?'deviceRevoked':Number(device.expiresAt)<=Date.now()?'deviceExpired':'deviceActive')),h('p',null,text('deviceExpires')+': '+(Number.isFinite(Number(device.expiresAt))?new Date(Number(device.expiresAt)).toLocaleString(window.HarnessI18n.locale):'—')),h('p',null,text('deviceScope')),
+    !device.revokedAt&&(confirmation===device.deviceId?h('div',{role:'group','aria-label':text('deviceConfirmHelp')},h('p',null,text('deviceConfirmHelp')),h('button',{type:'button',className:'harness-native-action',disabled:busy,onClick:()=>void revoke(device)},text('deviceConfirm')),h('button',{type:'button',className:'harness-native-action',disabled:busy,autoFocus:true,onClick:()=>setConfirmation(null)},text('deviceCancel'))):h('button',{type:'button',className:'harness-native-action',disabled:busy,onClick:()=>setConfirmation(device.deviceId)},text('deviceRevoke'))))),
+   rows?.length===0&&h('p',null,text('deviceEmpty')),identity.revoked&&h('div',null,h('p',null,text('deviceClaimHelp')),h('button',{type:'button',className:'harness-native-action',disabled:busy,onClick:()=>void claim()},text('deviceClaim'))),owner&&h('p',null,h('a',{href:owner,target:'_blank',rel:'noopener noreferrer'},text('deviceOwner'))));
  }
  const register=(definition,Component)=>{
   ctx.effect(()=>ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:definition.id,inject:sessionId=>({sessionId})},Component)),'native-workbench: '+definition.kind);
@@ -193,9 +237,8 @@ function apply(ctx,config={}){
  ctx.effect(()=>ctx.sidebarRightTabs.register(changes),'native-workbench: Changes type');register(changes,Changes);
  // Registered guide definitions use the original SDK EntryBox, like Workspace files.
  let sections=[];
- const registerSettings=()=>{for(const dispose of sections)dispose();sections=[['harness-workspaces','workspaces',WorkspaceSettings],['harness-deployment','docker',()=>h(Mounted,{kind:'apps',section:'settings'})],['harness-notifications','notifications',Notifications],['harness-runtime','advanced',RuntimeSettings]].map(([id,label,Component],index)=>ctx.slots.register({name:'settings.section',id,order:210+index*10,label:text(label)},Component));};
- ctx.effect(()=>ctx.slots.inject('settings.general.item',()=>ctx.slots.register({name:'settings.general.item',id:'stratadashseek-language',order:5},GeneralSettings)),'native-workbench: General language preference');
- ctx.effect(()=>ctx.slots.inject('settings.section',()=>{registerSettings();window.addEventListener('harness-language-change',registerSettings);return()=>{window.removeEventListener('harness-language-change',registerSettings);for(const dispose of sections)dispose();sections=[];};}),'native-workbench: unified settings');
+ const registerSettings=()=>{for(const dispose of sections)dispose();sections=[['harness-workspaces','workspaces',WorkspaceSettings],['harness-deployment','docker',()=>h(Mounted,{kind:'apps',section:'settings'})],['harness-notifications','notifications',Notifications],['harness-runtime','advanced',RuntimeSettings]].map(([id,label,Component],index)=>ctx.slots.register({name:'settings.section',id,order:210+index*10,label:()=>text(label)},Component));};
+ ctx.effect(()=>ctx.slots.inject('settings.section',()=>{registerSettings();return()=>{for(const dispose of sections)dispose();sections=[];};}),'native-workbench: unified settings');
  // Pinned rc.2 compatibility adapter: the registered settings shell publishes a
  // root Store handle whose create() intentionally returns its existing instance.
  // No second launcher, replacement AccountMenu or alternate settings store.

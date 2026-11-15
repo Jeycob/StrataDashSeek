@@ -17,6 +17,9 @@ function fixture({ files = ['Dockerfile', '.dockerignore', '.harness-app.json', 
   return { service, reads, clock, fs };
 }
 function ownState(extra = {}) { return { enabled: true, available: true, worker: { phase: 'ready', freeBytes: 900 * MIB }, projects: [{ id, path: path.relative(root, project), imageId: 'sha256:' + cid, containerId: cid }], ...extra }; }
+test('a retained unresolved deployment is a hold with reviewable job identity, never a new verification recipe',async()=>{
+ const f=fixture({state:ownState({deploymentRecovery:{required:true,projects:[otherId]},jobs:[{id:'d'.repeat(16),projectId:id,status:'recovery_required',action:'verify'}]})}),value=await f.service.snapshot(project);assert.equal(value.apps.recoveryRequired,true);assert.equal(value.capacity.canVerify,false);assert.equal(value.apps.jobs[0].status,'recovery_required');assert.equal(value.recipes.verify,undefined);assert.doesNotMatch(JSON.stringify(value),new RegExp(otherId));
+});
 
 test('reads only deployment file metadata, never contents, and returns reusable fixed argv', async () => {
   const { service, reads } = fixture({ state: ownState() }), s = await service.snapshot(project);

@@ -27,18 +27,21 @@ function createRuntimeReadiness(cfg={},deps={}){
  const model=deps.model||(()=>probe(cfg.modelPort||8080,'/health',{json:true}));
  let pending=null,cached=null,until=0;
  async function collect(){
-  let update=null,services=null;try{update=read('startup-update.json');}catch{}try{services=read('service-health.json');}catch{}
+  let update=null,services=null,admission=null,recovery=null;try{update=read('startup-update.json');}catch{}try{services=read('service-health.json');}catch{}try{admission=read('runtime-admission.json');}catch{}try{recovery=read('runtime-recovery.json');}catch{}
   const [host,health]=await Promise.all([native().catch(()=>null),model().catch(()=>null)]);
   const sourceReady=update?.version===1&&update.enabled===true&&update.phase==='ready'&&update.signatureVerified===true&&SHA.test(update.appliedCommit||'');
   const fresh=Number.isSafeInteger(services?.at)&&now()-services.at>=-5000&&now()-services.at<15000;
   const matching=services?.sourceCommit===update?.appliedCommit;
-  const runtimeReady=!!(sourceReady&&fresh&&matching&&services.phase==='ready'&&host?.status===200&&host.workspaceReady===true&&host.sourceCommit===update.appliedCommit);
+  const admissionReady=!!(admission?.version===1&&admission.enabled===true&&admission.sourceCommit===update?.appliedCommit&&/^[a-f0-9-]{36}$/.test(admission.epoch||'')&&Number.isSafeInteger(admission.observedAt)&&now()-admission.observedAt<15000&&admission.observedAt<=now()+1000);
+  const recoveryBlocked=recovery?.version===1&&recovery.sourceCommit===update?.appliedCommit&&recovery.phase==='recovery_required'&&Number.isSafeInteger(recovery.observedAt)&&now()-recovery.observedAt<15000&&recovery.observedAt<=now()+1000;
+  const runtimeReady=!!(sourceReady&&fresh&&matching&&services.phase==='ready'&&host?.status===200&&host.workspaceReady===true&&host.sourceCommit===update.appliedCommit&&(deps.infrastructureOnly===true||admissionReady&&!recoveryBlocked));
   const modelReady=health?.loaded===true;
   const ready=sourceReady&&runtimeReady&&modelReady;
   let phase='verifying_update',reasonCode='VERIFIED_SOURCE_UNAVAILABLE';
   if(update?.phase==='blocked'){phase='failed';reasonCode='SIGNED_UPDATE_BLOCKED';}
+  else if(sourceReady&&recoveryBlocked&&deps.infrastructureOnly!==true){phase='failed';reasonCode='RUNTIME_RECOVERY_REQUIRED';}
   else if(sourceReady&&fresh&&matching&&services.phase==='failed'){phase='failed';reasonCode='SERVICE_RESTART_LIMIT';}
-  else if(sourceReady&&!runtimeReady){phase='starting_services';reasonCode=fresh?'NATIVE_RUNTIME_STARTING':'SERVICE_HEARTBEAT_STALE';}
+  else if(sourceReady&&!runtimeReady){phase='starting_services';reasonCode=!fresh?'SERVICE_HEARTBEAT_STALE':!admissionReady&&deps.infrastructureOnly!==true?'RUNTIME_ADMISSION_CLOSED':'NATIVE_RUNTIME_STARTING';}
   else if(runtimeReady&&!modelReady){phase='model_loading';reasonCode='MODEL_NOT_LOADED';}
   else if(ready){phase='ready';reasonCode='ALL_CHECKS_READY';}
   return{version:1,phase,reasonCode,retryAfterSeconds:phase==='failed'?30:2,observedAt:new Date(now()).toISOString(),sourceCommit:SHA.test(update?.appliedCommit||'')?update.appliedCommit:null,sourcePhase:sourceReady?'ready':update?.phase==='blocked'?'failed':'verifying_update',runtimePhase:runtimeReady?'ready':phase==='failed'?'failed':'starting_services',sourceReady,runtimeReady,modelReady,ready};

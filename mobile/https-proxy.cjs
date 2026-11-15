@@ -14,13 +14,17 @@ function headersFor(req) {
   return h;
 }
 function fail(res) { if (!res.headersSent) res.writeHead(502, {'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-store'});res.end('Harness is starting. Please retry shortly.'); }
-const server = http.createServer((req, res) => {
+const server = http.createServer(async(req, res) => {
   const requestPath = req.url.split('?')[0];
   if (requestPath === '/phone') {
     res.writeHead(302, {Location:'/phone/','Cache-Control':'no-store'});
     return res.end();
   }
   const routedPort = requestPath.startsWith('/phone/') ? (cfg.pushPort || 3091) : targetPort;
+  if(routedPort===targetPort&&(requestPath==='/api'||requestPath.startsWith('/api/'))&&!(req.method==='GET'&&req.url==='/api/workbench/health')){
+    try{await require('../vast/runtime-client.cjs').admit('start_turn');}catch{res.writeHead(503,{'Content-Type':'application/json','Cache-Control':'no-store','Retry-After':'2'});return res.end('{"code":"RUNTIME_ADMISSION_CLOSED"}');}
+    if(req.destroyed||res.destroyed)return;
+  }
   const upstream = http.request({hostname:'127.0.0.1',port:routedPort,path:req.url,method:req.method,headers:headersFor(req)}, reply => {
     const h = Object.assign({},reply.headers);
     if (h['set-cookie']) h['set-cookie'] = h['set-cookie'].map(c => /;\s*secure(?:;|$)/i.test(c) ? c : c+'; Secure');
@@ -34,8 +38,11 @@ const server = http.createServer((req, res) => {
   res.on('close',()=>{if(!res.writableEnded)upstream.destroy();});
   req.pipe(upstream);
 });
-server.on('upgrade',(req,socket,head)=>{
+server.on('upgrade',async(req,socket,head)=>{
+  let grant;try{grant=await require('../vast/runtime-client.cjs').admit('socket_enqueue');}catch{socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 2\r\n\r\n');return;}
+  if(socket.destroyed)return;
   const upstream = net.connect(targetPort,'127.0.0.1',()=>{
+    if(grant.enforced&&grant.expiresAt<=Date.now()){socket.destroy();upstream.destroy();return;}
     const h = headersFor(req);
     upstream.write(req.method+' '+req.url+' HTTP/'+req.httpVersion+'\r\n'+Object.keys(h).map(k=>k+': '+h[k]).join('\r\n')+'\r\n\r\n');
     if (head.length) upstream.write(head);

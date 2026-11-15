@@ -1,0 +1,12 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
+const {createAppsService}=require('./apps-service.cjs');
+test('actual loopback service rejects mismatched project before invoking a modifying manager operation',async t=>{
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'harness-app-context-http-')),a=path.join(directory,'a'),b=path.join(directory,'b');await fs.mkdir(a);await fs.mkdir(b);const id=crypto.createHash('sha256').update(await fs.realpath(a)).digest('hex').slice(0,16),keyFile=path.join(directory,'internal.key');await fs.writeFile(keyFile,'context-fixture-authentication');
+ const calls=[],manager={cfg:{workspaceRoot:directory},store:{jobs:[{id:'ja',projectId:id}]},heartbeat(){},async tick(){},project:()=>({directory:a}),state:async()=>({containers:[]}),scaffold:async(value,dryRun,expected)=>{calls.push(['scaffold',value,dryRun,expected]);return{runtime:'node'};},register:async(value,expected)=>{calls.push(['register',value,expected]);return{id};},enqueue:(...args)=>{calls.push(['enqueue',...args]);return{id:'ja'};}};
+ const service=createAppsService({keyFile},manager);await new Promise(r=>service.server.listen(0,'127.0.0.1',r));t.after(async()=>{await new Promise(r=>service.server.close(r));const resolved=path.resolve(directory);assert(resolved.startsWith(path.resolve(os.tmpdir())+path.sep)&&path.basename(resolved).startsWith('harness-app-context-http-'));await fs.rm(resolved,{recursive:true,force:true});});
+ const base='http://127.0.0.1:'+service.server.address().port,post=(route,data)=>fetch(base+route,{method:'POST',headers:{'Content-Type':'application/json','X-Harness-Apps-Key':'context-fixture-authentication'},body:JSON.stringify(data)});
+ for(const route of ['/scaffold','/register'])assert.equal((await post(route,{path:'b',_contextProjectId:id})).status,409);
+ assert.equal((await post('/project-action',{id:'0'.repeat(16),action:'verify',_contextProjectId:id})).status,403);assert.deepEqual(calls,[]);
+ assert.equal((await post('/scaffold',{path:'a',_contextProjectId:id})).status,200);assert.equal((await post('/register',{path:'a',_contextProjectId:id})).status,200);assert.equal((await post('/project-action',{id,action:'verify',_contextProjectId:id})).status,202);assert.deepEqual(calls.map(row=>row[0]),['scaffold','register','enqueue']);assert.equal(calls[0][3],id);assert.equal(calls[1][2],id);assert.equal((await post('/register',[])).status,400);
+});

@@ -59,6 +59,9 @@ test('discovery includes development, Python and new test directories while repo
   assert.equal(result.entries.length, 7); assert.deepEqual(result.unclassified, ['new-module/manual-check.cjs']);
   assert.equal(result.entries.find(row => row.file.endsWith('test_notification_watcher.py')).kind, 'python');
   assert.equal(classify('vast/apps-context-linux-check.cjs').lane, 'linux-root');
+  assert.equal(classify('workspace/runtime-admission-native.test.cjs').minTests, 2);
+  const recovery=classify('vast/runtime-recovery.test.cjs');assert.equal(recovery.lane,'linux-root');assert.deepEqual(recovery.environment,{HARNESS_RUNTIME_RECOVERY_ROOT_TEST:'1'});assert.equal(recovery.minTests,12);
+  for(const[file,flag,min]of [['workspace/runtime-admission.test.mjs','HARNESS_RUNTIME_ADMISSION_ROOT_TEST',9],['vast/runtime-admission-server.test.cjs','HARNESS_RUNTIME_ADMISSION_SERVER_ROOT_TEST',6],['vast/runtime-release-attestation.test.cjs','HARNESS_RUNTIME_RELEASE_ROOT_TEST',3]]){const row=classify(file);assert.equal(row.lane,'linux-root');assert.deepEqual(row.environment,{[flag]:'1'});assert.equal(row.minTests,min);}
   assert.equal(classify('workspace/native-ui/test-bundle.cjs').kind, 'helper');
   assert.equal(classify('deployments/apps-live-lifecycle-check.cjs').outcome, 'unrunnable');
   assert.equal(classify('deployments/apps-live-lifecycle-check.cjs').required, false);

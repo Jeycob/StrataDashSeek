@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "exports": {".": "./index.mjs", "./client": "./client.js", "./package.json": "./package.json"},
-  "dsh": {"client": {"platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-ui-sidebar-right"]}},
+  "dsh": {"client": {"platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-settings", "@deepseek-ai/dsh-client-ui-sidebar-right", "@deepseek-ai/dsh-client-locale"]}},
   "scripts": {"build": "node build.cjs"}
 }

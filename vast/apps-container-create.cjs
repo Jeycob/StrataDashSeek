@@ -4,22 +4,26 @@ const {LABEL}=require('./apps-engine.cjs');
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const unresolved=record=>['pending','unknown','cleanup-pending'].includes(record.state);
 const legacyPending=job=>job.status==='failed'&&job.stage==='candidate'&&job.action==='verify'&&!job.legacyCreationOutcome&&job.error==='Docker operation timed out: POST /containers/create';
-function validRecord(record,job){return record&&/^[a-f0-9]{16}$/.test(record.projectId||'')&&record.jobId===job.id&&/^[a-f0-9]{16}$/.test(job.id||'')&&['test','candidate'].includes(record.role)&&record.name==='sdsh-'+(record.role==='test'?'test-':'')+record.projectId+'-'+record.jobId&&/^[a-f0-9]{32}$/.test(record.token||'')&&/^sha256:[a-f0-9]{64}$/.test(record.imageId||'');}
-function retainJobs(jobs){const recent=new Set(jobs.slice(-100));return jobs.filter(job=>recent.has(job)||legacyPending(job)||(job.creations||[]).some(unresolved));}
+const SLOT=/^[a-z][a-z0-9-]{0,31}$/;
+function recordName(record){return 'sdsh-'+(record.role==='test'?'test-':'')+record.projectId+'-'+record.jobId+(record.slot?'-'+record.slot:'');}
+function validRecord(record,job){return record&&/^[a-f0-9]{16}$/.test(record.projectId||'')&&record.jobId===job.id&&/^[a-f0-9]{16}$/.test(job.id||'')&&['test','candidate'].includes(record.role)&&(record.slot===undefined||typeof record.slot==='string'&&SLOT.test(record.slot))&&record.name===recordName(record)&&/^[a-f0-9]{32}$/.test(record.token||'')&&/^sha256:[a-f0-9]{64}$/.test(record.imageId||'');}
+function retainJobs(jobs){const recent=new Set(jobs.slice(-100));return jobs.filter(job=>recent.has(job)||legacyPending(job)||(job.creations||[]).some(unresolved)||job.deploymentPhase==='recovery_required'||job.dataOperations&&(!job.dataOperations.operations||Object.values(job.dataOperations.operations).some(operation=>operation?.state!=='complete')));}
 function matches(record,c){
  const labels=c?.Config?.Labels||{};
- return /^[a-f0-9]{64}$/.test(c?.Id||'')&&c.Image===record.imageId&&c.Name==='/'+record.name&&labels[LABEL]==='managed'&&labels[LABEL+'.project']===record.projectId&&labels[LABEL+'.job']===record.jobId&&labels[LABEL+'.create']===record.token;
+ return /^[a-f0-9]{64}$/.test(c?.Id||'')&&c.Image===record.imageId&&c.Name==='/'+record.name&&labels[LABEL]==='managed'&&labels[LABEL+'.project']===record.projectId&&labels[LABEL+'.job']===record.jobId&&labels[LABEL+'.create']===record.token&&(record.slot===undefined||labels[LABEL+'.slot']===record.slot);
 }
 function neverStarted(c){return c?.State?.Status==='created'&&c.State.Running===false&&/^0001-01-01T/.test(c.State.StartedAt||'');}
 async function inspect(manager,record,timeout=15000){try{return await manager.engine.json('GET','/containers/'+record.name+'/json',{timeout});}catch(e){if(e.dockerStatus===404)return null;throw e;}}
 function unknown(record,cause){record.state='unknown';return new Error('Container creation outcome is unresolved for '+record.name+'; inspect the existing operation before retrying',{cause});}
-async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,reconcileMs=30000,intervalMs=250}={}){
+async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,reconcileMs=30000,intervalMs=250,slot}={}){
  const projectId=json?.Labels?.[LABEL+'.project'];
  if(!/^[a-f0-9]{16}$/.test(projectId||'')||!/^[a-f0-9]{16}$/.test(job?.id||'')||!/^sha256:[a-f0-9]{64}$/.test(json?.Image||'')||json.Labels[LABEL]!=='managed')throw Error('Managed container creation requires immutable image and project/job identities');
  if(!Number.isInteger(createTimeoutMs)||createTimeoutMs<1||createTimeoutMs>120000||!Number.isInteger(reconcileMs)||reconcileMs<1||reconcileMs>30000||!Number.isInteger(intervalMs)||intervalMs<1||intervalMs>1000)throw Error('Invalid bounded creation timing');
- const role=json.Labels[LABEL+'.role']==='test'?'test':'candidate',record={name:'sdsh-'+(role==='test'?'test-':'')+projectId+'-'+job.id,token:crypto.randomBytes(16).toString('hex'),projectId,jobId:job.id,imageId:json.Image,role,state:'pending',at:Date.now()};
+ if(slot!==undefined&&(typeof slot!=='string'||!SLOT.test(slot)))throw Error('Invalid managed creation slot');
+ const role=json.Labels[LABEL+'.role']==='test'?'test':'candidate',record={token:crypto.randomBytes(16).toString('hex'),projectId,jobId:job.id,imageId:json.Image,role,...(slot?{slot}:{}),state:'pending',at:Date.now()};record.name=recordName(record);
+ if(slot&&(job.creations||[]).some(previous=>previous.name===record.name))throw Object.assign(Error('This deployment step already has a recorded creation; reconcile its outcome before continuing'),{code:'DOCKER_CREATION_RECONCILIATION_REQUIRED',status:409});
  (job.creations??=[]).push(record);manager.save();
- const body={...json,Labels:{...json.Labels,[LABEL+'.job']:job.id,[LABEL+'.create']:record.token}};
+ const body={...json,Labels:{...json.Labels,[LABEL+'.job']:job.id,[LABEL+'.create']:record.token,...(slot?{[LABEL+'.slot']:slot}:{})}};
  manager.log(job,'Creating '+role+' container; bounded Docker deadline '+createTimeoutMs+' ms.\n');
  try{
   let created;

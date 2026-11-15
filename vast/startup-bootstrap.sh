@@ -12,5 +12,4 @@ flock -n 9 || exit 0
 # concurrently. An installed stable bootstrap requires an explicit upgrade.
 "$ROOT/node/bin/node" "$ROOT/bootstrap/runtime-paths.cjs" prepare "$ROOT"
 # Failure intentionally holds Harness and its first model requests behind the gate.
-"$ROOT/node/bin/node" "$ROOT/bootstrap/startup-update.cjs" "$ROOT"
-exec "$ROOT/node/bin/node" "$ROOT/app/vast/supervisor.cjs"
+exec "$ROOT/node/bin/node" "$ROOT/bootstrap/runtime-launcher.cjs" "$ROOT"

@@ -39,11 +39,12 @@ function validateGenerations(id,fields){const candidate=fields.candidateDataGene
  if(Object.values(fields.productionVolumes||{}).some(name=>Object.values(fields.candidateVolumes||{}).includes(name)))throw fail('DEPLOYMENT_DATA_GENERATION_ALIAS');
 }
 class DeploymentState {
- constructor(directory,{now=Date.now}={}){
+ constructor(directory,{now=Date.now,readOnly=false}={}){
   this.now=now;this.file=path.join(path.resolve(directory),'deployments.sqlite');privatePath(this.file);
-  try{const fd=fs.openSync(this.file,'wx',0o600);fs.closeSync(fd);}catch(error){if(error.code!=='EEXIST')throw error;}
+  if(!readOnly)try{const fd=fs.openSync(this.file,'wx',0o600);fs.closeSync(fd);}catch(error){if(error.code!=='EEXIST')throw error;}
   let db;
-  try{db=new DatabaseSync(this.file);const app=db.prepare('PRAGMA application_id').get().application_id,version=db.prepare('PRAGMA user_version').get().user_version,tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+  try{db=new DatabaseSync(this.file,{readOnly,timeout:3000});const app=db.prepare('PRAGMA application_id').get().application_id,version=db.prepare('PRAGMA user_version').get().user_version,tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+   if(readOnly){if(app!==APP||version!==1)throw fail('DEPLOYMENT_STORE_FOREIGN');this.db=db;return;}
    if(app!==APP&&(app!==0||version!==0||tables.length)||app===APP&&version!==1)throw fail('DEPLOYMENT_STORE_FOREIGN');
    db.exec('PRAGMA busy_timeout=3000; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');if(db.prepare('PRAGMA journal_mode=WAL').get().journal_mode!=='wal')throw fail('DEPLOYMENT_DURABILITY_UNAVAILABLE');
    db.exec(`BEGIN IMMEDIATE; CREATE TABLE IF NOT EXISTS deployments(project_id TEXT NOT NULL,release_id TEXT NOT NULL,source_hash TEXT NOT NULL,data_generation TEXT NOT NULL,phase TEXT NOT NULL,revision INTEGER NOT NULL,fields TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,PRIMARY KEY(project_id,release_id));

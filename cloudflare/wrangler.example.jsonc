@@ -4,5 +4,7 @@
   "compatibility_date":"2026-11-13",
   "workers_dev":true,
   "observability":{"enabled":false},
+  "durable_objects":{"bindings":[{"name":"DEVICE_REGISTRY","class_name":"WakeDeviceRegistry"}]},
+  "exports":{"WakeDeviceRegistry":{"type":"durable-object","storage":"sqlite"}},
   "vars":{"INSTANCE_ID":"12345678","HARNESS_URL":"https://harness.YOUR-TAILNET.ts.net/phone/"}
 }

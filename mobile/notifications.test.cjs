@@ -21,7 +21,8 @@ test('automatic owner entry and wake provisioning preserve authentication bounda
   const automatic=await fetch(base+'/phone/api/tailscale-login',{method:'POST',headers:{Origin:origin,'Tailscale-User-Login':'owner@example.com'}});assert.equal(automatic.status,200);assert.match(automatic.headers.get('set-cookie'),/HttpOnly/);assert.match(automatic.headers.get('set-cookie'),/Secure/);
   const publicConfig=await fetch(base+'/phone/config.json');assert.equal((await publicConfig.json()).key,undefined);
   assert.equal((await fetch(base+'/phone/api/wake-config')).status,401);
-  const privateConfig=await fetch(base+'/phone/api/wake-config',{headers:{Cookie:'owner=fixture'}});assert.equal(privateConfig.status,200);assert.equal((await privateConfig.json()).key,'fixture-wake-key');assert.equal(privateConfig.headers.get('cache-control'),'no-store');
+  const privateConfig=await fetch(base+'/phone/api/wake-config',{headers:{Cookie:'owner=fixture'}});assert.equal(privateConfig.status,410);assert.equal((await privateConfig.json()).code,'AUTH_UPGRADE_REQUIRED');assert.equal(privateConfig.headers.get('cache-control'),'no-store');
+  const pairedAgain=await fetch(base+'/phone/api/tailscale-login',{method:'POST',headers:{Origin:origin,Cookie:'owner=fixture','Tailscale-User-Login':'owner@example.com'}});assert.equal(pairedAgain.status,200);assert.equal(pairedAgain.headers.get('set-cookie'),null);
   assert.equal((await fetch(base+'/phone/entry?token=wrong',{redirect:'manual'})).status,401);
   const entry=await fetch(base+'/phone/entry?token=fixture-launch',{redirect:'manual'});assert.equal(entry.status,303);assert.equal(entry.headers.get('location'),'/phone/');assert.match(entry.headers.get('set-cookie'),/Secure/);
  }finally{await new Promise(r=>service.server.close(r));await new Promise(r=>host.close(r));}

@@ -43,8 +43,8 @@ export function testEnvironment(source, serviceRoot) {
 const redact = value => value.replace(/https?:\/\/[^\s]+[?&](?:token|key|secret)=[^\s]*/giu, '[fixture authentication URL]').replace(/Bearer\s+[^\s"']+/giu, 'Bearer [redacted]');
 async function packageVersion(directory) {try {return JSON.parse(await fs.readFile(path.join(directory, 'package.json'), 'utf8')).version;} catch {return null;}}
 async function dependencies(env,{requirePython=false}={}) {
-  const expected = {nodeMajor: 24, sdk: '0.2.2-rc.2', webPush: '3.6.7', playwright: '1.65.1', wrangler: '4.162.0',...(requirePython?{python:'3.12.12',zstandard:'0.25.0'}:{})};
-  const actual = {nodeMajor: Number(process.versions.node.split('.')[0]), sdk: await packageVersion(path.join(env.HOMEAI_RUNTIME || root, 'node_modules/@deepseek-ai/dsh')),
+  const expected = {node: '24.22.1', sdk: '0.2.2-rc.2', webPush: '3.6.7', playwright: '1.65.1', wrangler: '4.162.0',...(requirePython?{python:'3.12.12',zstandard:'0.25.0'}:{})};
+  const actual = {node: process.versions.node, sdk: await packageVersion(path.join(env.HOMEAI_RUNTIME || root, 'node_modules/@deepseek-ai/dsh')),
     webPush: env.HARNESS_WEB_PUSH_MODULE ? await packageVersion(env.HARNESS_WEB_PUSH_MODULE) : null,
     playwright: env.HARNESS_PLAYWRIGHT_MODULE ? await packageVersion(env.HARNESS_PLAYWRIGHT_MODULE) : null,
     wrangler: env.HARNESS_WRANGLER_CLI ? await packageVersion(path.dirname(path.dirname(env.HARNESS_WRANGLER_CLI))) : null};
@@ -118,9 +118,10 @@ export async function releaseCI({lane = 'all', output, inventoryOnly = false, al
         if (suite.lane === 'linux-root' && (process.platform !== 'linux' || process.getuid?.() !== 0)) result = {outcome: 'unrunnable', reason: 'LINUX_ROOT_FIXTURE_REQUIRED', counts: null};
         else {
           const command = suite.kind === 'python' ? [env.HARNESS_PYTHON || 'python3', suite.file] : suite.kind === 'workerd' ? [process.execPath, suite.file] : [process.execPath, '--test', '--test-reporter=tap', '--test-timeout=120000', suite.file];
-          const run = await runProgram(command, {cwd: root, env: childEnv, timeoutMs: suite.timeoutMs, outputLimit: 2 * 1024 * 1024});
+          const run = await runProgram(command, {cwd: root, env: {...childEnv,...suite.environment}, timeoutMs: suite.timeoutMs, outputLimit: 2 * 1024 * 1024});
           await fs.writeFile(path.join(output, log), redact(run.stdout + '\n[stderr]\n' + run.stderr));
           result = {...summary(suite.kind, run), exitCode: run.exitCode, timedOut: run.timedOut, truncated: run.truncated, log};
+          if(result.outcome==='passed'&&suite.minTests&&!(result.counts?.total>=suite.minTests))result={...result,outcome:'unrunnable',reason:'REQUIRED_FIXTURE_NOT_EXECUTED'};
         }
         results.push({...suite, ...result, durationMs: Date.now() - began});
       }

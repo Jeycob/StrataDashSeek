@@ -13,7 +13,7 @@ test('actual pinned Native Host authenticates functional workspace health before
   if(model)await new Promise(resolve=>model.close(resolve));
   const real=fs.realpathSync(temp);assert.equal(path.dirname(real),fs.realpathSync(os.tmpdir()));assert(path.basename(real).startsWith('harness-health-native-'));fs.rmSync(real,{recursive:true,force:true});
  });
- const names=cp.execFileSync('git',['ls-files','-z','--','workspace','development','runtime','vast','quality'],{cwd:repo,encoding:'utf8'}).split('\0').filter(Boolean);
+ const names=cp.execFileSync('git',['ls-files','--cached','--others','--exclude-standard','-z','--','workspace','development','runtime','vast','quality'],{cwd:repo,encoding:'utf8'}).split('\0').filter(Boolean);
  for(const name of names){const target=path.join(release,name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(repo,name),target);}
  fs.writeFileSync(log,'',{mode:0o640});
  const sdkRequire=createRequire(path.resolve(process.env.HARNESS_NATIVE_CLI)),worktree=sdkRequire.resolve('@deepseek-ai/dsh-experimental-worktree');
@@ -25,7 +25,7 @@ test('actual pinned Native Host authenticates functional workspace health before
  child.stdout.on('data',bytes=>fs.appendFileSync(log,bytes));child.stderr.on('data',bytes=>fs.appendFileSync(log,bytes));
  child.on('error',()=>{});
  model=http.createServer((req,res)=>{assert.equal(req.method,'GET');assert.equal(req.url,'/health');res.setHeader('Content-Type','application/json');res.end(JSON.stringify({loaded:false}));});await new Promise(resolve=>model.listen(0,'127.0.0.1',resolve));
- const sampler=createRuntimeReadiness({publicHost:host,harnessPort:port,modelPort:model.address().port,desktopLog:log},{read:name=>name==='startup-update.json'?{version:1,enabled:true,phase:'ready',signatureVerified:true,appliedCommit:commit}:{at:Date.now(),sourceCommit:commit,phase:'ready'}});
+ const sampler=createRuntimeReadiness({publicHost:host,harnessPort:port,modelPort:model.address().port,desktopLog:log},{infrastructureOnly:true,read:name=>name==='startup-update.json'?{version:1,enabled:true,phase:'ready',signatureVerified:true,appliedCommit:commit}:{at:Date.now(),sourceCommit:commit,phase:'ready'}});
  const deadline=Date.now()+40000;let state;
  while(Date.now()<deadline){assert.equal(child.exitCode,null,'Native Host exited before functional health');state=await sampler.sample();if(state.runtimeReady)break;await pause(300);}
  if(!state?.runtimeReady){const safe=fs.readFileSync(log,'utf8').replace(/https?:\/\/\S+/g,'[fixture-url]').slice(-2500);assert.fail('Functional Native health not ready: '+JSON.stringify(state)+'; '+safe);}

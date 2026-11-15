@@ -7,7 +7,8 @@ const {DockerVM}=require('./apps-vm.cjs');
 const {redact}=require('./apps-command.cjs');
 const {createManagedContainer,reconcilePendingCreations,reconcileLegacyCreations,retainJobs}=require('./apps-container-create.cjs');
 const {atomicJson:atomic}=require('../mobile/private-json.cjs');
-function cleanContainer(c){return{id:c.Id,name:(c.Names?.[0]||'').replace(/^\//,''),projectId:c.Labels?.[LABEL+'.project'],service:c.Labels?.['com.docker.compose.service']||null,releaseId:c.Labels?.[LABEL+'.release']||null,state:c.State,status:c.Status,image:c.Image,createdAt:c.Created*1000,ports:(c.Ports||[]).filter(p=>p.PublicPort).map(p=>({private:p.PrivatePort,public:p.PublicPort}))};}
+const {assertDeploymentIdle,publishedContainer,validateResume,deploymentRecovery}=require('./apps-deployment-guard.cjs');
+function cleanContainer(c,manager){return{...(manager?{canStart:publishedContainer(manager,{Id:c.Id,Config:{Labels:c.Labels||{}}})}:{}),role:c.Labels?.[LABEL+'.role']||null,dataGeneration:c.Labels?.[LABEL+'.generation']||null,id:c.Id,name:(c.Names?.[0]||'').replace(/^\//,''),projectId:c.Labels?.[LABEL+'.project'],service:c.Labels?.['com.docker.compose.service']||null,releaseId:c.Labels?.[LABEL+'.release']||null,state:c.State,status:c.Status,image:c.Image,createdAt:c.Created*1000,ports:(c.Ports||[]).filter(p=>p.PublicPort).map(p=>({private:p.PrivatePort,public:p.PublicPort}))};}
 class AppsManager {
  constructor(cfg={},engine,worker){
   this.cfg={enabled:false,workspaceRoot:'/data/harness/workspaces',stateDir:'/data/harness/state/applications',applicationHost:'127.0.0.1',checkHost:'127.0.0.1',publishAddress:'127.0.0.1',firstPort:18080,portCount:8,minFreeBytes:2*1024**3,...cfg};
@@ -18,6 +19,7 @@ class AppsManager {
   this.store=fs.existsSync(this.storeFile)?JSON.parse(fs.readFileSync(this.storeFile,'utf8')):{projects:{},jobs:[]};
   for(const job of this.store.jobs)if(['queued','running'].includes(job.status)){job.status='interrupted';job.error='Service restarted; inspect containers before retrying';job.endedAt=Date.now();}
   this.holdUntil=Math.min(this.store.holdUntil||0,Date.now()+3600000);this.worker=worker||(cfg.vm?.enabled?new DockerVM(this.cfg,this.engine):null);
+  if(this.worker)this.worker.validateResume=ids=>validateResume(this,ids);
   this.save();this.heartbeat();
  }
  save(){this.store.jobs=retainJobs(this.store.jobs);atomic(this.storeFile,this.store);}
@@ -26,7 +28,7 @@ class AppsManager {
  requireEnabled(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(!this.cfg.enabled)throw Object.assign(Error('Docker worker is not enabled'),{status:409});}
  sleepToken(){if(this.drain&&this.drain.until<=Date.now())this.drain=null;return this.drain?.token;}
  acceptActivity(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(this.sleepToken()){this.drain=null;this.heartbeat();throw Object.assign(Error('Server sleep was cancelled; retry this action shortly'),{status:409});}this.lastActivity=Date.now();this.worker?.touch();this.heartbeat();}
- async ready(){if(this.worker)await this.worker.ensure();else await this.engine.available();await reconcilePendingCreations(this);await reconcileLegacyCreations(this);}
+ async ready(){assertDeploymentIdle(this);if(this.worker)await this.worker.ensure();else await this.engine.available();await reconcilePendingCreations(this);await reconcileLegacyCreations(this);}
  previewPortFor(project){const reserved=new Set(Object.values(this.store.projects).filter(p=>p.id!==project.id).map(p=>p.previewPort??p.hostPort));const previous=project.previewPort??project.hostPort;if(previous&&!reserved.has(previous))return previous;for(let port=this.cfg.firstPort;port<this.cfg.firstPort+this.cfg.portCount;port++)if(!reserved.has(port))return port;throw Error('Application preview port pool is full');}
  canSleep(){return!this.busy&&!this.previewRequests&&this.holdUntil<=Date.now()&&!this.worker?.pending&&!this.worker?.stopping;}
  hold(minutes){this.requireEnabled();if(!Number.isInteger(minutes)||minutes<0||minutes>60)throw Error('Hold must be 0–60 minutes');this.acceptActivity();this.holdUntil=minutes?Date.now()+minutes*60000:0;this.store.holdUntil=this.holdUntil;this.save();this.heartbeat();return{holdUntil:this.holdUntil};}
@@ -51,7 +53,7 @@ class AppsManager {
  async tick(){
   this.heartbeat();if(this.ticking||!this.worker||!this.canSleep()||this.sleepToken())return;
   if(this.worker.phase==='recovering'||this.worker.phase==='ready'&&Date.now()-this.worker.lastUsed>(this.cfg.vm.idleSeconds||120)*1000){
-   this.ticking=true;try{if(this.worker.phase==='recovering')await this.worker.ensure();else await this.worker.stop();}catch(e){this.worker.error=e.message;}finally{this.ticking=false;this.heartbeat();}
+   this.ticking=true;try{assertDeploymentIdle(this,{allowCurrent:false});if(this.worker.phase==='recovering')await this.worker.ensure();else await this.worker.stop();}catch(e){this.worker.error=e.message;}finally{this.ticking=false;this.heartbeat();}
   }
  }
  async beginPreview(port){
@@ -60,9 +62,15 @@ class AppsManager {
   try{await this.ready();const c=await this.engine.owned(p.containerId,p.id);if(!c.State.Running)throw Object.assign(Error('Application is stopped; start it from Harness'),{status:409});release.backendPort=p.hostPort;return release;}catch(e){release();throw e;}
  }
  project(id){if(!/^[a-f0-9]{16}$/.test(id)||!this.store.projects[id])throw Object.assign(Error('Unknown project'),{status:404});return this.store.projects[id];}
- async register(relative){this.requireEnabled();this.acceptActivity();const p=await projectAt(relative,this.cfg),old=this.store.projects[p.id];this.store.projects[p.id]={...old,...p};this.save();return this.publicProject(this.store.projects[p.id]);}
+ async register(relative,expectedProjectId){
+  this.requireEnabled();if(this.busy)throw Object.assign(Error('Wait for the current application operation before registering'),{status:409});
+  this.acceptActivity();const p=await projectAt(relative,this.cfg),canonical=await fsp.realpath(p.directory);
+  if(this.busy)throw Object.assign(Error('An application operation started during registration'),{status:409});
+  if(canonical!==p.directory||crypto.createHash('sha256').update(canonical).digest('hex').slice(0,16)!==p.id||expectedProjectId!==undefined&&p.id!==expectedProjectId)throw Object.assign(Error('Project target changed before registration'),{status:409,code:'PROJECT_CONTEXT_MISMATCH'});
+  const old=this.store.projects[p.id];this.store.projects[p.id]={...old,...p};this.save();return this.publicProject(this.store.projects[p.id]);
+ }
  publicProject(p){const {directory,...safe}=p;return safe;}
- async state(){let available=false,error=null,containers=[];const worker=this.worker?.status();if(this.cfg.enabled&&(!worker||worker.phase==='ready'))try{await this.engine.available();available=true;containers=(await this.engine.list()).map(cleanContainer);}catch(e){error=e.message;}if(worker&&!available)containers=(this.worker.saved.containers||[]).map(c=>({...cleanContainer(c),state:c.State==='running'?'sleeping':c.State}));return{enabled:!!this.cfg.enabled,available,error,worker:worker||null,previewSettings:this.previewSettings(),holdUntil:this.holdUntil,draining:!!this.sleepToken(),busy:this.busy,projects:Object.values(this.store.projects).map(p=>this.publicProject(p)),containers,jobs:this.store.jobs.slice(-30),backend:this.cfg.docker?.socketPath?'local-socket':'loopback-worker'};}
+ async state(){let available=false,error=null,containers=[];const worker=this.worker?.status();if(this.cfg.enabled&&(!worker||worker.phase==='ready'))try{await this.engine.available();available=true;containers=(await this.engine.list()).map(c=>cleanContainer(c,this));}catch(e){error=e.message;}if(worker&&!available)containers=(this.worker.saved.containers||[]).map(c=>({...cleanContainer(c,this),state:c.State==='running'?'sleeping':c.State}));return{enabled:!!this.cfg.enabled,available,error,worker:worker||null,previewSettings:this.previewSettings(),holdUntil:this.holdUntil,draining:!!this.sleepToken(),busy:this.busy,deploymentRecovery:deploymentRecovery(this),projects:Object.values(this.store.projects).map(p=>this.publicProject(p)),containers,jobs:this.store.jobs.slice(-30),backend:this.cfg.docker?.socketPath?'local-socket':'loopback-worker'};}
  log(job,text){const file=path.join(this.cfg.stateDir,job.id+'.log');const old=fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';fs.writeFileSync(file,(old+text).slice(-1024*1024),{mode:0o600});}
  jobLog(id){if(!/^[a-f0-9]{16}$/.test(id)||!this.store.jobs.some(j=>j.id===id))throw Object.assign(Error('Unknown job'),{status:404});const file=path.join(this.cfg.stateDir,id+'.log');return fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';}
  enqueue(id,action){this.requireEnabled();const p=this.project(id);if(!['build','deploy','check'].includes(action))throw Error('Invalid project action');if(this.busy)throw Object.assign(Error('Another application operation is running'),{status:409});this.acceptActivity();
@@ -113,8 +121,11 @@ class AppsManager {
   try{await this.engine.request('POST','/containers/'+test.Id+'/start');const result=await this.engine.json('POST','/containers/'+test.Id+'/wait?condition=not-running',{timeout:60000});this.log(job,await this.engine.logs(test.Id,p.id));job.verification='http-and-test-command';job.testExitCode=result.StatusCode;if(result.StatusCode!==0)throw Error('Application test failed with exit code '+result.StatusCode);saved.test={at:Date.now(),exitCode:result.StatusCode,imageId:c.Image};}
   finally{try{await this.engine.owned(test.Id,p.id);await this.engine.request('POST','/containers/'+test.Id+'/stop?t=1');}catch{}try{await this.engine.owned(test.Id,p.id);await this.engine.request('DELETE','/containers/'+test.Id);}catch{}}
  }
- async containerAction(id,action){this.requireEnabled();if(this.busy)throw Object.assign(Error('An application operation is running'),{status:409});if(!['start','stop'].includes(action))throw Error('Invalid container action');this.acceptActivity();this.setBusy('container-action');try{await this.ready();const c=await this.engine.owned(id),labels=c.Config?.Labels||{},project=this.store.projects[labels[LABEL+'.project']];if(action==='start'&&labels['com.docker.compose.service']&&(!project||project.releaseId!==labels[LABEL+'.release']))throw Error('Use Releases and rollback to restore a previous Compose stack; starting it separately could reuse active database volumes');await this.engine.request('POST','/containers/'+id+'/'+action+(action==='stop'?'?t=10':''));await this.worker?.remember();return{ok:true};}finally{this.setBusy(null);}}
+ async containerAction(id,action){this.requireEnabled();if(this.busy)throw Object.assign(Error('An application operation is running'),{status:409});if(!['start','stop'].includes(action))throw Error('Invalid container action');assertDeploymentIdle(this,{allowCurrent:false});this.acceptActivity();this.setBusy('container-action');try{await this.ready();const c=await this.engine.owned(id);if(action==='start'&&!publishedContainer(this,c))throw Object.assign(Error('Only the currently published application generation may be started; use a verified release for rollback'),{code:'DEPLOYMENT_HISTORICAL_START_REFUSED',status:409});await this.engine.request('POST','/containers/'+id+'/'+action+(action==='stop'?'?t=10':''));await this.worker?.remember();return{ok:true};}finally{this.setBusy(null);}}
  async logs(id){this.requireEnabled();if(this.worker&&this.worker.phase!=='ready')return 'Docker spí. Logy jsou dostupné po spuštění aplikace.';return this.engine.logs(id);}
 }
 require('./apps-workflow.cjs').install(AppsManager);
+require('./apps-deployment-orchestrator.cjs').install(AppsManager);
+// Every user-facing test or deploy runs on an isolated unpublished generation.
+AppsManager.prototype.deploy=function(p,job){require('./apps-workflow.cjs').init(this);return this.verifyRelease(p,job);};
 module.exports={AppsManager,cleanContainer};

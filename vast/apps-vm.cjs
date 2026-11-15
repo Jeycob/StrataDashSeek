@@ -132,7 +132,9 @@ class DockerVM {
      if(!info.Labels?.includes('io.stratadashseek.worker='+this.manifest.volumeId))throw Error('Unexpected Docker worker identity');
      this.observedStorageDriver=info.Driver;this.storageObservedAt=Date.now();
      this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.save();
-     for(const id of this.saved.resumeIds||[]){await this.engine.owned(id);await this.engine.request('POST','/containers/'+id+'/start');}
+     const resumeIds=this.saved.resumeIds||[];
+     if(resumeIds.length){if(typeof this.validateResume!=='function')throw Error('Published application resume identities require the application controller');await this.validateResume(resumeIds);}
+     for(const id of resumeIds){await this.engine.owned(id);await this.engine.request('POST','/containers/'+id+'/start');}
      this.phase='ready';this.touch();await this.diskFree();this.save();return;
     }catch(e){if(this.phase!=='starting')throw e;}
     await pause(1000);

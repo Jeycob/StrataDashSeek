@@ -78,6 +78,9 @@ async function mobileChanges(desktop,{sid,evidence,wireRoutes}){
   assert.notEqual(await surface.evaluate(e=>getComputedStyle(e).backgroundColor),light,'Native dark palette changes the surface');
   assert.equal(await surface.evaluate(e=>{const probe=document.createElement('span');probe.style.cssText='color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-base)';document.body.append(probe);const match=getComputedStyle(e).color===getComputedStyle(probe).color&&getComputedStyle(e).backgroundColor===getComputedStyle(probe).backgroundColor;probe.remove();return match;}),true,'surface resolves Native dark tokens');
   await page.evaluate(id=>HarnessNativeUI.openDocker(id),sid);await page.getByText('fixture running container',{exact:true}).waitFor();await page.screenshot({path:path.join(evidence,'native-docker-mobile-dark-cs.png'),fullPage:true});
+  // Native locale preferences are shared through this Host. Restore English
+  // and observe the other client before continuing its English assertions.
+  await page.evaluate(()=>HarnessI18n.setLanguage('en'));await desktop.waitForFunction(()=>HarnessI18n.language==='en');
  }finally{await context.close();}
 }
 module.exports={changesFixture,runChangesScenarios};

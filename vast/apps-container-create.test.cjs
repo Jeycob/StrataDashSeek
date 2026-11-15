@@ -8,6 +8,8 @@ const body=()=>({Image:image,Labels:{[LABEL]:'managed',[LABEL+'.project']:projec
 function manager(engine){const job={id:jobId,creations:[]},m={engine,store:{jobs:[job],projects:{}},save(){},log(){}};return{m,job};}
 function inspected(record,patch={}){return{Id:containerId,Name:'/'+record.name,Image:record.imageId,Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:record.projectId,[LABEL+'.job']:record.jobId,[LABEL+'.create']:record.token}},State:{Status:'created',Running:false,StartedAt:'0001-01-01T00:00:00Z'},...patch};}
 
+test('distinct data helper slots retain the parent job and a recorded step can never send a second create',async()=>{let posts=0;const engine={json:async(method,route,options)=>{assert.equal(method,'POST');posts++;assert.match(route,new RegExp('sdsh-test-'+projectId+'-'+jobId+'-db-(?:shadow|final)$'));assert(['db-shadow','db-final'].includes(options.json.Labels[LABEL+'.slot']));return{Id:(posts===1?'a':'f').repeat(64)};}},fixture=manager(engine),json=body();json.Labels[LABEL+'.role']='test';await createManagedContainer(fixture.m,fixture.job,json,{slot:'db-shadow'});await createManagedContainer(fixture.m,fixture.job,json,{slot:'db-final'});assert.equal(posts,2);assert(fixture.job.creations.every(record=>record.jobId===fixture.job.id));await assert.rejects(createManagedContainer(fixture.m,fixture.job,json,{slot:'db-shadow'}),{code:'DOCKER_CREATION_RECONCILIATION_REQUIRED'});assert.equal(posts,2);await assert.rejects(createManagedContainer(fixture.m,fixture.job,json,{slot:'../outside'}),/Invalid managed creation slot/);assert.equal(posts,2);});
+
 test('a real lost create response recovers the original container without a second POST',async t=>{
  let creates=0,container=null,timer;const server=http.createServer(async(req,res)=>{
   if(req.method==='POST'){creates++;let raw='';for await(const c of req)raw+=c;const json=JSON.parse(raw),name=new URL(req.url,'http://loopback').searchParams.get('name');timer=setTimeout(()=>{container={Id:containerId,Name:'/'+name,Image:json.Image,Config:{Labels:json.Labels},State:{Status:'created',Running:false,StartedAt:'0001-01-01T00:00:00Z'}};res.end(JSON.stringify({Id:containerId}));},90);return;}
@@ -44,6 +46,11 @@ test('an absent unknown create cannot be silently cleared; a completed pending d
 
 test('history retention keeps unresolved mutation records beyond the ordinary hundred jobs',async()=>{
  const{job}=await unresolvedFixture(),jobs=[job,...Array.from({length:120},(_,i)=>({id:String(i),status:'passed'}))],retained=retainJobs(jobs);assert.equal(retained.length,101);assert.ok(retained.includes(job));job.creations[0].state='cleaned';assert.equal(retainJobs(jobs).includes(job),false);
+});
+test('ambiguous data copies and deployment cutovers survive ordinary history retention',()=>{
+ const recent=Array.from({length:120},(_,i)=>({id:String(i),status:'passed'}));
+ for(const state of ['intent','recovery_required','unrecognized']){const job={id:'e'.repeat(16),status:'failed',creations:[{state:'confirmed'}],dataOperations:{version:1,operations:{'helper-db-final':{state}}}};assert(retainJobs([job,...recent]).includes(job));job.dataOperations.operations['helper-db-final'].state='complete';assert.equal(retainJobs([job,...recent]).includes(job),false);}
+ const job={id:'f'.repeat(16),status:'failed',deploymentPhase:'recovery_required'};assert(retainJobs([job,...recent]).includes(job));
 });
 
 test('slow mutating operations have bounded deadlines while reads retain short defaults',()=>{

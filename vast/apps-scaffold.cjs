@@ -1,15 +1,35 @@
 'use strict';
-const fs=require('node:fs/promises'),path=require('node:path');
+const fs=require('node:fs/promises'),path=require('node:path'),crypto=require('node:crypto'),{constants}=require('node:fs');
 const {inside,excluded}=require('./apps-project.cjs');
+const PLAN_TARGET=Symbol('canonical scaffold plan target');
+const changed=()=>Object.assign(Error('Project target changed while preparing Docker files'),{status:409,code:'PROJECT_CONTEXT_MISMATCH'});
+const projectId=directory=>crypto.createHash('sha256').update(directory).digest('hex').slice(0,16);
+async function openTarget(relative,cfg,expectedProjectId){
+ const canonical=await directory(relative,cfg);
+ if(expectedProjectId!==undefined&&projectId(canonical)!==expectedProjectId)throw changed();
+ let handle;
+ try{
+  if(process.platform==='linux')handle=await fs.open(canonical,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);
+  const stat=handle?await handle.stat({bigint:true}):await fs.lstat(canonical,{bigint:true});
+  if(!stat.isDirectory()||stat.isSymbolicLink())throw changed();
+  return{canonical,dev:String(stat.dev),ino:String(stat.ino),ioPath:handle?'/proc/self/fd/'+handle.fd:canonical,async close(){await handle?.close();}};
+ }catch(error){await handle?.close();throw error;}
+}
+async function verifyTarget(target,planned,expectedProjectId){
+ const canonical=await fs.realpath(target.canonical),stat=await fs.lstat(target.canonical,{bigint:true});
+ if(canonical!==planned.canonical||target.canonical!==planned.canonical||target.dev!==planned.dev||target.ino!==planned.ino||stat.isSymbolicLink()||String(stat.dev)!==target.dev||String(stat.ino)!==target.ino||expectedProjectId!==undefined&&projectId(canonical)!==expectedProjectId)throw changed();
+}
 async function directory(relative,cfg){
  if(typeof relative!=='string'||!relative||relative.length>300||path.isAbsolute(relative)||relative.split(/[\\/]/).some(p=>p==='..'||excluded(p)))throw Error('Use a workspace-relative project path');
  const root=await fs.realpath(cfg.workspaceRoot),dir=await fs.realpath(path.join(root,relative));if(!inside(root,dir)||root===dir)throw Error('Project is outside the workspace');return dir;
 }
 async function text(dir,name){try{const p=path.join(dir,name),s=await fs.lstat(p);if(!s.isFile()||s.isSymbolicLink()||s.size>1024*1024)throw Error('Invalid project file: '+name);return await fs.readFile(p,'utf8');}catch(e){if(e.code==='ENOENT')return null;throw e;}}
-async function plan(relative,cfg){
- const dir=await directory(relative,cfg),names=await fs.readdir(dir),pkg=await text(dir,'package.json'),requirements=await text(dir,'requirements.txt'),pyproject=await text(dir,'pyproject.toml'),cs=names.filter(n=>/\.csproj$/i.test(n));
+async function plan(relative,cfg,expectedProjectId){
+ const target=await openTarget(relative,cfg,expectedProjectId);
+ try{
+ const dir=target.ioPath,names=await fs.readdir(dir),pkg=await text(dir,'package.json'),requirements=await text(dir,'requirements.txt'),pyproject=await text(dir,'pyproject.toml'),cs=names.filter(n=>/\.csproj$/i.test(n));
  const candidates=[pkg&&'node',(requirements!==null||pyproject!==null)&&'python',cs.length&&'dotnet'].filter(Boolean);if(candidates.length!==1)throw Error('Choose a single Node, Python or .NET application folder');
- const runtime=candidates[0],manifest={version:1,name:path.basename(dir),port:8080,healthPath:'/',memoryMiB:512,cpus:1},warnings=[],extraFiles={};let dockerfile;
+ const runtime=candidates[0],manifest={version:1,name:path.basename(target.canonical),port:8080,healthPath:'/',memoryMiB:512,cpus:1},warnings=[],extraFiles={};let dockerfile;
  if(runtime==='node'){
   const p=JSON.parse(pkg),scripts=p.scripts||{},lock=names.includes('package-lock.json');
   const viteStatic=!scripts.start&&/\bvite\s+build\b/.test(scripts.build||'')&&!/--ssr\b/.test(scripts.build);
@@ -29,7 +49,23 @@ async function plan(relative,cfg){
  }
  const files={'Dockerfile':dockerfile,'.dockerignore':'.git\n.env*\n**/.env*\n**/secrets\n**/.secrets\n**/*.key\n**/*.pem\n**/.npmrc\nnode_modules\n.venv\n**/bin\n**/obj\n.harness\n.harness-quality\n','.harness-app.json':JSON.stringify(manifest,null,2)+'\n',...extraFiles};
  const existing=[];for(const name of Object.keys(files))if(await text(dir,name)!==null)existing.push(name);
- return{runtime,path:relative,warnings,existing,files};
+ await verifyTarget(target,target,expectedProjectId);
+ return Object.defineProperty({runtime,path:relative,warnings,existing,files},PLAN_TARGET,{value:{canonical:target.canonical,dev:target.dev,ino:target.ino}});
+ }finally{await target.close();}
 }
-async function scaffold(relative,cfg){const p=await plan(relative,cfg);if(p.existing.length)throw Error('Files already exist; nothing overwritten: '+p.existing.join(', '));const dir=await directory(relative,cfg),created=[];try{for(const[name,value]of Object.entries(p.files)){await fs.writeFile(path.join(dir,name),value,{flag:'wx',mode:0o644});created.push(name);}}catch(e){for(const n of created)try{if(await text(dir,n)===p.files[n])await fs.unlink(path.join(dir,n));}catch{}throw e;}return p;}
+async function scaffold(relative,cfg,expectedProjectId){
+ const p=await plan(relative,cfg,expectedProjectId);if(p.existing.length)throw Error('Files already exist; nothing overwritten: '+p.existing.join(', '));
+ const target=await openTarget(relative,cfg,expectedProjectId),created=[];
+ try{
+  await verifyTarget(target,p[PLAN_TARGET],expectedProjectId);
+  for(const[name,value]of Object.entries(p.files)){
+   await verifyTarget(target,p[PLAN_TARGET],expectedProjectId);
+   // Linux production writes through an open directory, so a path swap after
+   // verification cannot redirect the write or its rollback to another project.
+   await fs.writeFile(path.join(target.ioPath,name),value,{flag:'wx',mode:0o644});created.push(name);
+  }
+ }catch(error){for(const name of created)try{if(await text(target.ioPath,name)===p.files[name])await fs.unlink(path.join(target.ioPath,name));}catch{}throw error;}
+ finally{await target.close();}
+ return p;
+}
 module.exports={directory,plan,scaffold};

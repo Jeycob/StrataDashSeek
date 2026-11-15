@@ -29,6 +29,10 @@
 .harness-native-settings dl { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: 8px 16px; }
 .harness-native-settings dt { font-weight: 600; }
 .harness-native-settings dd { margin: 0; }
+.harness-native-devices { padding: 16px; min-width: 0; }
+.harness-native-devices p, .harness-native-devices h4 { overflow-wrap: anywhere; }
+.harness-device-card { border: 1px solid var(--dsw-alias-border-l3, #e2e4e8); border-radius: 8px; padding: 12px; margin: 12px 0; }
+.harness-device-card button { margin: 4px 8px 4px 0; }
 .harness-native-surface [data-setting-source] { display: block; margin-top: 4px; color: var(--dsw-alias-label-secondary, #68717e); font-size: 11px; }
 .harness-native-surface .wb-setting-reset { margin-top: 6px; font-size: 12px; white-space: normal; }
 .harness-native-surface .wb-setting-reset[hidden] { display: none; }

@@ -24,6 +24,7 @@ function createModelProxy(options={}){const recent=[];function trace(req,payload
  try {
   if(req.url==='/v1/models'){res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify({object:'list',data:[{id:'strata',object:'model',owned_by:'local'}]}));}
   if(req.url!=='/v1/chat/completions'||req.method!=='POST'){res.writeHead(404);return res.end();}
+  try{await require('./runtime-client.cjs').admit('model_step',{signal:controller.signal});}catch{res.writeHead(503,{'Retry-After':'2'});return res.end();}
   const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>16*1024*1024){res.writeHead(413);return res.end();}chunks.push(chunk);}
   const payload=normalizePayload(JSON.parse(Buffer.concat(chunks)),requestControls(req.headers['x-harness-generation']));
   await waitForModel(options,controller.signal);controller.signal.throwIfAborted();

@@ -11,6 +11,15 @@ test('wake portal serves English and Czech and executable client JavaScript',asy
 });
 const origin='https://wake.example.com',baseEnv={WAKE_ACCESS_KEY:'a'.repeat(64),VAST_API_KEY:'test-only',INSTANCE_ID:'42',HARNESS_URL:'https://harness.example.ts.net/phone/'};
 const req=(path,method='GET',body,cookie)=>new Request(origin+path,{method,headers:{Origin:origin,...(cookie?{Cookie:cookie}:{})},...(body!==undefined?{body:JSON.stringify(body)}:{})});
+
+test('login enforces a streaming byte limit and distinguishes bad input from service configuration',async()=>{
+ const request=body=>new Request(origin+'/api/login',{method:'POST',headers:{Origin:origin},body,duplex:'half'});
+ for(const value of ['{','',JSON.stringify(null),JSON.stringify([]),JSON.stringify({key:42})])assert.equal((await worker.fetch(request(value),{...baseEnv})).status,400);
+ const stream=new ReadableStream({start(controller){controller.enqueue(new TextEncoder().encode(JSON.stringify({key:'ž'.repeat(512)})));}});
+ const large=await worker.fetch(request(stream),{...baseEnv});assert.equal(large.status,413);assert.equal((await large.json()).code,'BODY_TOO_LARGE');
+ assert.equal((await worker.fetch(req('/api/login','POST',{key:'valid-shape'}),{...baseEnv,WAKE_ACCESS_KEY:undefined})).status,503);
+ assert.equal((await worker.fetch(req('/api/login','POST',{key:'wrong'}),{...baseEnv})).status,401);
+});
 test('HTTP 200 provider failure is never reported as a successful wake',async()=>{const env={...baseEnv};
  const saved=globalThis.fetch;let response={success:false,msg:'Required resources are currently unavailable, state change queued.'};
  globalThis.fetch=async(_url,options)=>Response.json(options.method==='GET'?{instances:{actual_status:'exited',intended_status:'stopped'}}:response);
@@ -37,11 +46,11 @@ test('authentication, CSRF, signed cookies, fixed instance and idempotent wake',
   assert.equal((await worker.fetch(req('/api/wake','POST',{},cookie),{...env})).status,200);assert.deepEqual(JSON.parse(calls.at(-1).body),{state:'running'});
  }finally{globalThis.fetch=saved;}
 });
-test('only the configured private Harness origin may use its provisioned wake key',async()=>{const env={...baseEnv};
+test('a legacy shared wake key is never accepted as a device bearer',async()=>{const env={...baseEnv};
  const originPrivate=new URL(env.HARNESS_URL).origin;const original=globalThis.fetch;globalThis.fetch=async()=>Response.json({instances:{actual_status:'running',intended_status:'running',ssh_host:'ssh1.vast.ai',ssh_port:1234}});
  try{
   const preflight=await worker.fetch(new Request(origin+'/api/wake',{method:'OPTIONS',headers:{Origin:originPrivate}}),env);assert.equal(preflight.status,204);assert.equal(preflight.headers.get('access-control-allow-origin'),originPrivate);
-  const allowed=await worker.fetch(new Request(origin+'/api/wake',{method:'POST',headers:{Origin:originPrivate,Authorization:'Bearer '+env.WAKE_ACCESS_KEY},body:'{}'}),env);assert.equal(allowed.status,200);assert.equal(allowed.headers.get('access-control-allow-origin'),originPrivate);assert.match(allowed.headers.get('access-control-expose-headers'),/Retry-After/);assert.match(preflight.headers.get('access-control-allow-headers'),/If-None-Match/);
+  const allowed=await worker.fetch(new Request(origin+'/api/wake',{method:'POST',headers:{Origin:originPrivate,Authorization:'Bearer '+env.WAKE_ACCESS_KEY},body:'{}'}),env);assert.equal(allowed.status,401);assert.equal((await allowed.json()).code,'AUTH_UPGRADE_REQUIRED');assert.equal(allowed.headers.get('access-control-allow-origin'),originPrivate);assert.match(allowed.headers.get('access-control-expose-headers'),/Retry-After/);assert.match(preflight.headers.get('access-control-allow-headers'),/If-None-Match/);
   const bad=await worker.fetch(new Request(origin+'/api/wake',{method:'POST',headers:{Origin:'https://evil.example',Authorization:'Bearer '+env.WAKE_ACCESS_KEY},body:'{}'}),env);assert.equal(bad.status,403);
  }finally{globalThis.fetch=original;}
 });
