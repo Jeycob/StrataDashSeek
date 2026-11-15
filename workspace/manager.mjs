@@ -10,6 +10,7 @@ import { LiveChanges } from './changes.mjs';
 import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
 import { guideFirstCheck, warnStageBudget } from './verification-guidance.mjs';
 import { verificationStatusMayBeMasked } from './shell-status.mjs';
+import { beginUserRequest } from './turn-budget.mjs';
 import privateSource from './source-private.cjs';
 const { isPrivateSourcePath } = privateSource;
 const run = promisify(execFile);
@@ -128,7 +129,7 @@ export class WorkspaceManager {
       return record;
     });
   }
-  async preStep({ agent, signal, turn, step }) {
+  async preStep({ agent, signal, turn, step, messages }) {
     const initiator = agent.id, accessSession = agent.session; agent = this.ownerAgent(agent);
     await this.drainToolResults(agent.id);
     if (this.data.trash[agent.id]) throw new WorkbenchError('SESSION_IN_TRASH', 'Restore this conversation before continuing.');
@@ -139,6 +140,9 @@ export class WorkspaceManager {
     }
     await this.locks.acquire(record.root, agent.id); this.running.set(agent.id, record.root);
     const budget = this.budgets.get(agent.id), settings = this.settings(agent.session);
+    if (initiator === agent.id && beginUserRequest(record, budget, { turn, messages })) {
+      delete record.stageBudgetWarningStage; delete record.stageBudgetWarningInspection;
+    }
     // One admission per proposed step; retries do not consume a second stage step.
     if (record.lastStep !== `${initiator}:${turn}:${step}`) { record.lastStep = `${initiator}:${turn}:${step}`; budget.step(settings.maxStageSteps); }
     await guideFirstCheck(this, agent, record, budget, signal);

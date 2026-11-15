@@ -45,7 +45,7 @@ export function createRuntimeCapabilities({ workspaceRoot, capacityPath = '/data
         if (stat.isFile() && !stat.isSymbolicLink()) existingFiles.push(name); else unavailableFiles.push(name);
       } catch (error) { if (error?.code !== 'ENOENT') unavailableFiles.push(name); }
     }
-    let capacity = { known: false, freeBytes: null, minFreeBytes, verifyRequiredBytes: minFreeBytes + 512 * MIB, canBuild: false, canVerify: false };
+    let capacity = { scope: 'host-only', known: false, freeBytes: null, minFreeBytes, verifyRequiredBytes: minFreeBytes + 512 * MIB, canBuild: false, canVerify: false };
     try {
       const stat = await fs.statfs(capacityPath, { bigint: true }), blocks = BigInt(stat.bavail), blockSize = BigInt(stat.bsize), bytes = blocks * blockSize;
       if (blocks >= 0n && blockSize > 0n && bytes <= BigInt(Number.MAX_SAFE_INTEGER)) { const freeBytes = Number(bytes); capacity = { ...capacity, known: true, freeBytes, canBuild: freeBytes >= minFreeBytes, canVerify: freeBytes >= capacity.verifyRequiredBytes }; }
@@ -77,6 +77,8 @@ export function createRuntimeCapabilities({ workspaceRoot, capacityPath = '/data
           jobs: own ? (Array.isArray(state.jobs) ? state.jobs : []).filter(j => j?.projectId === ownId && ID.test(j.id || '')).slice(-8).map(j => ({ id: j.id, action: pickEnum(j.action, actions), status: pickEnum(j.status, jobStates), startedAt: safeTime(j.startedAt), endedAt: safeTime(j.endedAt) })) : [],
           containers: own ? (Array.isArray(state.containers) ? state.containers : []).filter(c => c?.projectId === ownId && /^[a-f0-9]{64}$/.test(c.id || '')).slice(-16).map(c => ({ id: c.id, state: pickEnum(c.state, ['created', 'running', 'paused', 'restarting', 'removing', 'exited', 'dead', 'sleeping']) })) : [],
           workerFreeBytes: Number.isSafeInteger(state.worker?.freeBytes) && state.worker.freeBytes >= 0 ? state.worker.freeBytes : null,
+          workerFreeInodes: Number.isSafeInteger(state.worker?.freeInodes) && state.worker.freeInodes >= 0 ? state.worker.freeInodes : null,
+          workerDiskCheckedAt: safeTime(state.worker?.diskCheckedAt),
         };
       } catch { apps = { ...apps, state: 'unreachable', reason: 'state-read-failed' }; }
     }

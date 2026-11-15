@@ -2,6 +2,10 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),http=require('node:http');
 const {AppsManager}=require('./apps-manager.cjs');
 const {DockerVM,bootstrap}=require('./apps-vm.cjs');
+test('worker capacity samples bytes and inodes with the same fresh nonce',async()=>{
+ const vm={buffer:'HARNESS_FREE_aaaaaaaaaaaaaaaa=999999\n',serial:{destroyed:false,write(command){const nonce=command.match(/HARNESS_FREE_([a-f0-9]{16})/)[1];assert.match(command,/df -Pi \/var\/lib\/harness/);vm.buffer+='\nHARNESS_FREE_'+nonce+'=524288\nHARNESS_INODES_'+nonce+'=20000\n';}}};
+ const before=Date.now();assert.equal(await DockerVM.prototype.diskFree.call(vm),512*1024**2);assert.equal(vm.freeInodes,20000);assert.ok(vm.diskCheckedAt>=before);
+});
 test('an available Docker API cannot restore containers before fresh bootstrap and isolation proof',async()=>{
  const calls=[],volumeId='a'.repeat(32),vm={phase:'recovering',saved:{initialized:true,resumeIds:['b'.repeat(64)]},manifest:{volumeId},buffer:'',serial:{destroyed:false,write(){}},pid:()=>123,save(){},touch(){},diskFree:async()=>1024,engine:{json:async()=>{calls.push('info');return{Labels:['io.stratadashseek.worker='+volumeId]};},owned:async()=>calls.push('owned'),request:async()=>calls.push('start')}};
  const pending=DockerVM.prototype.start.call(vm);await new Promise(r=>setTimeout(r,40));assert.deepEqual(calls,[]);assert.equal(vm.phase,'starting');vm.scriptSent=true;vm.buffer='HARNESS_READY_'+vm.nonce+'\nHARNESS_BOOT_EXIT_'+vm.nonce+'=0\n';await pending;assert.deepEqual(calls,['info','owned','start']);assert.equal(vm.phase,'ready');assert.equal(vm.saved.controlIsolationVersion,1);

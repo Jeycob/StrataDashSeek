@@ -78,7 +78,7 @@ class DockerVM {
  }
  save(){atomic(this.stateFile,this.saved);}
  pid(){try{const pid=Number(fs.readFileSync(path.join(this.root,'qemu.pid'),'utf8')); const args=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0');return args.includes('stratadashseek-docker') && args.includes('file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback')?pid:null;}catch{return null;}}
- status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
+ status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,diskCheckedAt:this.diskCheckedAt??null,initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
  touch(){this.lastUsed=Date.now();}
  async ensure(){
   this.touch();const waitUntil=Date.now()+90000;while(this.stopping&&Date.now()<waitUntil)await pause(250);if(this.stopping)throw Error('Docker is still saving its state; retry shortly');
@@ -139,8 +139,8 @@ class DockerVM {
  }
  async diskFree(){
   if(!this.serial||this.serial.destroyed)await this.connectSerial();const nonce=crypto.randomBytes(8).toString('hex');
-  this.serial.write("printf 'HARNESS_FREE_"+nonce+"=%s\\n' \"$(df -Pk /var/lib/harness | tail -n 1 | awk '{print $4}')\"\n");
-  const deadline=Date.now()+5000;while(Date.now()<deadline){const m=this.buffer.match(new RegExp('HARNESS_FREE_'+nonce+'=(\\d+)'));if(m){this.freeBytes=Number(m[1])*1024;return this.freeBytes;}await pause(100);}throw Error('Worker disk space could not be verified');
+  this.serial.write("printf 'HARNESS_FREE_"+nonce+"=%s\\n' \"$(df -Pk /var/lib/harness | tail -n 1 | awk '{print $4}')\"; printf 'HARNESS_INODES_"+nonce+"=%s\\n' \"$(df -Pi /var/lib/harness | tail -n 1 | awk '{print $4}')\"\n");
+  const deadline=Date.now()+5000;while(Date.now()<deadline){const m=this.buffer.match(new RegExp('HARNESS_FREE_'+nonce+'=(\\d+)')),i=this.buffer.match(new RegExp('HARNESS_INODES_'+nonce+'=(\\d+)'));if(m&&i){this.freeBytes=Number(m[1])*1024;this.freeInodes=Number(i[1]);this.diskCheckedAt=Date.now();return this.freeBytes;}await pause(100);}throw Error('Worker disk space and inodes could not be verified');
  }
  async remember(){if(this.phase!=='ready')return;const rows=(await this.engine.list()).filter(c=>c.Labels?.[LABEL+'.role']!=='test');this.saved.containers=rows;this.saved.resumeIds=rows.filter(c=>c.State==='running').map(c=>c.Id);this.save();}
  async stop(){

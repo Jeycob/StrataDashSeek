@@ -115,3 +115,21 @@ rechecks foreground and background activity and respects read-only sessions.
 Sources, lockfiles, installed `node_modules`, test evidence and secrets remain.
 The next dependency installation may download packages again. Cleanup records
 contain aggregate counts and byte totals, not file contents or secret values.
+
+Step limits apply to the current human request. Once server-owned message and
+turn identities have been observed, a later human request starts a fresh step
+counter. Internal continuations, provider retries and subagents cannot renew it.
+Existing blocked runs still require the owner's Run review strategy; failures,
+stalled repairs, verification results and required checks are retained. A queued
+Apps operation never counts as successful verification.
+
+The managed Docker VM has a separate disk and inode budget. Its free bytes,
+free inodes and measurement time are recorded. Before building and again before
+starting a candidate, Harness checks at least 512 MiB and 16,384 free inodes.
+A low managed-worker reserve triggers only Docker's unused **build cache** cleanup,
+under the current Apps job lock and verified worker isolation, followed by a fresh
+measurement. It never calls system/image/container/volume prune. Insufficient
+capacity after cleanup remains a failure and the previous deployment is retained.
+See [Docker builder prune](https://docs.docker.com/reference/cli/docker/builder/prune/).
+Host free-space success alone does not establish guest capacity. Build logs now
+identify the worker startup and image-building phases explicitly.
