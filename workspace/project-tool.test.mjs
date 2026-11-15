@@ -54,7 +54,7 @@ test('absolute, relative and symlink directory escapes fail before command execu
 
 test('invalid or wider arguments and missing confinement never run a command', async t => {
   const f = await fixture(t);
-  for (const value of [null, [], { ...args, run_in_background: true }, { ...args, sandbox_permissions: 'danger-full-access' }, { ...args, timeoutMs: Infinity }, { ...args, timeoutMs: 0 }, { ...args, command: '' }]) await assert.rejects(f.run(value, f.execution));
+  for (const value of [null, [], { ...args, run_in_background: 'true' }, { ...args, sandbox_permissions: 'danger-full-access' }, { ...args, timeoutMs: Infinity }, { ...args, timeoutMs: 0 }, { ...args, command: '' }]) await assert.rejects(f.run(value, f.execution));
   f.ctx.shell.sandboxMode = undefined; await assert.rejects(f.run(args, f.execution), error => error.code === 'NO_PROJECT_SANDBOX');
   assert.equal(f.calls.length, 0);
 });
@@ -90,6 +90,9 @@ test('literal verification adaptations preserve admitted arguments, project poli
   await f.run({ command: 'cd server && npm test 2>&1 | tail -60', description: 'Run npm lifecycle' }, f.execution);
   assert(!f.calls[1].command.includes('test-command.cjs')); assert(!f.calls[1].command.includes('tail -60'));
   assert(f.calls[1].command.includes('cd server && npm test'));
+  const displayed = await f.run({ command: 'node --test tests/acceptance.test.mjs 2>&1 | grep -vE "^ℹ (suites|duration)" | head -70', description: 'Read the actual verification result' }, f.execution);
+  assert(!displayed.spec.command.includes('head -70')); assert(!displayed.spec.command.includes('grep -vE'));
+  assert.match(displayed.result.stdout.text, /terminal display filters removed/);
 });
 
 test('arbitrary compound commands and JavaScript source are never rewritten', async t => {

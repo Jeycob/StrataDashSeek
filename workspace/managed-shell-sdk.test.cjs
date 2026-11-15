@@ -40,7 +40,7 @@ test('real Native bash schema validates a scoped managed body without mutating c
  });
  const a=f.agent('one');f.managed.install(a);const definition=f.ctx.tools.get('bash',a);
  assert.notEqual(definition,f.native);assert.equal(definition.output.schema,f.native.output.schema);assert.equal(definition.output.presentationMeta,f.native.output.presentationMeta);
- assert.equal(definition.parameters.additionalProperties,false);assert(!Object.hasOwn(definition.parameters.properties,'run_in_background'));assert(!Object.hasOwn(definition.parameters.properties,'sandbox_permissions'));
+  assert.equal(definition.parameters.additionalProperties,false);assert.equal(definition.parameters.properties.run_in_background.type,'boolean');assert(!Object.hasOwn(definition.parameters.properties,'sandbox_permissions'));
  const toolSet=await f.admit(a);t.after(()=>toolSet.dispose());const result=await f.call(a,undefined,{toolSet});
  assert.equal(result.isError,false,JSON.stringify(result));assert.equal(result.value.kind,'foreground');assert.equal(result.value.stdout.text,'documentation');assert.equal(result.value.cwd,'/managed/project');assert.equal(result.meta.cwd,'/managed/project');assert(!Object.hasOwn(result.value.stdout,'privateDetail'));assert(!Object.hasOwn(result.value.sandbox,'privateDetail'));assert.match(result.content[0].text,/output truncated/);
  assert.equal(f.calls.length,1);assert.equal(f.nativeCalls.length,0);assert.equal(f.ctx.tools.get('bash'),f.native);

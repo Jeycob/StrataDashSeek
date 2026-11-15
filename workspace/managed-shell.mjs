@@ -1,10 +1,12 @@
 import { createProjectCommandRunner, projectCommandParameters } from './project-tool.mjs';
+import { renderProjectBackground } from './project-process.mjs';
 
 const stream = value => ({ text: value.text, truncated: Boolean(value.truncated), ...(value.spillPath === undefined ? {} : { spillPath: value.spillPath }) });
 function foreground({ cwd, spec, result }) {
   return { kind: 'foreground', cwd, exitCode: result.exitCode, signal: result.signal ?? null, timedOut: result.timedOut, aborted: result.aborted, timeoutMs: result.timeoutMs ?? spec.timeoutMs, stdout: stream(result.stdout), stderr: stream(result.stderr), ...(result.sandbox ? { sandbox: { mode: result.sandbox.mode, denied: result.sandbox.denied, ...(result.sandbox.enforcement === undefined ? {} : { enforcement: result.sandbox.enforcement }), ...(result.sandbox.runnerFailed === undefined ? {} : { runnerFailed: result.sandbox.runnerFailed }) } } : {}) };
 }
-function render(_args, value) {
+function render(args, value) {
+  if (value.kind === 'background') return renderProjectBackground(args, value);
   const text = part => part.text + (part.truncated ? '\n[output truncated; full output: ' + (part.spillPath ?? '(unavailable)') + ']' : '');
   const out = text(value.stdout), err = text(value.stderr);
   let body = out + (err ? (out && !out.endsWith('\n') ? '\n' : '') + '[stderr]\n' + err : '');
@@ -30,7 +32,7 @@ export function createManagedShell(ctx, manager, run = createProjectCommandRunne
   function install(agent) {
     if (registrations.has(agent) || !candidate(agent)) return;
     const original = ctx.tools.get('bash', agent); if (!original || definitions.has(original)) return;
-    const definition = { ...original, description: 'Run a foreground bash command in this isolated project with its assigned ports, database and prepared tools. This is the same confined executor as project_exec. Commands time out and stop after at most 120000ms. Inspect real exit codes. Background and permission escalation arguments are not supported for managed commands.', parameters: projectCommandParameters, isConcurrencySafe: () => false, output: { ...original.output, render }, async execute(args, execution) { return foreground(await run(args, execution)); } };
+    const definition = { ...original, description: 'Run a confined bash command in this isolated project with its assigned ports, database and prepared tools, using the same executor as project_exec. Foreground commands stop after at most120000ms. Explicit run_in_background returns an owned SDK job ID with a five-minute default and ten-minute maximum lifetime; use job_output/job_list/job_kill, never nohup, setsid or broad process-name kills. No timeout promotion or permission escalation. Inspect real exit codes.', parameters: projectCommandParameters, isConcurrencySafe: () => false, output: { ...original.output, render }, async execute(args, execution) { const value = await run(args, execution); return value.background ?? foreground(value); } };
     const dispose = agent.ctx.tools.register(definition); definitions.add(definition); registrations.set(agent, { definition, dispose });
   }
   function handles(exec) { return exec.name === 'bash' && Boolean(exec.agent) && definitions.has(ctx.tools.get('bash', exec.agent, exec.toolSet)); }

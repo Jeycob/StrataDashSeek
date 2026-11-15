@@ -2,15 +2,17 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { WorkbenchError, within } from './policy.mjs';
 import { normalizeVerificationCommand, nodeTestCommandRecipe } from './tool-recovery.mjs';
+import { createProjectProcessStarter, projectBackgroundSchema, projectJobLifetime, renderProjectBackground } from './project-process.mjs';
 const quote = text => "'" + String(text).replaceAll("'", "'\\''") + "'";
-export const projectCommandParameters = { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' }, workdir: { type: 'string' }, timeoutMs: { type: 'number' } }, required: ['command', 'description'], additionalProperties: false };
+export const projectCommandParameters = { type: 'object', properties: { command: { type: 'string' }, description: { type: 'string' }, workdir: { type: 'string' }, timeoutMs: { type: 'number', description: 'Foreground deadline (default 60000ms, maximum 120000ms); for explicit background execution, lifetime (default 300000ms, maximum 600000ms).' }, run_in_background: { type: 'boolean', description: 'Explicitly start an owned, confined background job. Collect with job_output; stop with job_kill. Maximum lifetime is ten minutes. No automatic timeout promotion.' } }, required: ['command', 'description'], additionalProperties: false };
 
 // Both model-facing command names enter the same bounded, confining executor.
 export function createProjectCommandRunner(ctx, manager, config = {}) {
-  return async (args, execution) => {
-    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !Object.hasOwn(projectCommandParameters.properties, key))) throw new WorkbenchError('INVALID_COMMAND', 'Only command, description, workdir and timeoutMs are supported for managed foreground commands.', 400);
+  const processes = createProjectProcessStarter(ctx, config.processTimers);
+  async function prepare(args, execution) {
+    if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !Object.hasOwn(projectCommandParameters.properties, key))) throw new WorkbenchError('INVALID_COMMAND', 'Only command, description, workdir, timeoutMs and run_in_background are supported for managed commands.', 400);
     if (typeof args.command !== 'string' || !args.command.trim() || args.command.length > 65536 || typeof args.description !== 'string' || !args.description.trim()) throw new WorkbenchError('INVALID_COMMAND', 'A bounded command and description are required.', 400);
-    if (args.workdir !== undefined && typeof args.workdir !== 'string' || args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0)) throw new WorkbenchError('INVALID_COMMAND', 'Invalid command directory or timeout.', 400);
+    if (args.workdir !== undefined && typeof args.workdir !== 'string' || args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) || args.run_in_background !== undefined && typeof args.run_in_background !== 'boolean') throw new WorkbenchError('INVALID_COMMAND', 'Invalid command directory, timeout or background flag.', 400);
     const agent = manager.ownerAgent(execution.agent), project = manager.data.sessions[agent?.id];
     if (!project || project.legacy) throw new WorkbenchError('NO_MANAGED_PROJECT', 'Start a new isolated project to use this tool.');
     const cwd = path.resolve(project.root, args.workdir ?? '.');
@@ -30,25 +32,36 @@ export function createProjectCommandRunner(ctx, manager, config = {}) {
     const filtered = normalizeVerificationCommand(args.command);
     const compatible = nodeTestCommandRecipe(filtered.command, { nodePath: node, helperPath: testHelper });
     const command = 'exec ' + [node, wrapper, '--', 'bash', '-o', 'pipefail', '-c', compatible.command].map(quote).join(' ');
-    const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: Math.min(120000, Math.max(1000, args.timeoutMs ?? 60000)), signal: execution.signal, onExpiry: 'kill', dshEnv: { ...ctx.shellEnv.collect(execution), DSH_PROJECT_ROOT: project.root, DSH_PROJECT_READ_ONLY: mode === 'read-only' ? '1' : '0' }, sandboxPolicy: { mode, workspaceRoot: project.root, additionalWritableRoots: mode === 'read-only' ? [] : project.gitWritableRoots ?? [] } });
-    const result = await (await ctx.shell.execute(spec)).result();
+    const background = args.run_in_background === true;
+    const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: background ? projectJobLifetime(args.timeoutMs) : Math.min(120000, Math.max(1000, args.timeoutMs ?? 60000)), signal: execution.signal, onExpiry: background ? 'none' : 'kill', dshEnv: { ...ctx.shellEnv.collect(execution), DSH_PROJECT_ROOT: project.root, DSH_PROJECT_READ_ONLY: mode === 'read-only' ? '1' : '0' }, sandboxPolicy: { mode, workspaceRoot: project.root, additionalWritableRoots: mode === 'read-only' ? [] : project.gitWritableRoots ?? [] } });
+    const adaptations = [];
+    if (filtered.changed) adaptations.push(filtered.reason === 'VERIFICATION_OUTPUT_FILTERS_REMOVED' ? '[Harness: terminal display filters removed from verification; bounded output preserves progress and the real exit status.]' : '[Harness: terminal tail filter removed from verification; bounded output retains the first diagnostic.]');
+    if (compatible.changed) adaptations.push('[Harness: Node test compatibility helper used; directory operands select real test files, with original options and exit status retained.]');
+    return { cwd, spec, adaptations };
+  }
+  const run = async (args, execution) => {
+    const prepared = await prepare(args, execution);
+    execution.signal.throwIfAborted();
+    if (args.run_in_background === true) return { ...prepared, background: await processes.start(prepared, execution, args) };
+    const result = await (await ctx.shell.execute(prepared.spec)).result();
     execution.signal.throwIfAborted();
     if (result.aborted) { const error = Error('Project command aborted'); error.name = 'AbortError'; throw error; }
-    const adaptations = [];
-    if (filtered.changed) adaptations.push('[Harness: terminal tail filter removed from verification; bounded output retains the first diagnostic.]');
-    if (compatible.changed) adaptations.push('[Harness: Node test compatibility helper used; directory operands select real test files, with original options and exit status retained.]');
-    return { cwd, spec, result: adaptations.length ? { ...result, stdout: { ...result.stdout, text: adaptations.join('\n') + '\n' + result.stdout.text } } : result };
+    return { ...prepared, result: prepared.adaptations.length ? { ...result, stdout: { ...result.stdout, text: prepared.adaptations.join('\n') + '\n' + result.stdout.text } } : result };
   };
+  run.dispose = processes.dispose;
+  return run;
 }
 
 export function registerProjectTool(ctx, manager, run = createProjectCommandRunner(ctx, manager)) {
   const tool = {
     name: 'project_exec',
-    description: 'Run a shell command inside this isolated project, using the same executor as managed bash. Writes are confined to its directory. PORT, API_PORT, DATABASE_URL, prepared Playwright and optional .NET paths are set automatically. Use direct verification commands such as npm test, npm run build or dotnet test; do not mask their exit status with pipelines or || true. Literal Node test directories are expanded to bounded test file selections. Commands stop on timeout.',
+    description: 'Run a shell command inside this isolated project, using the same executor as managed bash. Writes remain confined; assigned ports, database and prepared tools are preserved. Use direct verification commands without exit-masking pipelines. Foreground commands stop after at most120000ms. Explicit run_in_background starts a session-owned SDK job with a five-minute default and ten-minute maximum lifetime; use job_output/job_list/job_kill by its returned job ID, never nohup, setsid or process-name kills. There is no automatic timeout promotion.',
     parameters: projectCommandParameters,
-    output: { schema: { type: 'object', properties: { cwd: { type: 'string' }, exitCode: { oneOf: [{ type: 'integer' }, { type: 'null' }] }, stdout: { type: 'string' }, stderr: { type: 'string' }, timedOut: { type: 'boolean' } }, required: ['cwd', 'exitCode', 'stdout', 'stderr', 'timedOut'], additionalProperties: false }, render: (_args, v) => [{ type: 'text', text: `Exit code: ${v.exitCode}${v.timedOut ? ' (timed out)' : ''}\n${v.stdout}${v.stderr ? '\n[stderr]\n' + v.stderr : ''}` }] },
+    output: { schema: { oneOf: [{ type: 'object', properties: { cwd: { type: 'string' }, exitCode: { oneOf: [{ type: 'integer' }, { type: 'null' }] }, stdout: { type: 'string' }, stderr: { type: 'string' }, timedOut: { type: 'boolean' } }, required: ['cwd', 'exitCode', 'stdout', 'stderr', 'timedOut'], additionalProperties: false }, projectBackgroundSchema] }, render: (args, v) => v.kind === 'background' ? renderProjectBackground(args, v) : [{ type: 'text', text: `Exit code: ${v.exitCode}${v.timedOut ? ' (timed out)' : ''}\n${v.stdout}${v.stderr ? '\n[stderr]\n' + v.stderr : ''}` }] },
     async execute(args, execution) {
-      const { cwd, result } = await run(args, execution);
+      const value = await run(args, execution);
+      if (value.background) return value.background;
+      const { cwd, result } = value;
       return { cwd, exitCode: result.exitCode, stdout: result.stdout.text, stderr: result.stderr.text, timedOut: result.timedOut };
     },
   };

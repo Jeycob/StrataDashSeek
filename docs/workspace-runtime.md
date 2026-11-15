@@ -178,3 +178,17 @@ cleanup and I/O deadlines. A build alone does not satisfy this reminder.
 Unchanged repositories and prose-only tasks are excluded. The reminder is
 advisory; it never invents test cases, edits application code, changes a result
 or resets the existing repair/stage limits.
+
+Temporary servers can use explicit `run_in_background: true` on managed `bash`
+or `project_exec`. The acknowledgement is the canonical Native background job
+address, not verification completion. `job_output` reads the bounded log and
+`job_kill` stops that registered job. The actual executing agent owns the job;
+another session cannot acquire it by knowing its ID. A missing registry or job
+controller fails closed. Both execution modes use the same prepared project
+environment and filesystem policy, including an actual child agent's read-only
+mode. The foreground deadline stays at most 120 seconds; a background job has a
+five-minute default lifetime and ten-minute maximum. Cancellation, owner
+disposal and executor disposal drain only their own process handles. There is
+no implicit timeout promotion, adoption of arbitrary PIDs or process-name kill.
+Use foreground verification for a completed milestone and Docker for lasting
+application deployments.
