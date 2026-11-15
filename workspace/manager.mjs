@@ -8,7 +8,7 @@ import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY
 import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash } from './storage.mjs';
 import { LiveChanges } from './changes.mjs';
 import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
-import { guideFirstCheck } from './verification-guidance.mjs';
+import { guideFirstCheck, warnStageBudget } from './verification-guidance.mjs';
 const run = promisify(execFile);
 const notice = text => ({ id: crypto.randomUUID(), role: 'user', source: { kind: 'workspace-runtime' }, content: [{ type: 'text', text }] });
 
@@ -126,7 +126,7 @@ export class WorkspaceManager {
     });
   }
   async preStep({ agent, signal, turn, step }) {
-    const initiator = agent.id; agent = this.ownerAgent(agent);
+    const initiator = agent.id, accessSession = agent.session; agent = this.ownerAgent(agent);
     await this.drainToolResults(agent.id);
     if (this.data.trash[agent.id]) throw new WorkbenchError('SESSION_IN_TRASH', 'Restore this conversation before continuing.');
     const record = await this.ensureProject(agent, signal);
@@ -139,6 +139,7 @@ export class WorkspaceManager {
     // One admission per proposed step; retries do not consume a second stage step.
     if (record.lastStep !== `${initiator}:${turn}:${step}`) { record.lastStep = `${initiator}:${turn}:${step}`; budget.step(settings.maxStageSteps); }
     await guideFirstCheck(this, agent, record, budget, signal);
+    await warnStageBudget(this, agent, record, budget, settings.maxStageSteps, signal, accessSession);
     record.budget = budget; await this.save();
     if (budget.blocked) throw new WorkbenchError(budget.blocked.code, budget.blocked.message + ' Open Workspace → Run review to choose a different strategy.');
   }
