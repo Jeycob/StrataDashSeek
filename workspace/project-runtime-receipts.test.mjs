@@ -44,6 +44,15 @@ test('bounded reconciliation never retries execution or drops unknown records',a
  const abort=new AbortController();abort.abort();await assert.rejects(reconcileProjectRuntimeReceipts(f.store,{signal:abort.signal,callApps:()=>assert.fail('aborted reconcile dispatched')}));
 });
 
+test('a second admission check cannot mistake in-flight orphan reconciliation for a live owned process',async t=>{
+ const f=await fixture(t),row=sample();await f.store.save(row);let releaseStop,entered;const started=new Promise(r=>entered=r);let calls=0;
+ const callApps=async()=>{calls++;entered();return new Promise(r=>releaseStop=r);};const first=reconcileProjectRuntimeReceipts(f.store,{callApps});await started;
+ assert.equal(f.store.isLive(row.generation),false);
+ const second=await reconcileProjectRuntimeReceipts(f.store,{callApps});assert.equal(second.reconciliationRequired,true);assert.equal(second.pending[0].liveOwned,false);assert.equal(calls,1);
+ releaseStop({version:1,state:'unknown'});assert.equal((await first).reconciliationRequired,true);assert.equal((await f.store.list()).length,1);
+ const confirmed=await reconcileProjectRuntimeReceipts(f.store,{callApps:async(_route,data)=>stopped(data)});assert.equal(confirmed.reconciliationRequired,false);
+});
+
 test('private receipt aliases and writable permissions are refused',{skip:process.platform==='win32'},async t=>{
  const f=await fixture(t);await f.store.save(sample());const alias=path.join(f.root,'alias');await fs.link(f.file,alias);await assert.rejects(f.store.list(),{code:'PROJECT_RUNTIME_RECEIPT_INVALID'});await fs.unlink(alias);
  await fs.chmod(f.file,0o644);await assert.rejects(f.store.list(),{code:'PROJECT_RUNTIME_RECEIPT_INVALID'});await fs.chmod(f.file,0o600);

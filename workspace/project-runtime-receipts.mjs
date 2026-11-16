@@ -54,8 +54,8 @@ export function createProjectRuntimeReceiptStore(privateRoot) {
       return mutate(rows=>{const prior=rows.find(item=>item.generation===copy.generation);if(prior && keys.some(key=>['operationId','jobId'].includes(key) ? prior[key]!==null && prior[key]!==copy[key] : prior[key]!==copy[key]))throw fail('PROJECT_RUNTIME_RECEIPT_MISMATCH');return[...rows.filter(item=>item.generation!==copy.generation),copy];});
     },
     remove(generation) { if(!hex32.test(generation ?? ''))return Promise.reject(fail('PROJECT_RUNTIME_RECEIPT_INVALID'));return mutate(rows=>rows.filter(row=>row.generation!==generation)); },
-    claim(generation) { if(!hex32.test(generation ?? '') || live.has(generation))throw fail('PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED');const identity={};live.set(generation,identity);return()=>{if(live.get(generation)===identity)live.delete(generation);}; },
-    isLive:generation=>live.has(generation),
+    claim(generation,{reconciling=false}={}) { if(!hex32.test(generation ?? '') || live.has(generation))throw fail('PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED');const identity={reconciling};live.set(generation,identity);return()=>{if(live.get(generation)===identity)live.delete(generation);}; },
+    isLive:generation=>live.has(generation)&&live.get(generation).reconciling!==true,
   };
   stores.set(file,store);return store;
 }
@@ -68,7 +68,10 @@ export async function reconcileProjectRuntimeReceipts(store, { callApps, appsCon
     if (checked >= 32 || Date.now() >= deadline || signal?.aborted) break;
     // Claim synchronously before any await so reopen/launch cannot take this
     // generation while reconciliation is stopping its historical capability.
-    const release = store.claim(row.generation); checked++;
+    let release;
+    try { release = store.claim(row.generation,{reconciling:true}); }
+    catch (error) { if(error.code==='PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED')continue;throw error; }
+    checked++;
     try {
       const bounded = AbortSignal.timeout(Math.max(1,Math.min(5000,deadline-Date.now())));
       const value = await callApps('/project-runtime',{op:'stop',sessionId:row.sessionId,generation:row.generation,stopToken:row.stopToken},{...appsConfig,timeoutMs:5000,signal:signal?AbortSignal.any([signal,bounded]):bounded});
