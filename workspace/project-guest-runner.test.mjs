@@ -10,15 +10,16 @@ function fixture() {
   const manager={ownerAgent:a=>a.owner||a,data:{sessions:{owner:{root,independentRepository:true}}},async withProjectRuntimeAuthority(input,action){authorities.push(input);return action('a'.repeat(32));}};
   const callApps=async(route,data,cfg)=>{
     calls.push({route,data,cfg});
-    if(data?.op==='execute'){runtime={version:1,state:'running',sessionId:data.sessionId,generation:data.generation,jobId:'b'.repeat(16),operationId:'c'.repeat(32),stopToken:data.stopToken};if(holdAdmission)await new Promise(r=>releaseAdmission=r);if(loseAdmission)throw Error('SYNTHETIC_LOST_ADMISSION_REPLY');return runtime;}
+    if(data?.op==='execute'){assert.equal(rows.get(data.generation)?.stopToken,data.stopToken,'receipt must precede RPC');runtime={version:1,state:'running',sessionId:data.sessionId,generation:data.generation,jobId:'b'.repeat(16),operationId:'c'.repeat(32),stopToken:data.stopToken};if(holdAdmission)await new Promise(r=>releaseAdmission=r);if(loseAdmission)throw Error('SYNTHETIC_LOST_ADMISSION_REPLY');return runtime;}
     if(data?.op==='stop'){if(failStops-->0)throw Error('Synthetic lost stop response');if(holdStop)await new Promise(r=>releaseStop=r);jobStatus='interrupted';return{version:1,state:'stopped',sessionId:data.sessionId,generation:data.generation,operationId:runtime.operationId};}
     if(route.startsWith('/job-status'))return{version:1,job:{id:runtime.jobId,action:'project-executor',status:jobStatus,terminal:jobStatus!=='running',...(['passed','failed'].includes(jobStatus)?{exitCode:code}:{})}};
     if(route.startsWith('/job-log'))return{text:'actual synthetic output\n'};
     assert.fail('Unexpected RPC');
   };
-  const run=createGuestProjectCommandRunner(ctx,manager,{appsConfig:{projectRuntime:{enabled:true}},callApps,pollMs:1,wait:()=>new Promise(r=>setTimeout(r,1))});
+  const rows=new Map(),live=new Set(),receiptStore={async list(){return[...rows.values()].map(row=>({...row}));},async save(row){rows.set(row.generation,{...row});},async remove(generation){rows.delete(generation);},claim(generation){assert(!live.has(generation));live.add(generation);return()=>live.delete(generation);},isLive:generation=>live.has(generation)};
+  const run=createGuestProjectCommandRunner(ctx,manager,{appsConfig:{projectRuntime:{enabled:true}},callApps,pollMs:1,wait:()=>new Promise(r=>setTimeout(r,1)),receiptStore});
   const controller=new AbortController(),execution={agent:child,signal:controller.signal,callId:'tool1'};
-  return{run,ctx,manager,owner,child,calls,authorities,controller,execution,emit(name,...args){for(const fn of hooks.get(name)??[])fn(...args);},finish(value=0){code=value;jobStatus=value===0?'passed':'failed';},holdStop(){holdStop=true;},releaseStop(){holdStop=false;releaseStop?.();},holdAdmission(){holdAdmission=true;},releaseAdmission(){holdAdmission=false;releaseAdmission?.();},failStops(count){failStops=count;},loseAdmission(){loseAdmission=true;}};
+  return{run,ctx,manager,owner,child,calls,authorities,controller,execution,receiptStore,emit(name,...args){for(const fn of hooks.get(name)??[])fn(...args);},finish(value=0){code=value;jobStatus=value===0?'passed':'failed';},holdStop(){holdStop=true;},releaseStop(){holdStop=false;releaseStop?.();},holdAdmission(){holdAdmission=true;},releaseAdmission(){holdAdmission=false;releaseAdmission?.();},failStops(count){failStops=count;},loseAdmission(){loseAdmission=true;}};
 }
 const args={command:'node check.mjs',description:'Check project',timeoutMs:1000};
 const eventually=async check=>{for(let n=0;n<100&&!check();n++)await new Promise(r=>setTimeout(r,2));assert(check());};
@@ -67,4 +68,14 @@ test('lost admission reply retains its pre-minted stop capability and heavy leas
   await assert.rejects(f.run({...args,timeoutMs:10000},f.execution),{code:'PROJECT_RUNTIME_ADMISSION_UNVERIFIED'});releaseTool();await eventually(()=>f.calls.some(c=>c.data?.op==='stop'));assert.equal(released,0);
   const create=f.calls.find(c=>c.data?.op==='execute').data,stop=f.calls.find(c=>c.data?.op==='stop').data;assert.match(create.stopToken,/^[A-Za-z0-9_-]{43}$/);assert.equal(stop.generation,create.generation);assert.equal(stop.stopToken,create.stopToken);
   assert(!f.calls.some(c=>c.route.startsWith('/job-status')));f.releaseStop();await eventually(()=>released===1);await f.run.dispose();
+});
+
+test('orphan receipt blocks a new command before any fresh authority or execute RPC',async()=>{
+ const f=fixture();await f.receiptStore.save({kind:'executor',sessionId:'previous',accessSessionId:'previous-child',generation:'a'.repeat(32),stopToken:'s'.repeat(43),startedAt:1,operationId:null,jobId:null});
+ await assert.rejects(f.run(args,f.execution),{code:'PROJECT_RUNTIME_RECONCILIATION_REQUIRED'});assert.equal(f.authorities.length,0);assert.equal(f.calls.length,1);assert.equal(f.calls[0].data.op,'stop');assert.equal((await f.receiptStore.list()).length,1);
+ await f.run.dispose();
+});
+
+test('receipt persistence failure prevents execution and Native authority issuance',async()=>{
+ const f=fixture();f.receiptStore.save=async()=>{throw Error('SYNTHETIC_FSYNC_FAILED');};await assert.rejects(f.run(args,f.execution),/FSYNC_FAILED/);assert.equal(f.calls.length,0);assert.equal(f.authorities.length,0);await f.run.dispose();
 });

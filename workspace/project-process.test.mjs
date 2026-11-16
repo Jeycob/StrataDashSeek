@@ -60,7 +60,7 @@ async function fixture(t, { controller = true, admission = false } = {}) {
   new S.LocalJobs(ctx, { maxConcurrentJobsPerOwner: 4, retainBytes: 65536, settledRetainBytes: 16384, pumpPollMs: 2 });
   if (controller) S.applyJobTools(ctx, { completionDelivery: 'quiet', waitTimeoutMs: 100, maxWaitTimeoutMs: 1000, inlineOutputBytes: 2048 });
   S.applyBash(ctx, { enableRunInBackground: false }); const native = ctx.tools.get('bash');
-  const manager = { existing: new Set(), data: { installedAt: 1000, sessions: {} }, ownerAgent: agent => agent?.owner ?? agent };
+  const manager = { root: directory, existing: new Set(), data: { installedAt: 1000, sessions: {} }, ownerAgent: agent => agent?.owner ?? agent };
   const processTimers = { setTimer(fn, ms) { const token = { fn, ms, unref() {} }; timers.add(token); return token; }, clearTimer(token) { timers.delete(token); } };
   const run = createProjectCommandRunner(ctx, manager, { processTimers });
   const managed = createManagedShell(ctx, manager, run); registerProjectTool(ctx, manager, run);
