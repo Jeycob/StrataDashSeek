@@ -9,6 +9,7 @@ import {EventLedger,uniqueEngineRecord} from './ledger.mjs';
 import {FairGate,heavyTool,normalizeCompaction} from './gate.mjs';
 import {resourceSnapshot} from './resources.mjs';
 import {bindHeavyToolLease} from './heavy-tool-lease.mjs';
+import {checkWorkspaceHeavyAdmission} from './heavy-admission.mjs';
 
 export const name='qwen-efficiency';
 export const inject=['agents','tools','systemPrompt','shell','shellEnv','llm'];
@@ -109,7 +110,7 @@ export async function apply(ctx,config={}){
 
   ctx.on('tools/execute',async(exec,next)=>{
     if(!exec.agent)return next();const {id}=activeFor(exec.agent),queued=Date.now();let permit,started,release;
-    try{if(config.schedule!==false&&heavyTool(exec)){permit=await toolGate.acquire({rootId:id,sessionId:exec.agent.id,signal:exec.signal});phase(id,'tool-queue',queued,Date.now());started=Date.now();release=bindHeavyToolLease(exec,permit,()=>phase(id,'heavy-tools',started,Date.now()));}started??=Date.now();return await next();}
+    try{if(heavyTool(exec)){await checkWorkspaceHeavyAdmission(ctx,exec);if(config.schedule!==false){permit=await toolGate.acquire({rootId:id,sessionId:exec.agent.id,signal:exec.signal});await checkWorkspaceHeavyAdmission(ctx,exec);phase(id,'tool-queue',queued,Date.now());started=Date.now();release=bindHeavyToolLease(exec,permit,()=>phase(id,'heavy-tools',started,Date.now()));}}started??=Date.now();return await next();}
     finally{phase(id,started===undefined?'tool-queue':'tools',started??queued,Date.now());if(release)release();else permit?.release();}
   },{global:true});
   ctx.on('tools/result',(exec,result)=>{

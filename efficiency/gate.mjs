@@ -25,6 +25,7 @@ export class FairGate {
 }
 
 export function heavyTool(exec) {
+  if (exec.name === 'project_apps') return exec.arguments?.operation === 'verify_deploy';
   if (exec.name === 'verify_project') return true;
   if (!['project_exec', 'bash', 'terminal'].includes(exec.name)) return false;
   if (exec.arguments?.run_in_background === true) return true;
