@@ -1,6 +1,7 @@
 'use strict';
 const http=require('node:http'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {AppsManager}=require('./apps-manager.cjs');
+const {diagnosticFor}=require('./apps-managed-resources.cjs');
 const {createPreview}=require('./apps-preview.cjs');
 const {guardAppsTarget}=require('./apps-context-guard.cjs');
 const admission=require('./runtime-client.cjs');
@@ -42,7 +43,7 @@ function createAppsService(cfg={},injected){
   if(u.pathname==='/project-action')return json(res,202,manager.enqueue(data.id,data.action,{releaseId:data.releaseId,targetId:data.targetId}));
   if(u.pathname==='/container-action')return json(res,200,await manager.containerAction(data.id,data.action));
   return json(res,404,{error:'Not found'});
- }catch(e){if(!res.headersSent)json(res,e.status||400,{error:e.message});else res.destroy();}});
+ }catch(e){const resourceDiagnostic=diagnosticFor(e);if(!res.headersSent)json(res,e.status||400,{error:e.message,...(resourceDiagnostic?{code:e.code,resourceDiagnostic}:{})});else res.destroy();}});
  server.on('close',()=>{clearInterval(clock);for(const p of previews)p.close();});return{server,manager,previews};
 }
 module.exports={createAppsService};

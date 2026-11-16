@@ -1,8 +1,12 @@
 'use strict';
+const {supportedInfo,inspection}=require('./resource-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),fsp=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),http=require('node:http'),crypto=require('node:crypto'),{execFile}=require('node:child_process'),{promisify}=require('node:util'),{DatabaseSync}=require('node:sqlite');
 const {DockerSqliteData,planOf}=require('./apps-deployment-data.cjs'),{DockerEngine,LABEL}=require('./apps-engine.cjs'),exec=promisify(execFile);
 const project='a'.repeat(16),release='b'.repeat(16),generation='c'.repeat(16),candidate='d'.repeat(16),old='e'.repeat(64),image='sha256:'+'f'.repeat(64);
 const basePlan={projectId:project,releaseId:release,dataGeneration:generation,candidateDataGeneration:candidate,volume:'data',database:'app.sqlite',mountPath:'/data',oldContainerIds:[old]};
+test('data helper start refuses capabilities lost after its known create without a start POST',async t=>{
+ const f=await fixture(t),active=await f.adapter.inspectActive(f.plan),before=f.bodies.length;f.calls.length=0;f.manager.engine.blockResourcesAfterCreate=true;await assert.rejects(f.adapter.prepareShadow(f.plan,active),{code:'MANAGED_RESOURCE_CAPABILITY_UNSUPPORTED',phase:'recovery_required'});assert(f.bodies.length>before);assert(!f.calls.some(c=>c[1].endsWith('/start')));
+});
 function sql(file,statement){const db=new DatabaseSync(file);try{return statement.startsWith('SELECT')?db.prepare(statement).all():db.exec(statement);}finally{db.close();}}
 async function fixture(t,{first=false,helperTimeoutMs=2000}={}){
  const directory=await fsp.mkdtemp(path.join(os.tmpdir(),'apps-data-adapter-')),volumes=new Map(),containers=new Map(),calls=[],bodies=[],job={id:release,projectId:project},plan={...basePlan,oldContainerIds:first?[]:[old]};let next=1,hang=false,ambiguousVolume=false;
@@ -10,20 +14,21 @@ async function fixture(t,{first=false,helperTimeoutMs=2000}={}){
  if(!first){const v=volume('production');sql(path.join(v.dir,'app.sqlite'),"CREATE TABLE orders(id INTEGER PRIMARY KEY,value TEXT); INSERT INTO orders VALUES(1,'retained-order');");containers.set(old,{Id:old,Image:'sha256:'+'1'.repeat(64),Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:project}},State:{Running:true},Mounts:[{Type:'volume',Name:v.Name,Destination:'/data',RW:true}]});}
  const server=http.createServer(async(req,res)=>{let input='';for await(const chunk of req)input+=chunk;const body=input?JSON.parse(input):null,u=new URL(req.url,'http://local');calls.push([req.method,u.pathname]);const send=(value,status=200)=>{res.writeHead(status,{'Content-Type':'application/json'});res.end(JSON.stringify(value));};
   try{
-   if(u.pathname.startsWith('/images/'))return send({Id:image,Config:{Labels:{[LABEL+'.data-helper']:'sqlite-v1'}}});
+   if(u.pathname==='/info')return send(supportedInfo(manager.engine.resourceCapabilities));
+   if(u.pathname.startsWith('/images/'))return send({Id:image,Config:{User:'',Labels:{[LABEL+'.data-helper']:'sqlite-v1'}}});
    if(u.pathname==='/volumes/create'){const v=volume(body.Name,body.Labels);if(ambiguousVolume)return send({message:'lost acknowledgement'},500);return send(v);}
    if(u.pathname.startsWith('/volumes/'))return volumes.has(decodeURIComponent(u.pathname.slice(9)))?send(volumes.get(decodeURIComponent(u.pathname.slice(9)))):send({message:'missing'},404);
    if(u.pathname==='/containers/json'){const filter=JSON.parse(u.searchParams.get('filters')).volume[0];return send([...containers.values()].filter(c=>c.Mounts.some(m=>m.Name===filter)).map(c=>({Id:c.Id})));}
-   if(u.pathname==='/containers/create'){bodies.push(body);assert(job.dataOperations&&Object.values(job.dataOperations.operations).some(o=>o.state==='intent'));const id=(next++).toString(16).padStart(64,'0');containers.set(id,{Id:id,Name:'/'+u.searchParams.get('name'),Image:body.Image,Config:{Labels:body.Labels},body,State:{Running:false,Status:'created',StartedAt:'0001-01-01T00:00:00Z'},Mounts:body.HostConfig.Mounts.map(m=>({Type:m.Type,Name:m.Source,Destination:m.Target,RW:!m.ReadOnly}))});return send({Id:id});}
+   if(u.pathname==='/containers/create'){bodies.push(body);assert(job.dataOperations&&Object.values(job.dataOperations.operations).some(o=>o.state==='intent'));const id=(next++).toString(16).padStart(64,'0');containers.set(id,{...inspection(id,body,u.searchParams.get('name')),body});if(manager.engine.blockResourcesAfterCreate)manager.engine.resourceCapabilities={SwapLimit:false};return send({Id:id});}
    const match=u.pathname.match(/^\/containers\/([a-f0-9]{64})\/(json|start|wait|logs|stop|kill)$/),c=match&&containers.get(match[1]);if(!c)return send({message:'not found'},404);
    if(match[2]==='json')return send(c);
-   if(match[2]==='start'){c.State.Running=true;c.work=(async()=>{if(hang)return new Promise(()=>{});const opts=JSON.parse(c.body.Cmd[2]);for(const m of c.body.HostConfig.Mounts){if(m.Target==='/source')opts.sourceRoot=volumes.get(m.Source).dir;if(m.Target==='/target')opts.targetRoot=volumes.get(m.Source).dir;}if(opts.quiescentSource){assert.equal(opts.scratchRoot,'/scratch');assert(c.body.HostConfig.Tmpfs['/scratch']);opts.scratchRoot=path.join(directory,'scratch-'+c.Id);fs.mkdirSync(opts.scratchRoot,{mode:0o700});}try{const result=await exec(process.execPath,['-e',c.body.Cmd[0],c.body.Cmd[1],JSON.stringify(opts)],{timeout:1500,maxBuffer:4096,windowsHide:true});c.output=result.stdout;c.exit=0;}catch{c.output='';c.exit=1;}c.State.Running=false;})();return send({});}
+   if(match[2]==='start'){c.State.Running=true;c.work=(async()=>{if(hang)return new Promise(()=>{});const opts=JSON.parse(c.body.Cmd[2]);for(const m of c.body.HostConfig.Mounts){if(m.Target==='/source')opts.sourceRoot=volumes.get(m.Source).dir;if(m.Target==='/target')opts.targetRoot=volumes.get(m.Source).dir;}if(opts.quiescentSource){assert.equal(opts.scratchRoot,'/scratch');assert(c.body.HostConfig.Tmpfs['/scratch']);opts.scratchRoot=path.join(directory,'scratch-'+c.Id);fs.mkdirSync(opts.scratchRoot,{mode:0o700});}try{const result=await exec(process.execPath,['-e',c.body.Cmd[0],c.body.Cmd[1],JSON.stringify(opts)],{timeout:1500,maxBuffer:4096,windowsHide:true});c.output=result.stdout;c.exit=0;}catch{c.output='';c.exit=1;}c.State.Running=false;})();return send({},204);}
    if(match[2]==='wait'){if(hang)return;await c.work;return send({StatusCode:c.exit});}
    if(match[2]==='logs')return res.end(c.output);
    if(match[2]==='stop'||match[2]==='kill'){c.State.Running=false;return send({});}
   }catch(error){send({message:'fixture error'},500);}
  });await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
- const manager={cfg:{dataHelperImageId:image},engine:new DockerEngine({url:'http://127.0.0.1:'+server.address().port}),store:{projects:{}},busy:release,save(){},log(){}};
+ const manager={cfg:{dataHelperImageId:image},engine:new DockerEngine({url:'http://127.0.0.1:'+server.address().port}),store:{projects:{},jobs:[job]},busy:release,save(){},log(){}};
  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));const real=await fsp.realpath(directory);assert.equal(path.dirname(real),await fsp.realpath(os.tmpdir()));assert(path.basename(real).startsWith('apps-data-adapter-'));assert.equal((await fsp.lstat(directory)).isSymbolicLink(),false);await fsp.rm(real,{recursive:true,force:true});});
  return{directory,volumes,containers,calls,bodies,job,plan,manager,adapter:new DockerSqliteData(manager,job,{helperTimeoutMs,cleanupTimeoutMs:50}),volume,setHang(){hang=true;},setAmbiguousVolume(){ambiguousVolume=true;},file:name=>path.join(volumes.get(name).dir,'app.sqlite')};
 }

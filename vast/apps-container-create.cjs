@@ -1,13 +1,14 @@
 'use strict';
 const crypto=require('node:crypto');
 const {LABEL}=require('./apps-engine.cjs');
+const {prepareManagedCreate,bindManagedCreate}=require('./apps-managed-resources.cjs');
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const unresolved=record=>['pending','unknown','cleanup-pending'].includes(record.state);
 const legacyPending=job=>job.status==='failed'&&job.stage==='candidate'&&job.action==='verify'&&!job.legacyCreationOutcome&&job.error==='Docker operation timed out: POST /containers/create';
 const SLOT=/^[a-z][a-z0-9-]{0,31}$/;
 function recordName(record){return 'sdsh-'+(record.role==='test'?'test-':'')+record.projectId+'-'+record.jobId+(record.slot?'-'+record.slot:'');}
 function validRecord(record,job){return record&&/^[a-f0-9]{16}$/.test(record.projectId||'')&&record.jobId===job.id&&/^[a-f0-9]{16}$/.test(job.id||'')&&['test','candidate'].includes(record.role)&&(record.slot===undefined||typeof record.slot==='string'&&SLOT.test(record.slot))&&record.name===recordName(record)&&/^[a-f0-9]{32}$/.test(record.token||'')&&/^sha256:[a-f0-9]{64}$/.test(record.imageId||'');}
-function retainJobs(jobs){const recent=new Set(jobs.slice(-100));return jobs.filter(job=>recent.has(job)||legacyPending(job)||(job.creations||[]).some(unresolved)||job.deploymentPhase==='recovery_required'||job.dataOperations&&(!job.dataOperations.operations||Object.values(job.dataOperations.operations).some(operation=>operation?.state!=='complete')));}
+function retainJobs(jobs,projects={}){const recent=new Set(jobs.slice(-100)),published=Object.values(projects),releases=new Set(published.map(p=>p.releaseId).filter(Boolean)),containers=new Set(published.map(p=>p.containerId).filter(Boolean));return jobs.filter(job=>recent.has(job)||releases.has(job.id)||(job.creations||[]).some(c=>containers.has(c.containerId))||legacyPending(job)||(job.creations||[]).some(unresolved)||(job.creations||[]).some(c=>['pending','unknown'].includes(c.resourceStart?.state))||job.deploymentPhase==='recovery_required'||job.dataOperations&&(!job.dataOperations.operations||Object.values(job.dataOperations.operations).some(operation=>operation?.state!=='complete')));}
 function matches(record,c){
  const labels=c?.Config?.Labels||{};
  return /^[a-f0-9]{64}$/.test(c?.Id||'')&&c.Image===record.imageId&&c.Name==='/'+record.name&&labels[LABEL]==='managed'&&labels[LABEL+'.project']===record.projectId&&labels[LABEL+'.job']===record.jobId&&labels[LABEL+'.create']===record.token&&(record.slot===undefined||labels[LABEL+'.slot']===record.slot);
@@ -25,9 +26,10 @@ async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,r
  (job.creations??=[]).push(record);manager.save();
  const body={...json,Labels:{...json.Labels,[LABEL+'.job']:job.id,[LABEL+'.create']:record.token,...(slot?{[LABEL+'.slot']:slot}:{})}};
  manager.log(job,'Creating '+role+' container; bounded Docker deadline '+createTimeoutMs+' ms.\n');
- try{
+ let createIssued=false;try{
+  await prepareManagedCreate(manager,record,body);
   let created;
-  try{created=await manager.engine.json('POST','/containers/create?name='+record.name,{json:body,timeout:createTimeoutMs});}
+  try{createIssued=true;created=await manager.engine.json('POST','/containers/create?name='+record.name,{json:body,timeout:createTimeoutMs});}
   catch(cause){
    // A rejected request is different from a lost response. Never repeat POST:
    // the daemon can finish copying the filesystem after the caller times out.
@@ -41,8 +43,8 @@ async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,r
    if(!created)throw unknown(record,cause);
   }
   if(!/^[a-f0-9]{64}$/.test(created?.Id||''))throw unknown(record,Error('Invalid created container id'));
-  record.state='confirmed';record.containerId=created.Id;return created;
- }catch(e){if(record.state==='pending')record.state='unknown';throw e;}
+  await bindManagedCreate(manager,record,created.Id);record.state='confirmed';record.containerId=created.Id;return created;
+ }catch(e){if(record.state==='pending')record.state=createIssued?'unknown':'rejected';if(!createIssued&&e.resourceDiagnostic)record.resourceAdmission=e.resourceDiagnostic;throw e;}
  finally{manager.save();}
 }
 async function reconcilePendingCreations(manager){

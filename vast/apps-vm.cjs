@@ -1,10 +1,10 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), cp = require('node:child_process'), net = require('node:net'), crypto = require('node:crypto');
 const {LABEL} = require('./apps-engine.cjs');
+const {atomicJson}=require('../mobile/private-json.cjs');
 const {PILOT_WORKER_PROFILE,validatePilot,workerProfile}=require('./apps-worker-profile.cjs');
 const {fixedguestOverlayProbe,parseOverlayProbe}=require('./apps-overlay-probe.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
-function atomic(file, value) { const tmp=file+'.tmp'; fs.writeFileSync(tmp,JSON.stringify(value,null,2),{mode:0o600}); fs.renameSync(tmp,file); }
 function controlFirewall(){return `
 iptables -w -N HARNESS_CONTROL_V1 2>/dev/null || iptables -w -S HARNESS_CONTROL_V1 >/dev/null
 firewall_rule() { iptables -w -C "$@" 2>/dev/null || iptables -w -A "$@"; }
@@ -78,7 +78,7 @@ class DockerVM {
   this.phase='asleep'; this.error=null; this.serial=null; this.pending=null; this.lastUsed=Date.now(); this.stopping=false; this.buffer='';
   if(this.pid()) this.phase='recovering';
  }
- save(){atomic(this.stateFile,this.saved);}
+ save(){atomicJson(this.stateFile,this.saved);}
  pid(){try{const pid=Number(fs.readFileSync(path.join(this.root,'qemu.pid'),'utf8')); const args=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0');return args.includes('stratadashseek-docker') && args.includes('file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback')?pid:null;}catch{return null;}}
  status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,diskCheckedAt:this.diskCheckedAt??null,profile:workerProfile(this.manifest,{driver:this.observedStorageDriver,at:this.storageObservedAt,ready:this.phase==='ready'}),initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
  touch(){this.lastUsed=Date.now();}
@@ -134,7 +134,7 @@ class DockerVM {
      this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.save();
      const resumeIds=this.saved.resumeIds||[];
      if(resumeIds.length){if(typeof this.validateResume!=='function')throw Error('Published application resume identities require the application controller');await this.validateResume(resumeIds);}
-     for(const id of resumeIds){await this.engine.owned(id);await this.engine.request('POST','/containers/'+id+'/start');}
+     for(const id of resumeIds){if(typeof this.startManagedContainer!=='function')throw Error('Managed container resource admission requires the application controller');await this.startManagedContainer(id);}
      this.phase='ready';this.touch();await this.diskFree();this.save();return;
     }catch(e){if(this.phase!=='starting')throw e;}
     await pause(1000);

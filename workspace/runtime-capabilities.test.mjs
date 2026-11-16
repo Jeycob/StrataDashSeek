@@ -5,6 +5,9 @@ import fsPromises from 'node:fs/promises';
 import { createRuntimeCapabilities, runtimeCapabilitiesFallback } from './runtime-capabilities.mjs';
 
 const root = path.resolve('/capability-test/workspaces'), project = path.join(root, 'projects', 'own'), id = 'a'.repeat(16), otherId = 'b'.repeat(16), cid = 'c'.repeat(64), MIB = 1024 ** 2;
+test('resource refusal guidance distinguishes unsupported environment from application repair and unknown-start replay',()=>{
+ assert.match(runtimeCapabilitiesFallback,/MANAGED_RESOURCE_\*/);assert.match(runtimeCapabilitiesFallback,/keep deployment unverified/);assert.match(runtimeCapabilitiesFallback,/resourceDiagnostic/);assert.match(runtimeCapabilitiesFallback,/Do not repair application code or rebuild an image solely for SwapLimit=false/);assert.match(runtimeCapabilitiesFallback,/replay an unknown start/);
+});
 function fixture({ files = ['Dockerfile', '.dockerignore', '.harness-app.json', 'compose.yaml'], free = 3 * 1024 ** 3, state, ...options } = {}) {
   const reads = [], fileSet = new Set(files), clock = { value: 10000 };
   const fs = {

@@ -2,12 +2,38 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),http=require('node:http');
 const {AppsManager}=require('./apps-manager.cjs');
 const {DockerVM,bootstrap}=require('./apps-vm.cjs');
+const {LABEL}=require('./apps-engine.cjs');
+
+test('offline user stop durably cancels only its owned published resume intent without waking',async t=>{
+ const{manager:m,worker:w,engine:e}=await fixture(t),p=await m.register('demo'),other='b'.repeat(64);Object.assign(m.project(p.id),{containerId:id,releaseId:'c'.repeat(16)});m.save();
+ w.saved={initialized:true,resumeIds:[id,other],containers:[{Id:id,State:'running',Labels:{[LABEL]:'managed',[LABEL+'.project']:p.id}},{Id:other,State:'running',Labels:{}}]};
+ w.stateFile=path.join(m.cfg.stateDir,'vm.json');w.save=()=>DockerVM.prototype.save.call(w);w.save();
+ const result=await m.containerAction(id,'stop');assert.equal(result.resumeCancelled,true);assert.equal(w.wakeCount,0);assert.equal(e.calls,0);
+ const disk=JSON.parse(await fs.readFile(w.stateFile,'utf8'));assert.deepEqual(disk.resumeIds,[other]);assert.equal(disk.containers[0].State,'exited');assert.equal(disk.containers[1].State,'running');
+ const replacement={...w,saved:disk},reloaded=new AppsManager(m.cfg,e,replacement);await assert.rejects(reloaded.containerAction(other,'stop'),{code:'DEPLOYMENT_OFFLINE_STOP_UNPROVEN'});assert.equal(replacement.wakeCount,0);assert.deepEqual(JSON.parse(await fs.readFile(w.stateFile,'utf8')).resumeIds,[other]);
+});
+test('unknown or transitional asleep ownership never wakes or claims a successful stop',async t=>{
+ const{manager:m,worker:w,engine:e}=await fixture(t);w.pending=Promise.resolve();w.save=()=>assert.fail('No offline write allowed');await assert.rejects(m.containerAction(id,'stop'),{code:'DEPLOYMENT_OFFLINE_STOP_UNPROVEN'});assert.equal(w.wakeCount,0);assert.equal(e.calls,0);
+});
+test('ready endpoint stop remains available with unsupported resources and never ensures/resumes',async t=>{
+ const{manager:m,worker:w,engine:e}=await fixture(t);w.phase='ready';w.ensure=async()=>assert.fail('Stop must not ensure');e.json=async()=>assert.fail('Stop must not perform resource admission');const requests=[];e.request=async(method,route)=>requests.push([method,route]);await m.containerAction(id,'stop');assert.deepEqual(requests,[['POST','/containers/'+id+'/stop?t=10']]);assert.equal(w.wakeCount,0);
+});
+test('alive error-phase diagnostics read owned logs without ensure/start/resource admission',async t=>{
+ const{manager:m,worker:w,engine:e}=await fixture(t),p=await m.register('demo');require('./apps-workflow.cjs').init(m);m.project(p.id).credentials={scope:'fixture',runtime:{TOKEN:'fixture-binding'}};m.vault.resolve=async()=>({TOKEN:'FIXTURE_PRIVATE_LOG_TOKEN'});w.phase='error';w.pid=()=>99;w.ensure=async()=>assert.fail('Logs must not wake');e.json=async()=>assert.fail('Logs must not resource-admit');e.owned=async()=>({Id:id,Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:p.id}}});let read=0;e.logs=async key=>{assert.equal(key,id);read++;return'available owned diagnostics FIXTURE_PRIVATE_LOG_TOKEN';};const text=await m.logs(id);assert.match(text,/available owned diagnostics/);assert(!text.includes('FIXTURE_PRIVATE_LOG_TOKEN'));assert.equal(read,1);assert.equal(w.wakeCount,0);
+});
+test('stable asleep logs are honestly unavailable without waking or directing a blocked start',async t=>{
+ const{manager:m,worker:w,engine:e}=await fixture(t);e.logs=async()=>assert.fail('Asleep endpoint must not be contacted');e.owned=async()=>assert.fail('Stable asleep must not inspect endpoint');const message=await m.logs(id);assert.match(message,/živé logy nejsou dostupné/);assert.equal(w.wakeCount,0);assert.equal(e.calls,0);
+});
+for(const failedStep of [null,'owned','vault'])test('log phase flip during raw read keeps redaction or refuses without raw: '+failedStep,async t=>{
+ const{manager:m,worker:w,engine:e}=await fixture(t),p=await m.register('demo');require('./apps-workflow.cjs').init(m);m.project(p.id).credentials={scope:'fixture',runtime:{TOKEN:'binding'}};const secret='PHASE_RACE_PRIVATE_CANARY';let ownedReads=0,vaultReads=0;w.phase='error';w.pid=()=>w.phase==='asleep'?null:99;w.ensure=async()=>assert.fail('Never wake for logs');e.json=async()=>assert.fail('No resource gate or mutation');e.logs=async()=>{await Promise.resolve();w.phase='asleep';return'owned diagnostic '+secret;};e.owned=async()=>{ownedReads++;if(failedStep==='owned')throw Error('owned lookup failed');return{Id:id,Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:p.id}}};};m.vault.resolve=async()=>{vaultReads++;if(failedStep==='vault')throw Error('vault lookup failed');return{TOKEN:secret};};
+ if(failedStep)await assert.rejects(m.logs(id),new RegExp(failedStep+' lookup failed'));else{const result=await m.logs(id);assert.match(result,/owned diagnostic/);assert(!result.includes(secret));}assert.equal(ownedReads,1);assert.equal(vaultReads,failedStep==='owned'?0:1);assert.equal(w.wakeCount,0);
+});
 test('worker capacity samples bytes and inodes with the same fresh nonce',async()=>{
  const vm={buffer:'HARNESS_FREE_aaaaaaaaaaaaaaaa=999999\n',serial:{destroyed:false,write(command){const nonce=command.match(/HARNESS_FREE_([a-f0-9]{16})/)[1];assert.match(command,/df -Pi \/var\/lib\/harness/);vm.buffer+='\nHARNESS_FREE_'+nonce+'=524288\nHARNESS_INODES_'+nonce+'=20000\n';}}};
  const before=Date.now();assert.equal(await DockerVM.prototype.diskFree.call(vm),512*1024**2);assert.equal(vm.freeInodes,20000);assert.ok(vm.diskCheckedAt>=before);
 });
 test('an available Docker API cannot restore containers before fresh bootstrap and isolation proof',async()=>{
- const calls=[],volumeId='a'.repeat(32),vm={phase:'recovering',saved:{initialized:true,resumeIds:['b'.repeat(64)]},manifest:{volumeId},buffer:'',serial:{destroyed:false,write(){}},pid:()=>123,save(){},touch(){},diskFree:async()=>1024,validateResume:async ids=>{assert.deepEqual(ids,['b'.repeat(64)]);calls.push('validate-published');},engine:{json:async()=>{calls.push('info');return{Labels:['io.stratadashseek.worker='+volumeId]};},owned:async()=>calls.push('owned'),request:async()=>calls.push('start')}};
+ const calls=[],volumeId='a'.repeat(32),vm={phase:'recovering',saved:{initialized:true,resumeIds:['b'.repeat(64)]},manifest:{volumeId},buffer:'',serial:{destroyed:false,write(){}},pid:()=>123,save(){},touch(){},diskFree:async()=>1024,startManagedContainer:async id=>{await vm.engine.owned(id);await vm.engine.request('POST','/containers/'+id+'/start');},validateResume:async ids=>{assert.deepEqual(ids,['b'.repeat(64)]);calls.push('validate-published');},engine:{json:async()=>{calls.push('info');return{Labels:['io.stratadashseek.worker='+volumeId]};},owned:async()=>calls.push('owned'),request:async()=>calls.push('start')}};
  const pending=DockerVM.prototype.start.call(vm);await new Promise(r=>setTimeout(r,40));assert.deepEqual(calls,[]);assert.equal(vm.phase,'starting');vm.scriptSent=true;vm.buffer='HARNESS_READY_'+vm.nonce+'\nHARNESS_BOOT_EXIT_'+vm.nonce+'=0\n';await pending;assert.deepEqual(calls,['info','validate-published','owned','start']);assert.equal(vm.phase,'ready');assert.equal(vm.saved.controlIsolationVersion,1);
 });
 test('failed guest isolation never becomes ready even when the Docker API is reachable',async()=>{

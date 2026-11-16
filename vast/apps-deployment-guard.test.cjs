@@ -1,4 +1,5 @@
 'use strict';
+const {resourceEngine,seedPublishedPolicy}=require('./resource-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const {assertDeploymentIdle,publishedContainer,validateResume}=require('./apps-deployment-guard.cjs'),{DeploymentState}=require('./apps-deployment-state.cjs'),{LABEL}=require('./apps-engine.cjs');
 const project='a'.repeat(16),release='b'.repeat(16),generation='c'.repeat(16),containerId='d'.repeat(64);
@@ -14,5 +15,5 @@ test('a lost final report or unknown data helper remains fenced even outside a p
 test('resume validates the whole set and refuses test, helper, candidate and historical generations',async t=>{
  const m=fixture(t),make=(patch={})=>({Id:containerId,Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:project,[LABEL+'.release']:release,[LABEL+'.generation']:generation,...patch}}});assert.equal(publishedContainer(m,make()),true);
  for(const patch of [{[LABEL+'.role']:'data-helper'},{[LABEL+'.role']:'test'},{[LABEL+'.generation']:'f'.repeat(16)},{[LABEL+'.release']:'f'.repeat(16)}])assert.equal(publishedContainer(m,make(patch)),false);
- let reads=0;m.engine={owned:async id=>{reads++;return id===containerId?make():{...make(),Id:id,Config:{Labels:{}}};}};await validateResume(m,[containerId]);await assert.rejects(validateResume(m,[containerId,'f'.repeat(64)]),{code:'DEPLOYMENT_RECOVERY_REQUIRED'});assert.equal(reads,3);
+ let reads=0;const current={...make(),Image:'sha256:'+'a'.repeat(64)};m.save=()=>{};m.engine=resourceEngine({json:async()=>({}),owned:async id=>{reads++;return id===containerId?structuredClone(current):{...make(),Id:id,Config:{Labels:{}}};}},{imageResponse:true});await seedPublishedPolicy(m,current);await validateResume(m,[containerId]);await assert.rejects(validateResume(m,[containerId,'f'.repeat(64)]),{code:'DEPLOYMENT_RECOVERY_REQUIRED'});assert.equal(reads,4);
 });

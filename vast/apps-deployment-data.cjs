@@ -3,6 +3,7 @@
 const fs=require('node:fs'),crypto=require('node:crypto');
 const {LABEL,decodeLogs}=require('./apps-engine.cjs');
 const {createManagedContainer}=require('./apps-container-create.cjs');
+const {startManagedContainer}=require('./apps-managed-resources.cjs');
 const ID=/^[a-f0-9]{16}$/,CID=/^[a-f0-9]{64}$/,HASH=/^[a-f0-9]{64}$/,IMAGE=/^sha256:[a-f0-9]{64}$/,DB=/^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$/;
 const fail=(code,recovery=false)=>Object.assign(Error(code),{code,status:409,...(recovery?{phase:'recovery_required'}:{})});
 const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
@@ -30,7 +31,7 @@ class DockerSqliteData{
   if(journal.version!==1||journal.identity!==signature||!journal.operations||typeof journal.operations!=='object')throw fail('DEPLOYMENT_DATA_JOURNAL_UNTRUSTED',true);
   const prior=journal.operations[key];if(prior){if(prior.state==='complete')return structuredClone(prior.proof);throw fail('DEPLOYMENT_DATA_RECOVERY_REQUIRED',true);}
   const operation=journal.operations[key]={state:'intent'};await this.saved();
-  try{const proof=await fn();operation.proof=proof;operation.state='complete';await this.saved();return structuredClone(proof);}catch(error){operation.state='recovery_required';await this.saved();throw fail(error?.code&&/^DEPLOYMENT_DATA_[A-Z_]+$/.test(error.code)?error.code:'DEPLOYMENT_DATA_RECOVERY_REQUIRED',true);}
+  try{const proof=await fn();operation.proof=proof;operation.state='complete';await this.saved();return structuredClone(proof);}catch(error){operation.state='recovery_required';await this.saved();if(error?.resourceDiagnostic)throw Object.assign(error,{phase:'recovery_required'});throw fail(error?.code&&/^DEPLOYMENT_DATA_[A-Z_]+$/.test(error.code)?error.code:'DEPLOYMENT_DATA_RECOVERY_REQUIRED',true);}
  }
  async trustedImage(p){const image=await this.engine.json('GET','/images/'+encodeURIComponent(this.image)+'/json',{timeout:3000});if(image?.Id!==this.image||image.Config?.Labels?.[LABEL+'.data-helper']!=='sqlite-v1'||Object.values(this.manager.store?.projects||{}).some(project=>project.imageId===this.image))throw fail('DEPLOYMENT_DATA_HELPER_UNTRUSTED');}
  async volume(p,name,{writer=null,legacy=false,emptyUsers=false,onlyHelpers=false}={}){
@@ -71,7 +72,7 @@ class DockerSqliteData{
     if(!CID.test(result?.Id||''))throw fail('DEPLOYMENT_DATA_HELPER_OUTCOME_UNKNOWN',true);
     const c=await this.bounded(()=>this.engine.owned(result.Id,p.projectId),remaining());if(c.Image!==this.image||c.Config?.Labels?.[LABEL+'.role']!=='data-helper'||c.Config.Labels[LABEL+'.job']!==this.job.id)throw fail('DEPLOYMENT_DATA_HELPER_OUTCOME_UNKNOWN',true);container=result.Id;
     if(quiescentSource)await this.bounded(checkQuiescent,remaining());
-    await this.bounded(()=>this.engine.request('POST','/containers/'+container+'/start',{timeout:remaining()}),remaining());
+    await this.bounded(()=>startManagedContainer(this.manager,container,{timeout:remaining()}),remaining());
     const exit=await this.bounded(()=>this.engine.json('POST','/containers/'+container+'/wait?condition=not-running',{timeout:remaining()}),remaining());if(exit?.StatusCode!==0)throw fail('DEPLOYMENT_DATA_HELPER_FAILED');
     const log=await this.bounded(()=>this.engine.request('GET','/containers/'+container+'/logs?stdout=1&stderr=0&tail=2',{timeout:remaining(),maxBytes:2048}),remaining());let proof;try{proof=JSON.parse(decodeLogs(log.body).trim());}catch{throw fail('DEPLOYMENT_DATA_HELPER_PROOF_INVALID');}
     if(proof?.version!==1||proof.database!==p.database||!HASH.test(proof.schemaHash||'')||!Number.isSafeInteger(proof.bytes)||proof.bytes<0||proof.bytes>p.maxBytes||!migrate&&!copyMigration&&expectedSchemaHash&&proof.schemaHash!==expectedSchemaHash||proof.userVersion!==undefined&&(!Number.isInteger(proof.userVersion)||proof.userVersion<0)||['uid','gid'].some(k=>proof[k]!==undefined&&(!Number.isSafeInteger(proof[k])||proof[k]<0||proof[k]>4294967295))||(migrate||copyMigration)&&(proof.userVersion!==p.migration.toVersion||proof.migrationSha256!==p.migration.sha256||proof.existingDataPreserved!==true)||copyMigration&&proof.sourceSchemaHash!==expectedSchemaHash||migrate&&(proof.fromVersion!==p.migration.fromVersion||proof.toVersion!==p.migration.toVersion)||Object.keys(proof).some(key=>!['version','kind','database','bytes','schemaHash','sourceSchemaHash','userVersion','uid','gid','migrationSha256','fromVersion','toVersion','existingDataPreserved'].includes(key)))throw fail('DEPLOYMENT_DATA_HELPER_PROOF_INVALID');

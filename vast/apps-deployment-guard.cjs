@@ -1,6 +1,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
 const {DeploymentState}=require('./apps-deployment-state.cjs'),{LABEL}=require('./apps-engine.cjs');
+const {validateManagedStarts,assertStartOutcomesKnown}=require('./apps-managed-resources.cjs');
 const fault=()=>Object.assign(Error('An application deployment has an unresolved outcome; inspect its recorded release before starting or restoring containers'),{code:'DEPLOYMENT_RECOVERY_REQUIRED',status:409,phase:'recovery_required'});
 function assertDeploymentIdle(manager,{allowCurrent=true}={}){
  const current=allowCurrent&&manager.store.jobs.find(job=>job.id===manager.busy&&job.status==='running'&&job.deploymentPlan);
@@ -21,8 +22,20 @@ function publishedContainer(manager,container){
  return container.Id===project.containerId||!!(project.stack&&project.releaseId&&labels[LABEL+'.release']===project.releaseId);
 }
 async function validateResume(manager,ids){
- assertDeploymentIdle(manager);if(!Array.isArray(ids)||ids.length>64||new Set(ids).size!==ids.length)throw fault();
+ assertStartOutcomesKnown(manager);assertDeploymentIdle(manager);if(!Array.isArray(ids)||ids.length>64||new Set(ids).size!==ids.length)throw fault();
  // Validate ALL identities before starting ANY service in a retained stack.
  for(const id of ids){if(!/^[a-f0-9]{64}$/.test(id)||!publishedContainer(manager,await manager.engine.owned(id)))throw fault();}
+ await validateManagedStarts(manager,ids);
 }
-module.exports={assertDeploymentIdle,publishedContainer,validateResume,deploymentRecovery};
+function cancelSavedResume(manager,id){
+ const worker=manager.worker,saved=worker?.saved;
+ const stable=()=>worker?.phase==='asleep'&&!worker.pending&&!worker.stopping&&typeof worker.pid==='function'&&worker.pid()===null;
+ const refuse=()=>Object.assign(Error('Offline application stop could not verify its published saved intent; no worker was woken'),{code:'DEPLOYMENT_OFFLINE_STOP_UNPROVEN',status:409});
+ if(!/^[a-f0-9]{64}$/.test(id)||!stable()||typeof worker.save!=='function'||!Array.isArray(saved?.resumeIds)||!Array.isArray(saved?.containers))throw refuse();
+ const rows=saved.containers.filter(c=>c.Id===id);if(rows.length!==1||!publishedContainer(manager,{Id:id,Config:{Labels:rows[0].Labels||{}}}))throw refuse();
+ const previousIds=[...saved.resumeIds],row=rows[0],previousState=row.State;
+ if(!stable())throw refuse();saved.resumeIds=previousIds.filter(value=>value!==id);row.State='exited';
+ try{worker.save();}catch(error){saved.resumeIds=previousIds;row.State=previousState;throw error;}
+ return{ok:true,asleep:true,resumeCancelled:true};
+}
+module.exports={assertDeploymentIdle,publishedContainer,validateResume,deploymentRecovery,cancelSavedResume};

@@ -222,3 +222,41 @@ references were unchanged and all seven previously remembered managed
 containers remained present. The measured 170.9 seconds includes cold worker
 startup and cache cleanup, not just the small filesystem test. This does not
 establish that the shop's build fits or authorize a storage migration.
+
+### Managed resource admission
+
+Before managed container creation, the controller records the exact requested
+RAM/no-swap, CPU, PID and runtime constraints with its nonce/image identity in
+the durable creation journal. Current published releases and unknown operations
+retain this policy beyond the normal hundred-job history; ordinary historical
+policies expire with their jobs. Before every start, including helpers, tests,
+baseline restarts, user starts and whole-set VM restoration, the controller
+queries the same trusted daemon afresh and compares a fresh owned-container
+inspect with that saved intent. It does not invent policy from current settings
+or automatically adopt a legacy container with missing policy. Whole-set
+published identity/fence checks still precede any restoration.
+
+`MANAGED_RESOURCE_*` leaves deployment **unverified**. Read the bounded
+`resourceDiagnostic` and its `recommendedAction`: use a supported managed worker
+for missing/unsupported capabilities, or explicit operator reconciliation for
+missing, mismatched or unknown policy/start outcomes. `SwapLimit=false` is an
+environment limitation, not an application defect: do not rewrite the app,
+rebuild its image, weaken guards or change host configuration to bypass it.
+Unknown start acknowledgements remain durably fenced; do not replay the start.
+No automatic adoption or reconciliation API is implied by this change.
+
+Daemon capability reports and inspect intent checks establish admission from a
+trusted control endpoint, **not independent effective-kernel resource proof**.
+Positive guest acceptance still needs actual supported-worker evidence that
+RAM, no-swap, CPU, PID and requested runtime constraints are enforced, including
+restart/restoration. That evidence is pending. The local Rancher daemon reports
+no swap-limit support while its host has active swap; it is a negative guard
+case and is not resource or production acceptance. A daemon's custom seccomp
+profile or clock alone is not rejected by this resource gate.
+
+Reads, owned logs and scoped cleanup do not perform resource admission or wake
+the worker. A live error-phase endpoint can still supply logs and stop a
+container. A provably stable sleeping VM can cancel only the selected owned
+published resume intent with a durable write and no wake; uncertain offline
+ownership is refused. Stops never implicitly restore other applications and do
+not clear an unknown-start or deployment fence.

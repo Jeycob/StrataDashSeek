@@ -1,13 +1,14 @@
 'use strict';
 const fs=require('node:fs'),fsp=require('node:fs/promises'),path=require('node:path'),crypto=require('node:crypto'),cp=require('node:child_process');
 const {DockerEngine,LABEL}=require('./apps-engine.cjs');
+const {startManagedContainer,assertStartOutcomesKnown,diagnosticFor}=require('./apps-managed-resources.cjs');
 const {projectAt,snapshot,inside}=require('./apps-project.cjs');
 const {StringDecoder}=require('node:string_decoder');
 const {DockerVM}=require('./apps-vm.cjs');
 const {redact}=require('./apps-command.cjs');
 const {createManagedContainer,reconcilePendingCreations,reconcileLegacyCreations,retainJobs}=require('./apps-container-create.cjs');
 const {atomicJson:atomic}=require('../mobile/private-json.cjs');
-const {assertDeploymentIdle,publishedContainer,validateResume,deploymentRecovery}=require('./apps-deployment-guard.cjs');
+const {assertDeploymentIdle,publishedContainer,validateResume,deploymentRecovery,cancelSavedResume}=require('./apps-deployment-guard.cjs');
 function cleanContainer(c,manager){return{...(manager?{canStart:publishedContainer(manager,{Id:c.Id,Config:{Labels:c.Labels||{}}})}:{}),role:c.Labels?.[LABEL+'.role']||null,dataGeneration:c.Labels?.[LABEL+'.generation']||null,id:c.Id,name:(c.Names?.[0]||'').replace(/^\//,''),projectId:c.Labels?.[LABEL+'.project'],service:c.Labels?.['com.docker.compose.service']||null,releaseId:c.Labels?.[LABEL+'.release']||null,state:c.State,status:c.Status,image:c.Image,createdAt:c.Created*1000,ports:(c.Ports||[]).filter(p=>p.PublicPort).map(p=>({private:p.PrivatePort,public:p.PublicPort}))};}
 class AppsManager {
  constructor(cfg={},engine,worker){
@@ -19,16 +20,16 @@ class AppsManager {
   this.store=fs.existsSync(this.storeFile)?JSON.parse(fs.readFileSync(this.storeFile,'utf8')):{projects:{},jobs:[]};
   for(const job of this.store.jobs)if(['queued','running'].includes(job.status)){job.status='interrupted';job.error='Service restarted; inspect containers before retrying';job.endedAt=Date.now();}
   this.holdUntil=Math.min(this.store.holdUntil||0,Date.now()+3600000);this.worker=worker||(cfg.vm?.enabled?new DockerVM(this.cfg,this.engine):null);
-  if(this.worker)this.worker.validateResume=ids=>validateResume(this,ids);
+  if(this.worker){this.worker.validateResume=ids=>validateResume(this,ids);this.worker.startManagedContainer=(id,options)=>startManagedContainer(this,id,options);}
   this.save();this.heartbeat();
  }
- save(){this.store.jobs=retainJobs(this.store.jobs);atomic(this.storeFile,this.store);}
+ save(){this.store.jobs=retainJobs(this.store.jobs,this.store.projects);atomic(this.storeFile,this.store);}
  heartbeat(){const w=this.worker?.status();atomic(this.cfg.activityFile||path.join(this.cfg.stateDir,'activity.json'),{at:Date.now(),active:this.busy||this.previewRequests||this.holdUntil>Date.now()?1:0,lastActivity:this.lastActivity,holdUntil:this.holdUntil,previewRequests:this.previewRequests,servicePid:process.pid,worker:w||null,draining:!!this.sleepToken()});}
  setBusy(value){this.busy=value;this.lastActivity=Date.now();this.heartbeat();}
  requireEnabled(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(!this.cfg.enabled)throw Object.assign(Error('Docker worker is not enabled'),{status:409});}
  sleepToken(){if(this.drain&&this.drain.until<=Date.now())this.drain=null;return this.drain?.token;}
  acceptActivity(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(this.sleepToken()){this.drain=null;this.heartbeat();throw Object.assign(Error('Server sleep was cancelled; retry this action shortly'),{status:409});}this.lastActivity=Date.now();this.worker?.touch();this.heartbeat();}
- async ready(){assertDeploymentIdle(this);if(this.worker)await this.worker.ensure();else await this.engine.available();await reconcilePendingCreations(this);await reconcileLegacyCreations(this);}
+ async ready(){assertStartOutcomesKnown(this);assertDeploymentIdle(this);if(this.worker)await this.worker.ensure();else await this.engine.available();await reconcilePendingCreations(this);await reconcileLegacyCreations(this);}
  previewPortFor(project){const reserved=new Set(Object.values(this.store.projects).filter(p=>p.id!==project.id).map(p=>p.previewPort??p.hostPort));const previous=project.previewPort??project.hostPort;if(previous&&!reserved.has(previous))return previous;for(let port=this.cfg.firstPort;port<this.cfg.firstPort+this.cfg.portCount;port++)if(!reserved.has(port))return port;throw Error('Application preview port pool is full');}
  canSleep(){return!this.busy&&!this.previewRequests&&this.holdUntil<=Date.now()&&!this.worker?.pending&&!this.worker?.stopping;}
  hold(minutes){this.requireEnabled();if(!Number.isInteger(minutes)||minutes<0||minutes>60)throw Error('Hold must be 0–60 minutes');this.acceptActivity();this.holdUntil=minutes?Date.now()+minutes*60000:0;this.store.holdUntil=this.holdUntil;this.save();this.heartbeat();return{holdUntil:this.holdUntil};}
@@ -53,7 +54,7 @@ class AppsManager {
  async tick(){
   this.heartbeat();if(this.ticking||!this.worker||!this.canSleep()||this.sleepToken())return;
   if(this.worker.phase==='recovering'||this.worker.phase==='ready'&&Date.now()-this.worker.lastUsed>(this.cfg.vm.idleSeconds||120)*1000){
-   this.ticking=true;try{assertDeploymentIdle(this,{allowCurrent:false});if(this.worker.phase==='recovering')await this.worker.ensure();else await this.worker.stop();}catch(e){this.worker.error=e.message;}finally{this.ticking=false;this.heartbeat();}
+   this.ticking=true;try{assertStartOutcomesKnown(this);assertDeploymentIdle(this,{allowCurrent:false});if(this.worker.phase==='recovering')await this.worker.ensure();else await this.worker.stop();}catch(e){this.worker.error=e.message;}finally{this.ticking=false;this.heartbeat();}
   }
  }
  async beginPreview(port){
@@ -75,7 +76,7 @@ class AppsManager {
  jobLog(id){if(!/^[a-f0-9]{16}$/.test(id)||!this.store.jobs.some(j=>j.id===id))throw Object.assign(Error('Unknown job'),{status:404});const file=path.join(this.cfg.stateDir,id+'.log');return fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';}
  enqueue(id,action){this.requireEnabled();const p=this.project(id);if(!['build','deploy','check'].includes(action))throw Error('Invalid project action');if(this.busy)throw Object.assign(Error('Another application operation is running'),{status:409});this.acceptActivity();
   const job={id:crypto.randomBytes(8).toString('hex'),projectId:id,action,status:'queued',startedAt:Date.now()};this.setBusy(job.id);this.store.jobs.push(job);this.save();
-  queueMicrotask(async()=>{job.status='running';this.save();try{if(action==='build')await require('./apps-cleanup.cjs').ensureCapacity(this,0,job);await this.ready();const project=await projectAt(p.path,this.cfg);if(project.id!==id)throw Error('Project path changed');if(action==='build')await this.build(project,job);else if(action==='deploy')await this.deploy(project,job);else await this.check(project,job);job.status='passed';}catch(e){job.status='failed';job.error=redact(e.message,this.redactions?.get(job.id)||[]);this.log(job,'\nERROR: '+job.error+'\n');}finally{try{await this.worker?.remember();}catch(e){this.log(job,'Worker state warning: '+e.message+'\n');}this.redactions?.delete(job.id);job.endedAt=Date.now();this.setBusy(null);this.save();}});
+  queueMicrotask(async()=>{job.status='running';this.save();try{if(action==='build')await require('./apps-cleanup.cjs').ensureCapacity(this,0,job);await this.ready();const project=await projectAt(p.path,this.cfg);if(project.id!==id)throw Error('Project path changed');if(action==='build')await this.build(project,job);else if(action==='deploy')await this.deploy(project,job);else await this.check(project,job);job.status='passed';}catch(e){job.resourceDiagnostic=diagnosticFor(e);job.status='failed';job.error=redact(e.message,this.redactions?.get(job.id)||[]);this.log(job,'\nERROR: '+job.error+'\n');}finally{try{await this.worker?.remember();}catch(e){this.log(job,'Worker state warning: '+e.message+'\n');}this.redactions?.delete(job.id);job.endedAt=Date.now();this.setBusy(null);this.save();}});
   return job;
  }
  async build(p,job){
@@ -105,7 +106,7 @@ class AppsManager {
   const old=saved.containerId,key=p.port+'/tcp';
   const created=await createManagedContainer(this,job,{Image:saved.imageId,Labels:{[LABEL]:'managed',[LABEL+'.project']:p.id},Env:['PORT='+p.port,'NODE_ENV=production',...Object.entries(runtimeEnv).map(([k,v])=>k+'='+v)],ExposedPorts:{[key]:{}},HostConfig:{PortBindings:{[key]:[{HostIp:this.cfg.publishAddress,HostPort:String(port)}]},Memory:p.memoryMiB*1024**2,MemorySwap:p.memoryMiB*1024**2,NanoCpus:Math.round(p.cpus*1e9),PidsLimit:128,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],RestartPolicy:{Name:'no'}}});
   const id=created?.Id;if(!/^[a-f0-9]{64}$/.test(id||''))throw Error('Invalid created container id');
-  try{await this.engine.request('POST','/containers/'+id+'/start');this.log(job,'Started '+id+' on port '+port+'\n');let health;for(let i=0;i<30;i++){health=await this.health(port,p.healthPath);if(health.ok)break;const inspected=await this.engine.owned(id,p.id);if(!inspected.State.Running)throw Error('Container exited: '+(await this.engine.logs(id,p.id)).slice(-2000));await new Promise(r=>setTimeout(r,1000));}if(!health?.ok)throw Error('Startup HTTP check failed');
+  try{await startManagedContainer(this,id);this.log(job,'Started '+id+' on port '+port+'\n');let health;for(let i=0;i<30;i++){health=await this.health(port,p.healthPath);if(health.ok)break;const inspected=await this.engine.owned(id,p.id);if(!inspected.State.Running)throw Error('Container exited: '+(await this.engine.logs(id,p.id)).slice(-2000));await new Promise(r=>setTimeout(r,1000));}if(!health?.ok)throw Error('Startup HTTP check failed');
    const candidate={containerId:id,hostPort:port,previewPort,deployedAt:Date.now(),deployedImageId:saved.imageId,test:null,health,applicationUrl:this.cfg.wakeUrl?this.cfg.wakeUrl+'?appPort='+previewPort:'http://'+this.cfg.applicationHost+':'+previewPort+'/'};
    if(beforePromote)await beforePromote(candidate);
    Object.assign(saved,candidate);this.save();
@@ -118,11 +119,11 @@ class AppsManager {
   if(!p.testCommand){job.verification='http-only';this.log(job,'HTTP availability only; no application testCommand is configured.\n');return;}
   const test=await createManagedContainer(this,job,{Image:c.Image,Entrypoint:p.testCommand,Cmd:[],Env:['BASE_URL=http://127.0.0.1:'+p.port,'PORT='+p.port],Labels:{[LABEL]:'managed',[LABEL+'.project']:p.id,[LABEL+'.role']:'test'},HostConfig:{NetworkMode:'container:'+saved.containerId,Memory:512*1024**2,MemorySwap:512*1024**2,NanoCpus:1e9,PidsLimit:128,CapDrop:['ALL'],SecurityOpt:['no-new-privileges:true'],RestartPolicy:{Name:'no'}}});
   if(!/^[a-f0-9]{64}$/.test(test?.Id||''))throw Error('Invalid test container id');
-  try{await this.engine.request('POST','/containers/'+test.Id+'/start');const result=await this.engine.json('POST','/containers/'+test.Id+'/wait?condition=not-running',{timeout:60000});this.log(job,await this.engine.logs(test.Id,p.id));job.verification='http-and-test-command';job.testExitCode=result.StatusCode;if(result.StatusCode!==0)throw Error('Application test failed with exit code '+result.StatusCode);saved.test={at:Date.now(),exitCode:result.StatusCode,imageId:c.Image};}
+  try{await startManagedContainer(this,test.Id);const result=await this.engine.json('POST','/containers/'+test.Id+'/wait?condition=not-running',{timeout:60000});this.log(job,await this.engine.logs(test.Id,p.id));job.verification='http-and-test-command';job.testExitCode=result.StatusCode;if(result.StatusCode!==0)throw Error('Application test failed with exit code '+result.StatusCode);saved.test={at:Date.now(),exitCode:result.StatusCode,imageId:c.Image};}
   finally{try{await this.engine.owned(test.Id,p.id);await this.engine.request('POST','/containers/'+test.Id+'/stop?t=1');}catch{}try{await this.engine.owned(test.Id,p.id);await this.engine.request('DELETE','/containers/'+test.Id);}catch{}}
  }
- async containerAction(id,action){this.requireEnabled();if(this.busy)throw Object.assign(Error('An application operation is running'),{status:409});if(!['start','stop'].includes(action))throw Error('Invalid container action');assertDeploymentIdle(this,{allowCurrent:false});this.acceptActivity();this.setBusy('container-action');try{await this.ready();const c=await this.engine.owned(id);if(action==='start'&&!publishedContainer(this,c))throw Object.assign(Error('Only the currently published application generation may be started; use a verified release for rollback'),{code:'DEPLOYMENT_HISTORICAL_START_REFUSED',status:409});await this.engine.request('POST','/containers/'+id+'/'+action+(action==='stop'?'?t=10':''));await this.worker?.remember();return{ok:true};}finally{this.setBusy(null);}}
- async logs(id){this.requireEnabled();if(this.worker&&this.worker.phase!=='ready')return 'Docker spí. Logy jsou dostupné po spuštění aplikace.';return this.engine.logs(id);}
+ async containerAction(id,action){this.requireEnabled();if(this.busy)throw Object.assign(Error('An application operation is running'),{status:409});if(!['start','stop'].includes(action))throw Error('Invalid container action');assertDeploymentIdle(this,{allowCurrent:false});this.acceptActivity();this.setBusy('container-action');try{if(action==='stop'&&this.worker?.phase==='asleep')return cancelSavedResume(this,id);if(action==='start')await this.ready();else await this.engine.available();const c=await this.engine.owned(id);if(action==='start'&&!publishedContainer(this,c))throw Object.assign(Error('Only the currently published application generation may be started; use a verified release for rollback'),{code:'DEPLOYMENT_HISTORICAL_START_REFUSED',status:409});if(action==='start')await startManagedContainer(this,id);else await this.engine.request('POST','/containers/'+id+'/stop?t=10');await this.worker?.remember();return{ok:true};}finally{this.setBusy(null);}}
+ async logs(id){this.requireEnabled();if(this.worker?.phase==='asleep'&&!this.worker.pending&&!this.worker.stopping&&typeof this.worker.pid==='function'&&this.worker.pid()===null)return 'Pracovní prostředí je vypnuté; živé logy nejsou dostupné. Nic nebylo spuštěno.';return this.engine.logs(id);}
 }
 require('./apps-workflow.cjs').install(AppsManager);
 require('./apps-deployment-orchestrator.cjs').install(AppsManager);
