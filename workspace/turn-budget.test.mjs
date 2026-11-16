@@ -89,7 +89,7 @@ function managedFixture() {
   const manager = new WorkspaceManager({}); manager.ownerAgent = () => owner;
   manager.data = { sessions: { owner: record }, trash: {} }; manager.ensureProject = async () => record;
   manager.locks.acquire = async () => {}; manager.save = async () => {};
-  manager.settings = () => ({ maxStageSteps: 60 }); manager.budgets.set(owner.id, budget);
+  manager.settings = () => ({ maxStageSteps: 60, maxAutomaticChecks: 0 }); manager.budgets.set(owner.id, budget);
   return { manager, record, budget, owner, child, input: { turn: 4, step: 1, signal: new AbortController().signal, messages: [human('second')] } };
 }
 test('manager scopes an owner request before charging its first step and charges provider retries once', async () => {
@@ -103,8 +103,8 @@ test('manager child requests cannot renew the owner budget', async () => {
   assert.equal(f.budget.steps, 60); assert.equal(f.record.budgetRequest.messageId, 'first');
   await assert.rejects(f.manager.preStep({ ...f.input, step: 2, agent: f.child }), e => e.code === 'STAGE_BUDGET');
 });
-test('manager preserves a prior stop even when the owner supplies a fresh request', async () => {
+test('a fresh explicit owner request can replan without a strategy form and preserves prior failure evidence', async () => {
   const f = managedFixture(); f.budget.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Review required' };
-  await assert.rejects(f.manager.preStep({ ...f.input, agent: f.owner }), e => e.code === 'REPAIR_NO_PROGRESS');
-  assert.equal(f.budget.steps, 59); assert.equal(f.budget.stalled, 2); assert.equal(f.budget.checks.test.bestScore, 4);
+  await f.manager.preStep({ ...f.input, agent: f.owner });
+  assert.equal(f.budget.blocked, null); assert.equal(f.budget.steps, 1); assert.equal(f.budget.automatic.taskSteps, 1); assert.equal(f.budget.stalled, 2); assert.equal(f.budget.checks.test.bestScore, 4);
 });

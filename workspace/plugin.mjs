@@ -13,6 +13,7 @@ import { registerRuntimeCapabilities } from './runtime-tool.mjs';
 import { cleanupIdleProjectCaches } from './cache-cleanup.mjs';
 import { checkpointOperation } from './checkpoint-api.mjs';
 import { installRuntimeAdmission } from './runtime-admission-hooks.mjs';
+import { automaticReviewView } from './automatic-review.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -91,7 +92,7 @@ export async function apply(ctx, config = {}) {
   } });
   async function state() {
     const workspaces = ctx.workspaceRegistry.list().map(w => ({ id: w.id, title: w.title, path: w.path, sessionIds: w.sessionIds, settings: manager.data.workspaces[w.id]?.settings }));
-    const projects = Object.fromEntries(Object.entries(manager.data.sessions).map(([id, p]) => [id, { root: p.root, ports: p.ports, databasePath: p.databasePath, baseCommit: p.baseCommit, nativeWorktree: p.nativeWorktree, legacy: p.legacy, budget: p.budget, checkpoints: Object.fromEntries(Object.entries(p.checkpoints ?? {}).map(([k, c]) => [k, { score: c.score, at: c.at, files: c.files }])), checkpointError: p.checkpointError }]));
+    const projects = Object.fromEntries(Object.entries(manager.data.sessions).map(([id, p]) => [id, { root: p.root, ports: p.ports, databasePath: p.databasePath, baseCommit: p.baseCommit, nativeWorktree: p.nativeWorktree, legacy: p.legacy, budget: p.budget ? { ...p.budget, automatic: automaticReviewView(p.budget.automatic) } : p.budget, checkpoints: Object.fromEntries(Object.entries(p.checkpoints ?? {}).map(([k, c]) => [k, { score: c.score, at: c.at, files: c.files }])), checkpointError: p.checkpointError, verification: p.lastVerification ? Object.fromEntries(['kind','exitCode','checksPassed','checksTotal','accepted','at'].map(k=>[k,p.lastVerification[k]])) : undefined, diagnostic: p.lastDiagnostic ? Object.fromEntries(['code','category','at'].map(k=>[k,p.lastDiagnostic[k]])) : undefined }]));
     const update = await fs.readFile(!config.updateReport || config.updateReport === '/data/harness/state/startup-update.json' ? '/data/harness/runtime-status/startup-update.json' : config.updateReport, 'utf8').then(JSON.parse).then(value => Object.fromEntries(['version','enabled','phase','checkedAt','appliedCommit','targetCommit','error','signatureVerified','bootstrapUpgradeRequired'].map(key => [key,value[key]]))).catch(() => null);
     return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, managedShellVersion: 1, projectBackgroundVersion: 1, changesVersion: 1, update, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
   }

@@ -12,6 +12,7 @@ import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, norm
 import { guideFirstCheck, warnStageBudget } from './verification-guidance.mjs';
 import { verificationStatusMayBeMasked } from './shell-status.mjs';
 import { beginUserRequest } from './turn-budget.mjs';
+import { prepareAutomaticRequest, automaticReview, admitAutomaticStep } from './automatic-review.mjs';
 import privateSource from './source-private.cjs';
 const { isPrivateSourcePath } = privateSource;
 const run = promisify(execFile);
@@ -23,7 +24,7 @@ export class WorkspaceManager {
     this.root = config.stateRoot ?? '/data/harness/state/workbench'; this.projectsRoot = config.projectsRoot ?? '/data/harness/workspaces/projects';
     this.file = path.join(this.root, 'registry.json'); this.locks = new ProjectLocks(path.join(this.root, 'leases'));
     this.changes = new LiveChanges({ ...config.changes, stateRoot: path.join(this.root, 'changes') });
-    this.serial = Promise.resolve(); this.persistQueue = Promise.resolve(); this.running = new Map(); this.grants = new Map(); this.budgets = new Map(); this.frozenSettings = new Map(); this.pendingNotices = new Map(); this.pendingDiagnostics = new Map(); this.resultWork = new Map();
+    this.serial = Promise.resolve(); this.persistQueue = Promise.resolve(); this.running = new Map(); this.grants = new Map(); this.budgets = new Map(); this.frozenSettings = new Map(); this.pendingNotices = new Map(); this.pendingDiagnostics = new Map(); this.resultWork = new Map(); this.automaticReviews = new Map();
   }
   async initialize() {
     await fs.mkdir(this.root, { recursive: true, mode: 0o700 }); await fs.mkdir(this.projectsRoot, { recursive: true, mode: 0o700 });
@@ -130,12 +131,12 @@ export class WorkspaceManager {
       // the user's project from starting when disk reserve is unavailable.
       try { await this.changes.initialize(agent.id, record, { projectCreated: true, signal }); }
       catch (error) { this.ctx.logger?.warn('Change baseline unavailable: ' + (error.code ?? 'CHANGES_UNAVAILABLE')); }
-      this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec use the same confined foreground project executor and export PORT, API_PORT, DATABASE_URL and the prepared tool paths. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs; quality contract documentation: /data/harness/app/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Validate each milestone; repeated failing checks or an unverified stage exceeding ${settings.maxStageSteps} steps will pause the run for a user strategy decision.`));
+      this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec use the same confined foreground project executor and export PORT, API_PORT, DATABASE_URL and the prepared tool paths. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs; quality contract documentation: /data/harness/app/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Verification never renews the total task allowance. Repeated identical errors without progress or an exhausted allowance stop safely with retained files.`));
       return record;
     });
   }
   async preStep({ agent, signal, turn, step, messages }) {
-    const initiator = agent.id, accessSession = agent.session; agent = this.ownerAgent(agent);
+    const executionAgent = agent, initiator = agent.id, accessSession = agent.session; agent = this.ownerAgent(agent);
     await this.drainToolResults(agent.id);
     if (this.data.trash[agent.id]) throw new WorkbenchError('SESSION_IN_TRASH', 'Restore this conversation before continuing.');
     const record = await this.ensureProject(agent, signal);
@@ -146,15 +147,29 @@ export class WorkspaceManager {
     await this.locks.acquire(record.root, agent.id); this.running.set(agent.id, record.root);
     await this.ensureRestoreRecovered(agent.id, record.root);
     const budget = this.budgets.get(agent.id), settings = this.settings(agent.session);
+    // Do not replace a request's accounting while one of its child steps is
+    // still completing a verification through the owner-scoped observer.
+    const pendingReview = this.automaticReviews.get(agent.id);
+    if (pendingReview) { try { await pendingReview; } catch (error) { if (signal?.aborted) throw error; } }
+    signal?.throwIfAborted();
+    const effective = { ...DEFAULTS, ...settings }, freshHuman = prepareAutomaticRequest(record, budget, { turn, messages, owner: initiator === agent.id }, effective.maxStageSteps);
     if (initiator === agent.id && beginUserRequest(record, budget, { turn, messages })) {
       delete record.stageBudgetWarningStage; delete record.stageBudgetWarningInspection;
     }
-    // One admission per proposed step; retries do not consume a second stage step.
-    if (record.lastStep !== `${initiator}:${turn}:${step}`) { record.lastStep = `${initiator}:${turn}:${step}`; budget.step(settings.maxStageSteps); }
+    const stepKey = `${initiator}:${turn}:${step}`;
+    if (!Object.hasOwn(budget.automatic.admitted, stepKey)) {
+      let review = this.automaticReviews.get(agent.id);
+      if (!review) {
+        review = automaticReview(this, { agent, executionAgent, signal }, record, budget, effective, freshHuman);
+        this.automaticReviews.set(agent.id, review);
+      }
+      try { await review; } finally { if (this.automaticReviews.get(agent.id) === review) this.automaticReviews.delete(agent.id); }
+      if (!Object.hasOwn(budget.automatic.admitted, stepKey) && admitAutomaticStep(budget, effective)) { budget.automatic.admitted[stepKey] = true; record.lastStep = stepKey; }
+    }
     await guideFirstCheck(this, agent, record, budget, signal);
     await warnStageBudget(this, agent, record, budget, settings.maxStageSteps, signal, accessSession);
     record.budget = budget; await this.save();
-    if (budget.blocked) throw new WorkbenchError(budget.blocked.code, budget.blocked.message + ' Open Workspace → Run review to choose a different strategy.');
+    if (budget.blocked) throw new WorkbenchError(budget.blocked.code, budget.blocked.message + ' Files and verification results are retained. See Workspace → Run review for details.');
   }
   ownerAgent(agent) {
     const seen = new Set();
@@ -265,8 +280,17 @@ export class WorkspaceManager {
     }
     let manifest;
     if (recovery.verification) try { manifest = await sourceManifest(record.root, { signal: exec.signal }); } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
-    const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, recovery, operationScope, manifestHash: manifest?.sha256 }, this.settings(exec.agent.session).noProgressLimit);
-    if (decision.improved && manifest) {
+    const proofHash = structured ? value?.stale === false && value?.sourceHash === manifest?.sha256 ? manifest?.sha256 : undefined
+      : this.budgets.get(exec.agent.id)?.automatic ? undefined : manifest?.sha256;
+    if (structured && record.lastVerification && !proofHash) record.lastVerification.accepted = false;
+    const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, recovery, operationScope, manifestHash: proofHash }, this.settings(exec.agent.session).noProgressLimit);
+    if (budget.automatic && !structured && recovery.verification && !recovery.failed) {
+      const diagnostics = this.pendingDiagnostics.get(exec.agent.id) ?? new Map();
+      if (diagnostics.size < 4 || diagnostics.has('VERIFICATION_SOURCE_UNBOUND')) diagnostics.set('VERIFICATION_SOURCE_UNBOUND', '[Harness: source binding unavailable] The foreground check returned its actual success, but shell execution has no trusted before/after source proof. Its output is retained and no stage was renewed. Use source-bound verify_project for canonical stage verification.');
+      this.pendingDiagnostics.set(exec.agent.id, diagnostics);
+    }
+    if (budget.automatic && typeof exec.callId === 'string' && budget.automatic.activeCallId === exec.callId) budget.automatic.lastAutomaticOutcome = { callId: exec.callId, verifiedProgress: decision.verifiedProgress === true, failed: recovery.failed, sourceHash: proofHash };
+    if (decision.improved && manifest && (!budget.automatic || proofHash)) {
       try {
         const saved = await saveCheckpoint(record.root, path.join(this.root, 'checkpoints', exec.agent.id, 'best'), manifest);
         record.checkpoints ??= {}; record.checkpoints[decision.key] = { path: saved, score: decision.score, at: Date.now(), files: Object.keys(manifest.files).length, sha256: manifest.sha256 };
@@ -303,6 +327,8 @@ export class WorkspaceManager {
     record.lastVerification = { kind: report.kind, exitCode: report.exitCode, at: Date.now(), sourceHash: report.sourceHash, checksPassed: report.checksPassed, checksTotal: report.checksTotal, accepted: false }; await this.save();
   }
   async releaseIfIdle(id) {
+    const automatic = this.budgets?.get(id)?.automatic;
+    if (this.automaticInFlight?.has(id) || automatic?.uncertain && !automatic.terminalAcknowledged) return; // Preserve leases through a crash or unacknowledged SDK work.
     await this.drainToolResults(id);
     if (this.ctx.agents.get(id)?.status === 'running') return;
     const activity = await this.ctx.waterfall('workspace/session-activity', { sessionId: id }, () => Promise.resolve([]));
@@ -312,7 +338,14 @@ export class WorkspaceManager {
   async reviewResume(id, strategy) {
     const record = this.data.sessions[id], agent = this.ctx.agents.get(id);
     if (!record || !agent || agent.status === 'running') throw new WorkbenchError('SESSION_BUSY', 'Open an idle managed conversation before resuming.');
-    const budget = this.budgets.get(id); budget.resume(strategy); record.budget = budget; record.lastStep = null; await this.save();
+    const budget = this.budgets.get(id), settings = { ...DEFAULTS, ...this.settings(agent.session) };
+    prepareAutomaticRequest(record, budget, {}, settings.maxStageSteps);
+    if (budget.automatic.uncertain || this.automaticInFlight?.has(id)) throw new WorkbenchError('AUTOMATIC_VERIFICATION_UNCERTAIN', 'A verification has no reconciled completion. Review cannot clear its unknown-operation fence.');
+    if (budget.automatic.taskSteps >= settings.maxTaskSteps) throw new WorkbenchError('TASK_BUDGET', 'The allowance is exhausted. Send a new bounded task in the conversation.');
+    if (settings.maxAutomaticChecks > 0 && budget.automatic.checks >= settings.maxAutomaticChecks) throw new WorkbenchError('AUTOMATIC_CHECK_LIMIT', 'The automatic check allowance is exhausted. Send a new concrete task rather than retrying the same review.');
+    budget.resume(strategy);
+    if (settings.maxAutomaticChecks > 0) budget.automatic.nextCheckAt = budget.automatic.taskSteps;
+    record.budget = budget; record.lastStep = null; await this.save();
     agent.followup(notice('The owner reviewed the paused run and chose this revised approach: ' + strategy + '. Continue the existing task in the isolated project and verify a small stage first.'));
   }
   restoreLocations(id) { if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(id)) throw new WorkbenchError('INVALID_SESSION', 'Invalid conversation.', 400); return { stateRoot: path.join(this.root, 'restores', id), checkpointRoot: path.join(this.root, 'checkpoints', id) }; }

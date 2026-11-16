@@ -70,6 +70,7 @@ first-use read-only behavior and a project service's start/stop lifecycle.
 Install with the normal signed source update. An already running Harness needs one
 controlled Harness-only restart while its conversations are idle; model and Apps
 services do not need a restart. Workbench state reports `managedShellVersion: 1`,
-`projectBackgroundVersion: 1` and `repairPolicyVersion: 3` after this version is
-loaded. A signed commit or a passing local test does not prove that a particular
+`projectBackgroundVersion: 1` and `repairPolicyVersion: 3` or later after this version is
+loaded. Policy version 4 adds [automatic stage verification](autonomous-stages.md)
+with a separate finite task allowance. A signed commit or a passing local test does not prove that a particular
 server has activated it; inspect its installed revision and service health.
