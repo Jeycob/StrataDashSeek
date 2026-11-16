@@ -15,6 +15,7 @@ import { checkpointOperation } from './checkpoint-api.mjs';
 import { installRuntimeAdmission } from './runtime-admission-hooks.mjs';
 import { automaticReviewView } from './automatic-review.mjs';
 import { installDockerCleanup } from './docker-cleanup.mjs';
+import { installModelSelection } from './model-selection.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -25,6 +26,7 @@ export async function apply(ctx, config = {}) {
   const sourceCommit = path.basename(await fs.realpath(root));
   const admission = installRuntimeAdmission(ctx, { expectedCommit: sourceCommit });
   const manager = new WorkspaceManager(ctx, config); await manager.initialize();
+  const models = installModelSelection(ctx, manager, { lifecycle: false });
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
   installDockerCleanup(ctx,manager,appsConfig,callApps);
@@ -52,9 +54,9 @@ export async function apply(ctx, config = {}) {
   const managedShell = createManagedShell(ctx, manager, runProjectCommand);
   // SDK tool admission precedes pre-step. Register at creation and enrollment,
   // including seeded future projects, before the first tool-set snapshot.
-  for (const agent of ctx.agents.list()) managedShell.install(agent);
+  for (const agent of ctx.agents.list()) { await models.restore(agent); managedShell.install(agent); }
   ctx.effect(() => () => managedShell.dispose());
-  ctx.on('agent/created', async ({ agent, source, signal }) => { await manager.applyDefaults(agent, source); if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal); managedShell.install(agent); }, { global: true });
+  ctx.on('agent/created', async ({ agent, source, signal }) => { await models.restoreAfterDefaults(agent, source, (a, s) => manager.applyDefaults(a, s)); if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal); managedShell.install(agent); }, { global: true });
   ctx.on('agent/pre-step', async (input, next) => {
     await manager.preStep(input); manager.frozenSettings.set(input.agent.id, { ...manager.settings(manager.ownerAgent(input.agent).session) });
     const decision = await next(), id = manager.ownerAgent(input.agent).id, message = manager.pendingNotices.get(id), diagnostics = manager.pendingDiagnostics.get(id);

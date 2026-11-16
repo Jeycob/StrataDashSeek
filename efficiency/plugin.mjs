@@ -32,7 +32,7 @@ export async function apply(ctx,config={}){
       // compaction removed from the current model surface. Never use summaries
       // or a child agent's assignment as the owner's latest human request.
       const query=ctx.sessionQuery??ctx.get?.('sessionQuery');
-      if(query){const saved=await query.readSession(id);card(id).observeMessages(saved.events.filter(e=>e.type==='user/message').map(e=>e.data));}
+      if(query){const saved=await query.readSession(id);card(id).observeMessages(saved.events.flatMap(e=>e.type==='user/message'?[e.data]:e.type==='agent/inbox/spliced'?e.data.inserted??[]:[]));}
     })().catch(error=>{hydrated.delete(id);throw error;}));
     await hydrated.get(id);
   }
