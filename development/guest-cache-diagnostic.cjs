@@ -6,6 +6,7 @@ function guestScript(nonce, base = census.guestScript) {
   const original = base(nonce), marker = '# Cached signed packages only. APK must fail if the cache is incomplete.';
   if (original.split(marker).length !== 2) throw Error('CENSUS_TEMPLATE_CHANGED');
   return original.slice(0, original.indexOf(marker)) + `
+apk --version
 apk_reason() {
   if grep -qi 'read-only file system' /tmp/census-apk.log; then echo CENSUS_APK_REASON=READONLY_CACHE;
   elif grep -qi 'permission denied' /tmp/census-apk.log; then echo CENSUS_APK_REASON=PERMISSION;
@@ -54,6 +55,11 @@ else
     else
       apk_status=$?; printf 'CENSUS_EXPLICIT_APK_STATUS=%s\\n' "$apk_status"; apk_reason
       awk 'length($1)<120 && $1 ~ /^[a-zA-Z0-9][a-zA-Z0-9+_.-]*$/ && /no such package|missing|conflict|breaks/ {print "CENSUS_APK_SELECTION_PACKAGE=" $1}' /tmp/census-apk.log
+      # This bounded log was just produced by public signed-package install
+      # inside the empty guest. It contains no old config, environment or data.
+      echo CENSUS_PUBLIC_APK_DIAGNOSTIC_BEGIN
+      tail -c 4096 /tmp/census-apk.log
+      printf '\\nCENSUS_PUBLIC_APK_DIAGNOSTIC_END\\n'
       exit 1
     fi
   fi
