@@ -3,7 +3,7 @@ name: Linux release checks
 on:
   pull_request:
   push:
-    branches: [main, 'fix/**']
+    branches: [main, 'fix/**', 'codex/**']
   workflow_dispatch:
 
 permissions:

@@ -7,6 +7,10 @@ it is not installed into the production runtime. All four official Actions
 are pinned to full commit IDs. The workflow neither deploys nor uses production
 credentials. Its successful result is not live production acceptance.
 
+Pushes to `main`, `fix/**`, and `codex/**` run the same gate. This lets the
+integration owner validate a normal Codex branch through an authorized Git push;
+workflow dispatch and pull requests remain available.
+
 ## What runs
 
 `development/release-ci.mjs` inventories Git-tracked and nonignored untracked
