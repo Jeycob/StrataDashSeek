@@ -51,7 +51,9 @@ else
       printf 'CENSUS_CACHED_PACKAGE=%s\\n' "$name"
     done
     set -- /tmp/census-cache/*.apk
-    if timeout 45 apk --no-network --no-cache add "$@" > /tmp/census-apk.log 2>&1; then echo CENSUS_EXPLICIT_APK_STATUS=0;
+    # The diskless guest is intentionally discarded. This acknowledges ONLY
+    # package persistence loss; signature verification remains mandatory.
+    if timeout 45 apk --no-network --no-cache --force-non-repository add "$@" > /tmp/census-apk.log 2>&1; then echo CENSUS_EXPLICIT_APK_STATUS=0;
     else
       apk_status=$?; printf 'CENSUS_EXPLICIT_APK_STATUS=%s\\n' "$apk_status"; apk_reason
       awk 'length($1)<120 && $1 ~ /^[a-zA-Z0-9][a-zA-Z0-9+_.-]*$/ && /no such package|missing|conflict|breaks/ {print "CENSUS_APK_SELECTION_PACKAGE=" $1}' /tmp/census-apk.log

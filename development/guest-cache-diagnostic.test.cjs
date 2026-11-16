@@ -7,7 +7,8 @@ test('cache diagnostic bounds independent RAM copy and never falls back to netwo
   assert.match(script, /cache_count.*-le 200.*cache_bytes.*-le 125829120/);
   assert.equal(script.match(/apk --cache-dir[^\n]+--no-network add docker/g).length, 2);
   assert.match(script, /set -- \/tmp\/census-cache\/\*\.apk/);
-  assert.match(script, /timeout 45 apk --no-network --no-cache add "\$@"/);
+  assert.match(script, /timeout 45 apk --no-network --no-cache --force-non-repository add "\$@"/);
+  assert.equal(script.match(/--force-non-repository/g).length, 1);
   assert.doesNotMatch(script, /--allow-untrusted|apk update|https?:|curl|wget|(?:cat|head)\s+[^\n]*census-apk\.log/m);
   assert.match(script, /tail -c 4096 \/tmp\/census-apk\.log/);
   assert.match(script, /apk --version/);
