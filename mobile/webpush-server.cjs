@@ -9,6 +9,7 @@ const {createDeviceWake}=require('./device-wake.cjs');
 const {createAppsContextGateway,readWorkbench}=require('./apps-context.cjs');
 const {atomicJson}=require('./private-json.cjs');
 const {NotificationOutbox}=require('./notification-outbox.cjs');
+const {nativeResourceRoute,proxyNativeResource}=require('./native-resource-proxy.cjs');
 const ROOT=path.resolve(__dirname,'../..');
 const webpush=process.env.HARNESS_WEB_PUSH_MODULE?require(process.env.HARNESS_WEB_PUSH_MODULE):runtimeRequire('web-push');
 function readJson(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'))}catch(e){if(e.code==='ENOENT')return fallback;throw e;}}
@@ -136,6 +137,7 @@ function createPushServer(cfg,adapter=webpush,services={}){
    if(!await authorized(req))return json(res,401,{error:'Tento prohlížeč ještě není propojený s Harness serverem.'});
    if(u.pathname.startsWith('/phone/api/apps/')){
     const route=u.pathname.slice('/phone/api/apps'.length),getRoutes=['/state','/job-log','/container-log','/releases','/release','/export-download'],postRoutes=['/register','/scaffold','/vault-config','/project-settings','/target-settings','/project-action','/container-action','/worker-action','/hold','/preview-settings'];
+    if(nativeResourceRoute(route,req.method))return proxyNativeResource({route,method:req.method,query:u.searchParams,cookie:req.headers.cookie,payload:req.method==='POST'?await body(req):undefined,res,port:cfg.harnessPort||3090,publicHost:cfg.publicHost});
     if(!(req.method==='GET'&&getRoutes.includes(route)||req.method==='POST'&&postRoutes.includes(route)))return json(res,404,{error:'Not found'});
     const payload=req.method==='POST'?await body(req):{},controller=new AbortController(),closed=()=>{if(!res.writableEnded)controller.abort();};res.once('close',closed);
     try{

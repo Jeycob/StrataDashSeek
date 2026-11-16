@@ -51,3 +51,14 @@ test('unknown guest values are null and old heartbeat cannot become fresh census
   const guest = guestVolume({ at: 100, worker: { phase: 'ready', diskCheckedAt: 999, totalBytes: 1000, usedBytes: 700, freeBytes: 250, totalInodes: 100, freeInodes: 20 } }, 1000, 100);
   assert.equal(guest.stale, true); assert.equal(guest.inodesFree, 20); assert.equal(guest.detailsTruncated, true);
 });
+
+test('guest rejects impossible capacity and future heartbeat/inventory timestamps', () => {
+  const observation = { at: 1000, worker: { phase: 'ready', diskCheckedAt: 1000, totalBytes: 100, usedBytes: 50, freeBytes: 50, totalInodes: 10, freeInodes: 5, storageCheckedAt: 1000 } };
+  assert.equal(guestVolume(observation, 1000, 30000).stale, false);
+  for (const patch of [{ freeBytes: 200 }, { usedBytes: 101 }, { usedBytes: 51 }, { freeInodes: 20 }]) {
+    const result = guestVolume({ ...observation, worker: { ...observation.worker, ...patch } }, 1000, 30000);
+    assert.equal(result.stale, true); assert.equal(result.errorCode, 'GUEST_CAPACITY_INVALID');
+  }
+  assert.equal(guestVolume({ ...observation, at: 1000000 }, 1000, 30000).stale, true);
+  assert.equal(guestVolume({ ...observation, worker: { ...observation.worker, storageCheckedAt: 1000000 } }, 1000, 30000).inventoryStale, true);
+});

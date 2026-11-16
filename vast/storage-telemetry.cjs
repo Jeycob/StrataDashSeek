@@ -54,15 +54,19 @@ async function scanCategories(roots, { io = fs, now = Date.now, maxEntries = 200
 
 function guestVolume(observation, now, staleMs) {
   const result = empty('docker-guest', 'docker-guest', 'Managed Docker guest');
-  const worker = observation?.worker, at = safe(worker?.diskCheckedAt);
+  const worker = observation?.worker, at = safe(worker?.diskCheckedAt), heartbeatAt = safe(observation?.at);
   if (!worker) return { ...result, errorCode: 'GUEST_UNAVAILABLE' };
-  const totalBytes = safe(worker.totalBytes), availableBytes = safe(worker.freeBytes);
-  return { ...result, totalBytes, usedBytes: safe(worker.usedBytes), availableBytes, inodesTotal: safe(worker.totalInodes), inodesFree: safe(worker.freeInodes),
-    observedAt: at, stale: worker.phase !== 'ready' || at === null || now < at || now - at > staleMs || !safe(observation.at) || now - observation.at > staleMs,
-    errorCode: worker.phase === 'ready' ? at === null ? 'NOT_OBSERVED' : null : 'GUEST_' + (worker.phase === 'asleep' ? 'ASLEEP' : 'UNAVAILABLE'),
+  const totalBytes = safe(worker.totalBytes), availableBytes = safe(worker.freeBytes), usedBytes = safe(worker.usedBytes), inodesTotal = safe(worker.totalInodes), inodesFree = safe(worker.freeInodes), inventoryAt = safe(worker.storageCheckedAt);
+  const bytesInvalid = totalBytes !== null && (availableBytes !== null && availableBytes > totalBytes || usedBytes !== null && usedBytes > totalBytes || availableBytes !== null && usedBytes !== null && availableBytes > totalBytes - usedBytes);
+  const inodesInvalid = inodesTotal !== null && inodesFree !== null && inodesFree > inodesTotal;
+  const invalid = bytesInvalid || inodesInvalid, partial = [totalBytes, availableBytes, usedBytes, inodesTotal, inodesFree].some(v => v === null);
+  const fresh = time => time !== null && time <= now && now - time <= staleMs;
+  return { ...result, totalBytes, usedBytes: bytesInvalid ? null : usedBytes, availableBytes: bytesInvalid ? null : availableBytes, inodesTotal, inodesFree: inodesInvalid ? null : inodesFree,
+    observedAt: at, stale: worker.phase !== 'ready' || invalid || partial || !fresh(at) || !fresh(heartbeatAt),
+    errorCode: worker.phase === 'ready' ? invalid ? 'GUEST_CAPACITY_INVALID' : partial ? 'GUEST_CAPACITY_PARTIAL' : !fresh(at) || !fresh(heartbeatAt) ? 'GUEST_OBSERVATION_STALE' : null : 'GUEST_' + (worker.phase === 'asleep' ? 'ASLEEP' : 'UNAVAILABLE'),
     // No virtual per-image sizes are mixed into host allocated-byte totals.
     categories: Array.isArray(worker.storageCategories) ? worker.storageCategories.filter(r => ['images', 'containers', 'volumes', 'cache'].includes(r?.id)).map(r => ({ id: r.id, label: r.id, bytes: safe(r.bytes), partial: r.partial !== false, shared: r.shared === true })) : [],
-    inventoryObservedAt: safe(worker.storageCheckedAt), inventoryStale: safe(worker.storageCheckedAt) === null || now - worker.storageCheckedAt > 600000,
+    inventoryObservedAt: inventoryAt, inventoryStale: inventoryAt === null || inventoryAt > now || now - inventoryAt > 600000,
     detailsTruncated: !Array.isArray(worker.storageCategories) };
 }
 
@@ -99,7 +103,7 @@ function createStorageMonitor({ root = '/data/harness', capacityPath = '/data', 
     }
   }
   function snapshot() {
-    refresh(); const at = now(), volumes = [{ ...host, stale: host.stale || host.observedAt === null || at - host.observedAt > staleMs, inventoryStale: !host.inventoryObservedAt || at - host.inventoryObservedAt > inventoryTtlMs * 2 }, guestVolume(guest, at, staleMs)];
+    refresh(); const at = now(), volumes = [{ ...host, stale: host.stale || host.observedAt === null || host.observedAt > at || at - host.observedAt > staleMs, inventoryStale: host.inventoryObservedAt == null || host.inventoryObservedAt > at || at - host.inventoryObservedAt > inventoryTtlMs * 2 }, guestVolume(guest, at, staleMs)];
     return { version: 1, observedAt: at, stale: volumes.some(v => v.stale), scanning: Boolean(scanning), volumes };
   }
   return { snapshot, settled: async () => { await Promise.all([sampling, scanning]); }, close: async () => { closed = true; await Promise.all([sampling, scanning]); } };
