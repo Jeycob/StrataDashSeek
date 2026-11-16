@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { WorkspaceManager } from './manager.mjs';
 import { RepairBudget } from './policy.mjs';
+import { sourceManifest } from './storage.mjs';
 
 async function fixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-results-'));
@@ -22,7 +23,7 @@ test('verify_project enters the same final-result budget exactly once and reject
   const { manager: m, exec, result } = await fixture(t);
   await m.reportVerification({ sessionId: 'one', kind: 'all', exitCode: 0, checksPassed: 2, checksTotal: 2 });
   assert.equal(m.budgets.get('one').stage, 1); assert.equal(m.data.sessions.one.lastVerification.accepted, false);
-  const report = { passed: true, complete: true, stale: false, checks: [{ passed: true, checksPassed: 2, checksTotal: 2, category: 'success', diagnosticCode: 'OK' }] };
+  const report = { passed: true, complete: true, stale: false, sourceHash: (await sourceManifest(m.data.sessions.one.root)).sha256, checks: [{ passed: true, checksPassed: 2, checksTotal: 2, category: 'success', diagnosticCode: 'OK' }] };
   m.observeToolResult({ ...exec('verify_project'), arguments: { kind: 'all' } }, result(JSON.stringify(report), report, false));
   await m.drainToolResults('one'); assert.equal(m.budgets.get('one').stage, 2); assert.equal(m.data.sessions.one.lastVerification.accepted, true);
   const config = { passed: false, complete: false, code: 'INVALID_CONTRACT', checks: [] };

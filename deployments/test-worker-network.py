@@ -32,12 +32,18 @@ def main():
             time.sleep(.02)
         raise RuntimeError('Child namespace did not start')
     http_server = '''from http.server import ThreadingHTTPServer,BaseHTTPRequestHandler
-import sys
+import sys,socketserver
+# These fixtures bind and query literal IPs. Avoid HTTPServer.server_bind's
+# reverse-DNS lookup, which depends on the isolated namespace's DNS routing.
+class NumericAddressHTTPServer(ThreadingHTTPServer):
+ def server_bind(self):
+  socketserver.TCPServer.server_bind(self)
+  self.server_name,self.server_port=self.server_address
 class Handler(BaseHTTPRequestHandler):
  def do_GET(self):
   self.send_response(200);self.end_headers();self.wfile.write(sys.argv[2].encode())
  def log_message(self,*args): pass
-ThreadingHTTPServer(('0.0.0.0',int(sys.argv[1])),Handler).serve_forever()
+NumericAddressHTTPServer(('0.0.0.0',int(sys.argv[1])),Handler).serve_forever()
 '''
     http_query = '''import urllib.request,sys
 try:
