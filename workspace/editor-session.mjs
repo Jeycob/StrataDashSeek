@@ -49,7 +49,7 @@ export function createEditorSessions(ctx,manager,{adapter,origins,ownerOrigin,br
    const prior=active.get(sessionId);
    if(prior&&(prior.generation!==process.generation||prior.socketPath!==process.socketPath||prior.readOnly!==project.readOnly)){prior.broker.close();active.delete(sessionId);}
    let entry=active.get(sessionId);
-   if(!entry){const broker=brokerFactory({sessionId,generation:process.generation,origin:endpoint.origin,ownerOrigin,socketPath:process.socketPath,onActivity:()=>activity(sessionId,process.generation)});try{await bind(broker,endpoint);}catch(error){broker.close();throw error;}entry={broker,generation:process.generation,socketPath:process.socketPath,readOnly:project.readOnly,epoch};active.set(sessionId,entry);}
+   if(!entry){const broker=brokerFactory({sessionId,generation:process.generation,origin:endpoint.origin,ownerOrigin,socketPath:process.socketPath,runtimeDeadline:process.hardDeadline,onActivity:()=>activity(sessionId,process.generation)});try{await bind(broker,endpoint);}catch(error){broker.close();throw error;}entry={broker,generation:process.generation,socketPath:process.socketPath,readOnly:project.readOnly,epoch};active.set(sessionId,entry);}
    return{...entry.broker.issue(),readOnly:project.readOnly};
   }catch(error){await close(sessionId).catch(()=>{});await adapter.stopEditor({sessionId,generation:process.generation}).catch(()=>{});throw error;}
   }finally{if(openings.get(sessionId)===controller)openings.delete(sessionId);}

@@ -3,18 +3,19 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {createProjectEditorAdapter,validateEditorProof} from './editor-runtime-adapter.mjs';
 function fixture(){
- let clock=100000,failStop=false,failTouch=false,abortAfterEnsure;
+ let clock=100000,failStop=false,failTouch=false,abortAfterEnsure,ensureFault,stopFault;
  const calls=[],bridges=[],proofs=new Map(),input={sessionId:'project-A',projectRoot:'/projects/A',readOnly:false},grants=[];
  const manager={async withProjectRuntimeAuthority(context,action){grants.push(context);return action('private-authority');}};
  const adapter=createProjectEditorAdapter(manager,{appsConfig:{projectRuntime:{enabled:true}},callApps:async(route,data)=>{
   assert.equal(route,'/project-runtime');calls.push(data);
-  if(data.op==='stop'){if(failStop)throw Error('OFFLINE');return{state:'stopped',sessionId:data.sessionId,generation:data.generation};}
+  if(data.op==='stop'){if(failStop)throw Error('OFFLINE');return{version:1,state:'stopped',sessionId:data.sessionId,generation:data.generation,operationId:'c'.repeat(32),...stopFault};}
   if(data.op==='touch'){if(failTouch)throw Error('POLICY_DENIED');const proof=proofs.get(data.generation);assert.equal(data.stopToken,proof.stopToken);return{...proof,expiresAt:Math.min(clock+300000,proof.hardDeadline)};}
   const scopeId=crypto.createHash('sha256').update(input.sessionId+'\0'+input.projectRoot).digest('hex').slice(0,32);
-  const proof={version:1,state:'ready',...input,generation:data.generation,scopeId,isolation:{enforced:true,...input},transport:{host:'127.0.0.1',guestAddress:'10.0.2.15',hostPort:19180,guestPort:19180,bootPid:42,mtls:true,serverName:scopeId+'.'+data.generation+'.editor.homeai.invalid'},containerIds:{editor:'a'.repeat(64),relay:'b'.repeat(64)},operationId:'c'.repeat(32),stopToken:'d'.repeat(43),expiresAt:clock+300000,hardDeadline:clock+1800000};
-  proofs.set(data.generation,proof);abortAfterEnsure?.abort(Error('CANCELLED'));return proof;
+  assert.match(data.stopToken,/^[A-Za-z0-9_-]{43}$/);
+  const proof={version:1,state:'ready',...input,generation:data.generation,scopeId,isolation:{enforced:true,...input},transport:{host:'127.0.0.1',guestAddress:'10.0.2.15',hostPort:19180,guestPort:19180,bootPid:42,mtls:true,serverName:scopeId+'.'+data.generation+'.editor.homeai.invalid'},containerIds:{editor:'a'.repeat(64),relay:'b'.repeat(64)},operationId:'c'.repeat(32),stopToken:data.stopToken,expiresAt:clock+300000,hardDeadline:clock+1800000};
+  proofs.set(data.generation,proof);abortAfterEnsure?.abort(Error('CANCELLED'));if(ensureFault==='lost')throw Error('RESPONSE_LOST');return ensureFault==='swapped'?{...proof,stopToken:'x'.repeat(43)}:proof;
  },socketDirectory:'/private',transportIdentity:async({scopeId,generation})=>({serverName:scopeId+'.'+generation+'.editor.homeai.invalid'}),bridgeFactory:async()=>{const bridge={socketPath:'/private/fixture.sock',closed:false,async close(){this.closed=true;}};bridges.push(bridge);return bridge;},now:()=>clock});
- return{adapter,input,calls,bridges,proofs,grants,advance:ms=>clock+=ms,setFailStop:value=>failStop=value,setFailTouch:value=>failTouch=value,abortWith:controller=>abortAfterEnsure=controller};
+ return{adapter,input,calls,bridges,proofs,grants,advance:ms=>clock+=ms,setFailStop:value=>failStop=value,setFailTouch:value=>failTouch=value,abortWith:controller=>abortAfterEnsure=controller,setEnsureFault:value=>ensureFault=value,setStopFault:value=>stopFault=value};
 }
 test('reopening reuses the bridge with fresh touch authority and never repeats admission',async()=>{
  const f=fixture(),first=await f.adapter.ensureEditor(f.input),again=await f.adapter.ensureEditor(f.input);
@@ -46,4 +47,28 @@ test('proof rejects plaintext transport, swapped scope and unbounded lease',asyn
   assert.throws(()=>validateEditorProof({...proof,...patch},context,100000),{code:'EDITOR_ISOLATION_UNPROVEN'});
  }
  await f.adapter.dispose();
+});
+test('lost admission response uses the original pre-minted capability and forbids replacement until stop',async()=>{
+ const f=fixture();f.setEnsureFault('lost');f.setFailStop(true);
+ await assert.rejects(f.adapter.ensureEditor(f.input),/RESPONSE_LOST/);
+ const admitted=f.calls.find(c=>c.op==='ensure');
+ assert.equal(f.calls.at(-1).stopToken,admitted.stopToken);
+ await assert.rejects(f.adapter.ensureEditor(f.input),/OFFLINE/);
+ assert.equal(f.calls.filter(c=>c.op==='ensure').length,1);
+ f.setFailStop(false);f.setEnsureFault(null);await f.adapter.ensureEditor(f.input);
+ assert.equal(f.calls.filter(c=>c.op==='ensure').length,2);await f.adapter.dispose();
+});
+test('swapped echoed capability is refused and never used for cleanup',async()=>{
+ const f=fixture();f.setEnsureFault('swapped');
+ await assert.rejects(f.adapter.ensureEditor(f.input),{code:'EDITOR_ISOLATION_UNPROVEN'});
+ assert.equal(f.bridges.length,0);assert.equal(f.calls.at(-1).stopToken,f.calls[0].stopToken);
+ assert.notEqual(f.calls.at(-1).stopToken,'x'.repeat(43));
+});
+test('malformed or wrong-operation stop acknowledgement retains ownership',async()=>{
+ const f=fixture(),ready=await f.adapter.ensureEditor(f.input);
+ for(const patch of [{version:2},{operationId:'f'.repeat(32)},{generation:'0'.repeat(32)}]){
+  f.setStopFault(patch);await assert.rejects(f.adapter.stopEditor({...f.input,generation:ready.generation}),{code:'EDITOR_STOP_UNCONFIRMED'});
+ }
+ assert.equal(f.calls.filter(c=>c.op==='ensure').length,1);
+ f.setStopFault(null);await f.adapter.dispose();assert.equal(f.calls.at(-1).op,'stop');
 });

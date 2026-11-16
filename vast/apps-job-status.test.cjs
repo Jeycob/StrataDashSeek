@@ -13,7 +13,7 @@ test('structured status reads the existing job registry without waking Docker or
 test('terminal rows do not settle heavy work while controller or resource outcomes remain uncertain',()=>{
  const job={id,action:'verify',status:'passed'},manager={store:{jobs:[job]}};
  assert.equal(jobStatus(manager,id).job.workSettled,true);
- for(const patch of [{status:'interrupted'},{status:'recovery_required'},{deploymentPhase:'recovery_required'},{projectRuntime:{state:'ready'}},{creations:[{state:'unknown'}]},{creations:[{state:'confirmed',resourceStart:{state:'pending'}}]},{dataOperations:{operations:{copy:{state:'pending'}}}}]){
+ for(const patch of [{status:'interrupted'},{status:'recovery_required'},{deploymentPhase:'recovery_required'},{projectRuntime:{state:'ready'}},{creations:[{state:'unknown'}]},{creations:[{state:'confirmed',resourceStart:{state:'pending'}}]},{dataOperations:{}},{dataOperations:{operations:{copy:{state:'pending'}}}}]){
   manager.store.jobs=[{...job,...patch}];assert.equal(jobStatus(manager,id).job.workSettled,false);
  }
  manager.store.jobs=[job];manager.busy=id;assert.equal(jobStatus(manager,id).job.workSettled,false);

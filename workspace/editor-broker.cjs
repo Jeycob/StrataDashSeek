@@ -24,10 +24,12 @@ function outgoing(headers,ownerOrigin){
  const csp=String(out['content-security-policy']||'').split(';').map(x=>x.trim()).filter(x=>x&&!/^frame-ancestors(?:\s|$)/i.test(x));csp.push('frame-ancestors '+ownerOrigin);out['content-security-policy']=csp.join('; ');out['permissions-policy']='document-domain=()';
  return out;
 }
-function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,onActivity=async()=>{},now=Date.now,grantMs=60000,sessionMs=30*60000,requestMs=30000,maxGrants=16}){
+function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,onActivity=async()=>{},runtimeDeadline=Infinity,now=Date.now,grantMs=60000,sessionMs=30*60000,requestMs=30000,maxGrants=16}){
  const u=new URL(origin),owner=new URL(ownerOrigin);
  if(u.protocol!=='https:'||owner.protocol!=='https:'||u.origin!==origin||owner.origin!==ownerOrigin||origin===ownerOrigin||!/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)||typeof generation!=='string'||!generation||typeof socketPath!=='string'||!(socketPath.startsWith('/')||process.platform==='win32'&&socketPath.startsWith('\\\\.\\pipe\\homeai-editor-'))||![grantMs,sessionMs,requestMs,maxGrants].every(x=>Number.isSafeInteger(x)&&x>0)||grantMs>120000||sessionMs>3600000)throw Error('EDITOR_CONFIGURATION_INVALID');
  const cookieName='__Secure-homeai-editor-'+digest(origin).slice(0,20),grants=new Map(),sessions=new Map(),sockets=new Set();let closed=false;
+ if(runtimeDeadline!==Infinity&&(!Number.isSafeInteger(runtimeDeadline)||runtimeDeadline<=now()||runtimeDeadline>now()+3600000))throw Error('EDITOR_RUNTIME_DEADLINE_INVALID');
+ const sessionExpiry=()=>Math.min(now()+sessionMs,runtimeDeadline);
  const sweep=()=>{for(const map of[grants,sessions])for(const[k,v]of map)if(v<=now())map.delete(k);};
  const denied=(res,status=403,code='EDITOR_ACCESS_DENIED')=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify({code}));};
  // SameSite cookies do not separate ports: a sibling editor can send this
@@ -41,20 +43,20 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
   return req.method==='GET'&&h['sec-fetch-mode']==='navigate'&&['document','iframe'].includes(h['sec-fetch-dest'])&&['none','same-site'].includes(site);
  };
  function authorized(req){
-  if(closed||!authority(req))return false;sweep();const values=String(req.headers.cookie||'').split(';').map(x=>x.trim()).filter(x=>x.startsWith(cookieName+'='));
+  if(closed||now()>=runtimeDeadline||!authority(req))return false;sweep();const values=String(req.headers.cookie||'').split(';').map(x=>x.trim()).filter(x=>x.startsWith(cookieName+'='));
   if(values.length!==1)return false;const value=values[0].slice(cookieName.length+1);return validToken(value)&&sessions.get(digest(value));
  }
  const bootstrapScript="const t=location.hash.slice(1);history.replaceState(null,'','/__editor/bootstrap');if(!/^[A-Za-z0-9_-]{43}$/.test(t))document.body.textContent='Editor link expired. Reopen it from the conversation.';else fetch('/__editor/claim',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({grant:t})}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.body.textContent='Editor link expired. Reopen it from the conversation.');";
  const scriptHash=crypto.createHash('sha256').update(bootstrapScript).digest('base64');
  const server=http.createServer(async(req,res)=>{
-  if(closed||!authority(req))return denied(res);
+  if(closed||now()>=runtimeDeadline||!authority(req))return denied(res);
   if(req.method==='GET'&&req.url==='/__editor/bootstrap'){
    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Origin-Agent-Cluster':'?1','Content-Security-Policy':"default-src 'none'; script-src 'sha256-"+scriptHash+"'; connect-src 'self'; frame-ancestors "+ownerOrigin});
    return res.end('<!doctype html><meta charset="utf-8"><title>Opening editor</title><body>Opening editor…<script>'+bootstrapScript+'</script>');
   }
   if(req.method==='POST'&&req.url==='/__editor/claim'){
    if(req.headers.origin!==origin||String(req.headers['content-type']).split(';')[0]!=='application/json')return denied(res);
-   let raw='',size=0;req.setTimeout(5000,()=>req.destroy());try{for await(const chunk of req){size+=chunk.length;if(size>512)return denied(res,413);raw+=chunk;}const v=JSON.parse(raw);sweep();if(!validToken(v.grant)||!grants.delete(digest(v.grant)))return denied(res);const credential=token();if(sessions.size>=maxGrants)return denied(res,429,'EDITOR_SESSION_LIMIT');sessions.set(digest(credential),now()+sessionMs);res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store','Set-Cookie':cookieName+'='+credential+'; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age='+Math.floor(sessionMs/1000)});return res.end('{"ok":true}');}catch{return denied(res,400);}
+   let raw='',size=0;req.setTimeout(5000,()=>req.destroy());try{for await(const chunk of req){size+=chunk.length;if(size>512)return denied(res,413);raw+=chunk;}const v=JSON.parse(raw);sweep();if(!validToken(v.grant)||!grants.delete(digest(v.grant)))return denied(res);const credential=token();if(sessions.size>=maxGrants)return denied(res,429,'EDITOR_SESSION_LIMIT');const expiresAt=sessionExpiry();sessions.set(digest(credential),expiresAt);res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store','Set-Cookie':cookieName+'='+credential+'; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age='+Math.floor((expiresAt-now())/1000)});return res.end('{"ok":true}');}catch{return denied(res,400);}
   }
   if(!authorized(req))return denied(res,401);const route=safePath(req.url);if(!route)return denied(res,404);
   if(!['GET','HEAD','OPTIONS'].includes(req.method)&&req.headers.origin!==origin)return denied(res);
@@ -80,6 +82,6 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
    socket.pipe(peer).pipe(socket);socket.resume();deadline=setTimeout(remove,Math.max(1,expires-now()));deadline.unref?.();
   });request.end();
  });
- return{server,sessionId,generation,origin,cookieName,issue(){if(closed)throw Error('EDITOR_CLOSED');sweep();if(grants.size>=maxGrants)throw Error('EDITOR_GRANT_LIMIT');const v=token(),grantExpiresAt=now()+grantMs;grants.set(digest(v),grantExpiresAt);return{version:1,sessionId,generation,state:'ready',url:origin+'/__editor/bootstrap#'+v,grantExpiresAt,expiresAt:now()+sessionMs};},close(){closed=true;grants.clear();sessions.clear();for(const s of sockets)s.destroy();server.closeAllConnections();server.close();}};
+ return{server,sessionId,generation,origin,cookieName,issue(){if(closed||now()>=runtimeDeadline)throw Error('EDITOR_CLOSED');sweep();if(grants.size>=maxGrants)throw Error('EDITOR_GRANT_LIMIT');const v=token(),grantExpiresAt=Math.min(now()+grantMs,runtimeDeadline);grants.set(digest(v),grantExpiresAt);return{version:1,sessionId,generation,state:'ready',url:origin+'/__editor/bootstrap#'+v,grantExpiresAt,expiresAt:sessionExpiry()};},close(){closed=true;grants.clear();sessions.clear();for(const s of sockets)s.destroy();server.closeAllConnections();server.close();}};
 }
 module.exports={createEditorBroker,safePath,safeRedirect,incoming,outgoing};

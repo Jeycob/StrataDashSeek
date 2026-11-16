@@ -3,7 +3,7 @@ const ID = /^[a-f0-9]{16}$/;
 const STATES = new Set(['queued', 'running', 'passed', 'failed', 'interrupted', 'recovery_required']);
 const ACTIONS = new Set(['verify', 'build', 'deploy', 'check', 'compose', 'export', 'rollback', 'remote-verify', 'remote-preflight', 'resource-export', 'wake', 'sleep', 'worker-probe', 'project-editor', 'project-executor']);
 function workSettled(manager,job){
- return ['passed','failed'].includes(job.status)&&manager.busy!==job.id&&job.deploymentPhase!=='recovery_required'&&(!job.projectRuntime||job.projectRuntime.state==='stopped')&&!(job.creations||[]).some(c=>['pending','unknown','cleanup-pending'].includes(c.state)||['pending','unknown'].includes(c.resourceStart?.state))&&(!job.dataOperations||job.dataOperations.operations&&Object.values(job.dataOperations.operations).every(operation=>operation?.state==='complete'));
+ return Boolean(['passed','failed'].includes(job.status)&&manager.busy!==job.id&&job.deploymentPhase!=='recovery_required'&&(!job.projectRuntime||job.projectRuntime.state==='stopped')&&!(job.creations||[]).some(c=>['pending','unknown','cleanup-pending'].includes(c.state)||['pending','unknown'].includes(c.resourceStart?.state))&&(!job.dataOperations||job.dataOperations.operations&&Object.values(job.dataOperations.operations).every(operation=>operation?.state==='complete')));
 }
 function jobStatus(manager, id) {
   if (!ID.test(id || '')) throw Object.assign(Error('Unknown job'), { code: 'JOB_NOT_FOUND', status: 404 });

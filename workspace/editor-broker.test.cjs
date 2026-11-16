@@ -60,3 +60,10 @@ test('runtime renewal happens only after browser authorization and failure preve
  assert.equal((await f.request('/',{headers:{cookie:c.cookie}})).status,503);assert.equal(calls,1);assert.equal(f.seen.length,0);
  allowed=true;assert.equal((await f.request('/',{headers:{cookie:c.cookie}})).status,200);assert.equal(calls,2);assert.equal(f.seen.length,1);
 });
+
+test('reopened grants and cookies never outlive the fixed runtime generation deadline',async t=>{
+ const f=await fixture(t,{runtimeDeadline:10000});assert.equal(f.broker.issue().expiresAt,10000);assert.equal(f.broker.issue().grantExpiresAt,10000);
+ f.advance(5000);const claim=await f.claim();assert.match(claim.response.headers['set-cookie'][0],/Max-Age=4(?:;|$)/);
+ assert.equal(f.broker.issue().expiresAt,10000);f.advance(4000);
+ assert.equal((await f.request('/',{headers:{cookie:claim.cookie}})).status,403);assert.throws(()=>f.broker.issue(),/EDITOR_CLOSED/);assert.equal(f.seen.length,0);
+});
