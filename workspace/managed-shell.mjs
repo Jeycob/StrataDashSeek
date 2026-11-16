@@ -24,18 +24,17 @@ function render(args, value) {
 export function createManagedShell(ctx, manager, run = createProjectCommandRunner(ctx, manager)) {
   const registrations = new Map(), definitions = new WeakSet();
   function candidate(agent) {
-    const owner = manager.ownerAgent(agent); if (!owner) return false;
-    const record = manager.data.sessions[owner.id]; if (record) return !record.legacy;
-    const created = typeof owner.session.header.createdAt === 'number' ? owner.session.header.createdAt : Date.parse(owner.session.header.createdAt);
-    return !manager.existing.has(owner.id) && Number.isFinite(created) && created >= manager.data.installedAt;
+    return Boolean(manager.ownerAgent(agent));
   }
+  const removeGuard = ctx.tools.guard(exec => ['bash','exec_command','terminal'].includes(exec.name) && exec.agent && !handles(exec)
+    ? { reason: 'Host shell execution is unavailable; use an enrolled isolated project.' } : undefined);
   function install(agent) {
     if (registrations.has(agent) || !candidate(agent)) return;
     const original = ctx.tools.get('bash', agent); if (!original || definitions.has(original)) return;
-    const definition = { ...original, description: 'Run a confined bash command in this isolated project with its assigned ports, database and prepared tools, using the same executor as project_exec. Foreground commands stop after at most120000ms. Explicit run_in_background returns an owned SDK job ID with a five-minute default and ten-minute maximum lifetime; use job_output/job_list/job_kill, never nohup, setsid or broad process-name kills. No timeout promotion or permission escalation. Inspect real exit codes.', parameters: projectCommandParameters, isConcurrencySafe: () => false, output: { ...original.output, render }, async execute(args, execution) { const value = await run(args, execution); return value.background ?? foreground(value); } };
+    const definition = { ...original, description: 'Run a confined bash command in this isolated project with its assigned ports, database and prepared tools, using the same executor as project_exec. Foreground commands stop after at most120000ms. Explicit run_in_background returns an owned SDK job ID with a five-minute default and ten-minute maximum lifetime; use job_output/job_list/job_kill, never nohup, setsid or broad process-name kills. No timeout promotion or permission escalation. Inspect real exit codes.', parameters: projectCommandParameters, isConcurrencySafe: () => false, output: { ...original.output, render }, async execute(args, execution) { const project=manager.data.sessions[manager.ownerAgent(execution.agent)?.id];if(!project||project.legacy||project.nativeWorktree||project.independentRepository===false||project.settings?.projectMode==='continue')throw Object.assign(Error('Model commands require an independently enrolled project; existing files are retained.'),{code:'PROJECT_RUNTIME_NOT_ISOLATED'});const value = await run(args, execution); return value.background ?? foreground(value); } };
     const dispose = agent.ctx.tools.register(definition); definitions.add(definition); registrations.set(agent, { definition, dispose });
   }
   function handles(exec) { return exec.name === 'bash' && Boolean(exec.agent) && definitions.has(ctx.tools.get('bash', exec.agent, exec.toolSet)); }
   function remove(agent) { const entry = registrations.get(agent); if (!entry) return; entry.dispose(); definitions.delete(entry.definition); registrations.delete(agent); }
-  return { install, handles, remove, dispose() { for (const agent of [...registrations.keys()]) remove(agent); } };
+  return { install, handles, remove, dispose() { for (const agent of [...registrations.keys()]) remove(agent); removeGuard(); } };
 }

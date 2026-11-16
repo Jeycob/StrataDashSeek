@@ -158,7 +158,10 @@ export class WorkspaceManager {
     const id = exec.agent?.id; if (!id) return;
     const blocked = this.budgets.get(id)?.blocked;
     if (this.data.trash[id] || blocked) return { reason: blocked?.message ?? 'Conversation is in Trash.', info: { code: blocked?.code ?? 'SESSION_IN_TRASH' } };
-    const record = this.data.sessions[id]; if (!record) return;
+    const record = this.data.sessions[id];
+    if (['bash', 'project_exec', 'exec_command', 'terminal'].includes(exec.name) && (!record || record.legacy || record.nativeWorktree || record.independentRepository === false || record.settings?.projectMode === 'continue')) return { reason: 'Model commands are unavailable until this conversation has an independently enrolled project. Existing files are retained.' };
+    if (['exec_command', 'terminal'].includes(exec.name) || exec.name === 'bash' && !exec.managedProjectShell) return { reason: 'Managed commands require the installed project executor; host execution is refused.' };
+    if (!record) return;
     // Capture admitted operation identity before execution; queued/concurrent
     // results must never borrow another call's target or current directory.
     if (typeof exec.callId === 'string') {
@@ -167,7 +170,6 @@ export class WorkspaceManager {
       if (!this.operationScopes.has(key)) try { this.operationScopes.set(key, operationFingerprint(exec, record.root)); }
       catch { this.ctx.logger?.warn('Tool operation identity unavailable.'); }
     }
-    if (!record.legacy && (['exec_command', 'terminal'].includes(exec.name) || exec.name === 'bash' && !exec.managedProjectShell)) return { reason: 'Managed commands require the installed project executor; unconfined execution is refused.' };
     const args = exec.arguments;
     if (args && ['write', 'edit', 'apply_patch', 'delete_file', 'bash'].includes(exec.name)) {
       const value = args.file_path ?? args.path ?? args.workdir;

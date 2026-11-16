@@ -72,11 +72,13 @@ test('admission identity rejects the old tool snapshot and other guards still ta
  f.ctx.on('tools/pre-execute',async()=>({kind:'deny',reason:'Independent policy denied'}),{global:true});const policy=await f.call(a,undefined,{toolSet:current});assert.equal(policy.isError,true);assert.match(policy.error.message,/Independent policy/);assert.equal(f.calls.length,0);
 });
 
-test('legacy and old unknown sessions retain Native bash; removal and disposal release only managed shadows',async t=>{
+test('legacy and old unknown sessions refuse host execution; removed shadows remain guarded',async t=>{
  const f=await fixture(t),a=f.agent('one'),b=f.agent('two'),legacy=f.agent('legacy',{legacy:true}),old=f.agent('old',{record:false,existing:true});
- for(const agent of[a,b,legacy,old])f.managed.install(agent);assert.equal(f.ctx.tools.get('bash',legacy),f.native);assert.equal(f.ctx.tools.get('bash',old),f.native);
- const original=await f.call(legacy);assert.equal(original.isError,false);assert.equal(f.nativeCalls.length,1);assert.equal(f.calls.length,0);
- const prior=f.ctx.tools.get('bash',a);f.managed.install(a);assert.equal(f.ctx.tools.get('bash',a),prior);f.managed.remove(a);assert.equal(f.ctx.tools.get('bash',a),f.native);assert.notEqual(f.ctx.tools.get('bash',b),f.native);
+ const oldSnapshot=await f.admit(old);t.after(()=>oldSnapshot.dispose());
+ for(const agent of[a,b,legacy,old])f.managed.install(agent);assert.notEqual(f.ctx.tools.get('bash',legacy),f.native);assert.notEqual(f.ctx.tools.get('bash',old),f.native);
+ for(const agent of[legacy,old]){const refused=await f.call(agent);assert.equal(refused.isError,true);}
+ assert.equal((await f.call(old,undefined,{toolSet:oldSnapshot})).isError,true);assert.equal(f.nativeCalls.length,0);assert.equal(f.calls.length,0);
+ const prior=f.ctx.tools.get('bash',a);f.managed.install(a);assert.equal(f.ctx.tools.get('bash',a),prior);f.managed.remove(a);assert.equal(f.ctx.tools.get('bash',a),f.native);assert.notEqual(f.ctx.tools.get('bash',b),f.native);assert.equal((await f.call(a)).isError,true);assert.equal(f.nativeCalls.length,0);
  f.managed.install(a);assert.notEqual(f.ctx.tools.get('bash',a),prior);f.managed.dispose();f.managed.dispose();assert.equal(f.ctx.tools.get('bash',a),f.native);assert.equal(f.ctx.tools.get('bash',b),f.native);assert.equal(f.ctx.tools.get('bash'),f.native);
 });
 
