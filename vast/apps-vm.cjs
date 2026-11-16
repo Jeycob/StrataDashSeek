@@ -34,10 +34,18 @@ require_unified_cgroups() {
  test "$(stat -f -c %T /sys/fs/cgroup)" = cgroup2fs || { echo REFUSE_NON_UNIFIED_CGROUPS; exit 1; }
  for controller in memory cpu pids; do grep -qw "$controller" /sys/fs/cgroup/cgroup.controllers || { echo REQUIRED_CGROUP_CONTROLLER_MISSING; exit 1; }; done
 }
+require_daemon_cgroup() {
+ daemon_pid=$(pidof dockerd)
+ case "$daemon_pid" in ''|*[!0-9]*) echo REFUSE_AMBIGUOUS_DAEMON_PID; exit 1;; esac
+ test "$(cat /proc/$daemon_pid/cgroup)" = '0::/homeai-daemons/docker' || { echo REFUSE_DAEMON_LEAF_COLD_BOOT_REQUIRED; exit 1; }
+ test -f /sys/fs/cgroup/homeai-daemons/docker/memory.swap.max
+ test -z "$(cat /sys/fs/cgroup/homeai-containers/cgroup.procs)"
+ for controller in cpu memory pids; do grep -qw "$controller" /sys/fs/cgroup/homeai-containers/cgroup.subtree_control; done
+}
 # Existing v1/hybrid guests require a deliberate cold boot. Never remount a
 # running workload's hierarchy or relax the managed resource admission gate.
 grep -qw 'cgroup_no_v1=all' /proc/cmdline || { echo REFUSE_UNIFIED_COLD_BOOT_REQUIRED; exit 1; }
-if command -v docker >/dev/null && docker info >/dev/null 2>&1; then require_unified_cgroups; isolate_control_plane; echo HARNESS_READY_${nonce}; exit 0; fi
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then require_unified_cgroups; require_daemon_cgroup; isolate_control_plane; echo HARNESS_READY_${nonce}; exit 0; fi
 ip link set eth0 up
 udhcpc -i eth0 -q -n
 printf '%s\\n' 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' 'https://dl-cdn.alpinelinux.org/alpine/v3.24/community' > /etc/apk/repositories
@@ -66,12 +74,20 @@ ${initialize||repairCache ? 'apk --cache-dir /var/lib/harness/apk-cache cache sy
 printf '\\nrc_cgroup_mode="unified"\\n' >> /etc/rc.conf
 rc-service cgroups start
 require_unified_cgroups
+printf '+cpu +memory +pids' > /sys/fs/cgroup/cgroup.subtree_control
+mkdir -p /sys/fs/cgroup/homeai-daemons /sys/fs/cgroup/homeai-containers
+test -z "$(cat /sys/fs/cgroup/homeai-daemons/cgroup.procs)"
+test -z "$(cat /sys/fs/cgroup/homeai-containers/cgroup.procs)"
+printf '+cpu +memory +pids' > /sys/fs/cgroup/homeai-daemons/cgroup.subtree_control
+printf '+cpu +memory +pids' > /sys/fs/cgroup/homeai-containers/cgroup.subtree_control
+mkdir -p /sys/fs/cgroup/homeai-daemons/docker
+test -f /sys/fs/cgroup/homeai-daemons/docker/memory.swap.max
 rc-service acpid start
 if ! pidof dockerd >/dev/null; then
- dockerd --storage-driver=${PILOT_WORKER_PROFILE.storageDriver} --data-root=/var/lib/harness/docker --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --tls=false --label=io.stratadashseek.worker=${manifest.volumeId} > /tmp/docker.log 2>&1 &
+ sh -c 'printf "%s\\n" "$$" > /sys/fs/cgroup/homeai-daemons/docker/cgroup.procs; exec "$@"' homeai-daemon dockerd --storage-driver=${PILOT_WORKER_PROFILE.storageDriver} --data-root=/var/lib/harness/docker --cgroup-parent=/homeai-containers --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --tls=false --label=io.stratadashseek.worker=${manifest.volumeId} > /tmp/docker.log 2>&1 &
 fi
 for n in $(seq 1 90); do
- if docker info >/dev/null 2>&1; then isolate_control_plane; sync; echo HARNESS_READY_${nonce}; exit 0; fi
+ if docker info >/dev/null 2>&1; then require_daemon_cgroup; isolate_control_plane; sync; echo HARNESS_READY_${nonce}; exit 0; fi
  sleep 1
 done
 tail -n 30 /tmp/docker.log
@@ -125,7 +141,7 @@ class DockerVM {
  }
  async start(){
   requireControl(this);
-  if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1 && this.saved.resourceBootstrapVersion===1){await this.engine.available();return;}
+  if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1 && this.saved.resourceBootstrapVersion===2){await this.engine.available();return;}
   this.phase='starting';this.error=null;this.scriptSent=false;this.nonce=crypto.randomBytes(8).toString('hex');
   if(this.serial&&!this.serial.destroyed)this.serial.write('\n');
   if(!this.pid()){
@@ -151,7 +167,7 @@ class DockerVM {
      if(!info.Labels?.includes('io.stratadashseek.worker='+this.manifest.volumeId))throw Error('Unexpected Docker worker identity');
      if(info.CgroupVersion!=='2')throw Object.assign(Error('Unified cgroup v2 was not reported by the managed Docker worker; cold reconciliation is required'),{code:'APPS_CGROUP_V2_REQUIRED'});
      this.observedStorageDriver=info.Driver;this.storageObservedAt=Date.now();
-     this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.saved.resourceBootstrapVersion=1;this.save();
+     this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.saved.resourceBootstrapVersion=2;this.save();
      const resumeIds=this.saved.resumeIds||[];
      if(resumeIds.length){if(typeof this.validateResume!=='function')throw Error('Published application resume identities require the application controller');await this.validateResume(resumeIds);}
      for(const id of resumeIds){if(typeof this.startManagedContainer!=='function')throw Error('Managed container resource admission requires the application controller');await this.startManagedContainer(id);}
