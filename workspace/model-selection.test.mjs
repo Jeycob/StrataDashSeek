@@ -23,6 +23,14 @@ test('unregistered labels, unavailable providers, unsupported efforts and failed
 test('workspace validation does not force local generation or reasoning parameters on cloud providers',async()=>{
  const f=fixture();const selected=await validateWorkspaceModel(f.ctx,{provider:'cloud',model:'registered/deepseek-example'});assert.deepEqual(selected,{provider:'cloud',model:'registered/deepseek-example'});assert.deepEqual(f.calls.at(-1),selected);
 });
+test('a provider removed after persistence blocks only its conversation and keeps model recovery available',async()=>{
+ const f=fixture(),selection={provider:'cloud',model:'registered/deepseek-example'};await f.api.select('a',selection);
+ const fresh=createModelSelection(f.ctx,{...f.manager,data:structuredClone(f.writes[0])});delete f.registered.cloud;
+ f.a.model.select(f.global);await fresh.restore(f.a);await fresh.restore(f.b);
+ assert.throws(()=>fresh.assertRunnable(f.a),{code:'MODEL_UNAVAILABLE'});assert.doesNotThrow(()=>fresh.assertRunnable(f.b));
+ const state=await fresh.inspect('a');assert.equal(state.selectionError,'MODEL_UNAVAILABLE');assert.deepEqual(state.selection,selection);assert.equal(state.groups.length,1);
+ await fresh.select('a',null);assert.doesNotThrow(()=>fresh.assertRunnable(f.a));assert.equal((await fresh.inspect('a')).selectionError,null);
+});
 test('startup, new and resumed sessions restore preferences after defaults; registry-owned Unicode IDs and efforts survive',async()=>{
  const f=fixture(),model='研究/model+preview@'+ 'x'.repeat(140),selection={provider:'cloud',model,reasoningEffort:'xhigh'};
  f.registered.cloud.push({id:model});f.ctx.llm.resolveModelInfo=async()=>({reasoning:{efforts:[{id:'xhigh',name:'Extended'}],defaultEffort:'xhigh'}});
