@@ -22,17 +22,45 @@ function outputBuffer() {
 // Adapter for SDK-owned process/job handles. The only command execution is the
 // authenticated Apps executor. All authority/stop tokens stay in this closure.
 export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, callApps, pollMs = 1000, wait = pause } = {}) {
-  const active = new Set(); let disposed = false;
+  const active = new Set(), admitting = new Set(), epochs = new Map(); let disposed = false;
+  const matches = (spec, id) => spec.sessionId === id || spec.accessSessionId === id;
+  const epoch = id => epochs.get(id) ?? 0;
+  const archived = id => { const ids = ctx.workspaceRegistry?.archivedSessionIds; return Boolean(manager.data.trash?.[id] || (ids?.has ? ids.has(id) : ids?.includes(id))); };
+  const accessChanged = spec => disposed || archived(spec.sessionId) || archived(spec.accessSessionId) || epoch(spec.sessionId) !== spec.ownerEpoch || epoch(spec.accessSessionId) !== spec.accessEpoch;
+  function revoke(id) {
+    epochs.set(id, epoch(id) + 1);
+    for (const entry of admitting) if (matches(entry.spec, id)) { entry.revoked = true; entry.controller.abort(fail('PROJECT_RUNTIME_ACCESS_REVOKED')); }
+    for (const process of active) if (matches(process.scope, id)) process.revoke();
+  }
+  const hooks = [
+    ctx.on?.('session/event', (session, event) => { if (event.type === 'sandbox/mode') revoke(session.id); }, { global: true }),
+    ctx.on?.('workspace/session-archived', ({ sessionId }) => { revoke(sessionId); }, { global: true }),
+    ctx.on?.('workspace/session-stop', ({ sessionId }) => { revoke(sessionId); }, { global: true }),
+    ctx.on?.('agent/disposed', ({ agent }) => { revoke(agent.id); }, { global: true }),
+    ctx.on?.('workspace/session-unarchiving', ({ sessionId }) => {
+      if ([...admitting].some(entry => matches(entry.spec, sessionId)) || [...active].some(process => matches(process.scope, sessionId))) throw fail('PROJECT_RUNTIME_RECONCILIATION_REQUIRED');
+    }, { global: true }),
+  ];
   const rpc = (route, data, options = {}) => callApps(route, data, { ...appsConfig, timeoutMs: 5000, ...options });
   async function execute(spec) {
     if (disposed) throw fail('PROJECT_RUNTIME_DISPOSED');
     spec.signal?.throwIfAborted();
+    if (accessChanged(spec)) throw fail('PROJECT_RUNTIME_ACCESS_REVOKED');
     const generation = crypto.randomBytes(16).toString('hex');
-    const admission = await manager.withProjectRuntimeAuthority({ sessionId: spec.sessionId, accessSessionId: spec.accessSessionId, op: 'execute', kind: 'executor', generation }, token => rpc('/project-runtime', { op: 'execute', kind: 'executor', sessionId: spec.sessionId, generation, token, command: spec.command }, { signal: spec.signal, timeoutMs: 125000 }));
-    if (admission?.version !== 1 || admission.state !== 'running' || admission.sessionId !== spec.sessionId || admission.generation !== generation || !id16.test(admission.jobId || '') || !id32.test(admission.operationId || '') || !/^[A-Za-z0-9_-]{43}$/.test(admission.stopToken || '')) throw fail('PROJECT_RUNTIME_ADMISSION_UNVERIFIED');
+    let finishAdmission;
+    const entry = { spec, controller: new AbortController(), revoked: false, done: new Promise(resolve => { finishAdmission = resolve; }) }; admitting.add(entry);
+    let admission;
+    try {
+      admission = await manager.withProjectRuntimeAuthority({ sessionId: spec.sessionId, accessSessionId: spec.accessSessionId, op: 'execute', kind: 'executor', generation }, token => {
+        if (accessChanged(spec) || entry.revoked) throw fail('PROJECT_RUNTIME_ACCESS_REVOKED');
+        return rpc('/project-runtime', { op: 'execute', kind: 'executor', sessionId: spec.sessionId, generation, token, command: spec.command }, { signal: AbortSignal.any([entry.controller.signal, ...(spec.signal ? [spec.signal] : [])]), timeoutMs: 125000 });
+      });
+    } catch (error) { finishAdmission(); throw error; }
+    finally { admitting.delete(entry); }
+    if (admission?.version !== 1 || admission.state !== 'running' || admission.sessionId !== spec.sessionId || admission.generation !== generation || !id16.test(admission.jobId || '') || !id32.test(admission.operationId || '') || !/^[A-Za-z0-9_-]{43}$/.test(admission.stopToken || '')) { finishAdmission(); throw fail('PROJECT_RUNTIME_ADMISSION_UNVERIFIED'); }
     const stdout = outputBuffer(), stderr = outputBuffer();
-    const process = { status: 'running', exitCode: null, signal: null, sandbox: { mode: spec.readOnly ? 'read-only' : 'workspace-write', denied: false, enforcement: 'guest-container' }, observed: { stdout, stderr } };
-    let stopped = false, stopPending, resultResolve, resultReject, warned = false, timer;
+    const process = { scope: spec, status: 'running', exitCode: null, signal: null, sandbox: { mode: spec.readOnly ? 'read-only' : 'workspace-write', denied: false, enforcement: 'guest-container' }, observed: { stdout, stderr } };
+    let stopped = false, stopRequested = false, stopPending, resultResolve, resultReject, warned = false, timer;
     const result = new Promise((resolve, reject) => { resultResolve = resolve; resultReject = reject; }); result.catch(() => {});
     async function stop() {
       if (stopped) return; if (stopPending) return stopPending;
@@ -43,14 +71,17 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
       })();
       try { await stopPending; } finally { stopPending = undefined; }
     }
-    const cancel = () => { process.aborted = true; void stop().catch(() => { stderr.append('[PROJECT_RUNTIME_RECONCILIATION_REQUIRED: stop is unconfirmed]\n'); }); };
+    const cancel = () => { process.aborted = true; stopRequested = true; void stop().catch(() => { stderr.append('[PROJECT_RUNTIME_RECONCILIATION_REQUIRED: stop is unconfirmed]\n'); }); };
     process.kill = cancel;
+    process.revoke = () => { if (stopped) return; resultReject(fail('PROJECT_RUNTIME_ACCESS_REVOKED')); cancel(); };
     process.result = () => result;
     const route = name => '/' + name + '?id=' + admission.jobId + '&_contextProjectId=' + crypto.createHash('sha256').update(spec.projectRoot).digest('hex').slice(0, 16);
     process.done = (async () => {
       try {
         while (!stopped) {
           try {
+            if (accessChanged(spec)) process.revoke();
+            if (stopRequested) { await stop(); break; }
             const value = await rpc(route('job-status')), log = await rpc(route('job-log'));
             if (typeof log?.stdout === 'string' && typeof log?.stderr === 'string') { stdout.snapshot(log.stdout,log.truncated?.stdout===true); stderr.snapshot(log.stderr,log.truncated?.stderr===true); }
             else if (typeof log?.text === 'string') stdout.snapshot(log.text);
@@ -70,12 +101,13 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
           if (!stopped) await wait(pollMs);
         }
         resultResolve({ exitCode: process.exitCode, signal: process.signal, timedOut: Boolean(process.timedOut), aborted: Boolean(process.aborted), timeoutMs: spec.timeoutMs, stdout: stdout.value(), stderr: stderr.value(), sandbox: process.sandbox });
-      } finally { clearTimeout(timer); spec.signal?.removeEventListener('abort', cancel); active.delete(process); }
+      } finally { clearTimeout(timer); spec.signal?.removeEventListener('abort', cancel); active.delete(process); finishAdmission(); }
     })();
     active.add(process);
+    if (entry.revoked || accessChanged(spec)) process.revoke();
     spec.signal?.addEventListener('abort', cancel, { once: true });
     if (spec.signal?.aborted) cancel();
-    timer = setTimeout(() => { process.timedOut = true; void stop().catch(() => { stderr.append('[PROJECT_RUNTIME_RECONCILIATION_REQUIRED: lifetime stop is unconfirmed]\n'); }); }, spec.timeoutMs); timer.unref?.();
+    timer = setTimeout(() => { process.timedOut = true; stopRequested = true; void stop().catch(() => { stderr.append('[PROJECT_RUNTIME_RECONCILIATION_REQUIRED: lifetime stop is unconfirmed]\n'); }); }, spec.timeoutMs); timer.unref?.();
     return process;
   }
   const processes = createProjectProcessStarter(ctx, { execute });
@@ -91,7 +123,7 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
     if (![ownerMode, accessMode].every(mode => ['read-only', 'workspace-write', 'danger-full-access'].includes(mode))) throw fail('PROJECT_RUNTIME_POLICY_UNAVAILABLE');
     const normalized = normalizeVerificationCommand(args.command), command = 'cd -- ' + quote(guestCwd) + ' && ' + normalized.command;
     if (command.length > 65536) throw fail('PROJECT_RUNTIME_COMMAND_INVALID');
-    return { cwd, adaptations: normalized.changed ? ['[Harness: verification display filters removed; the verifier retains its real exit status.]'] : [], spec: { command, projectRoot: project.root, sessionId: owner.id, accessSessionId: execution.agent.id, readOnly: ownerMode === 'read-only' || accessMode === 'read-only', timeoutMs: args.run_in_background ? projectJobLifetime(args.timeoutMs) : Math.min(120000, Math.max(1000, args.timeoutMs ?? 60000)), signal: execution.signal } };
+    return { cwd, adaptations: normalized.changed ? ['[Harness: verification display filters removed; the verifier retains its real exit status.]'] : [], spec: { command, projectRoot: project.root, sessionId: owner.id, accessSessionId: execution.agent.id, ownerEpoch: epoch(owner.id), accessEpoch: epoch(execution.agent.id), readOnly: ownerMode === 'read-only' || accessMode === 'read-only', timeoutMs: args.run_in_background ? projectJobLifetime(args.timeoutMs) : Math.min(120000, Math.max(1000, args.timeoutMs ?? 60000)), signal: execution.signal } };
   }
   const run = async (args, execution) => {
     const prepared = await prepare(args, execution); execution.signal.throwIfAborted();
@@ -100,7 +132,8 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
     try { process = await execute(prepared.spec); void process.done.finally(release); const result = await process.result(); execution.signal.throwIfAborted(); return { ...prepared, result }; }
     catch (error) { if (!process) release(); throw error; }
   };
-  run.dispose = async () => { disposed = true; for (const process of active) process.kill(); await processes.dispose(); await Promise.all([...active].map(process => process.done)); };
+  run.revoke = revoke;
+  run.dispose = async () => { disposed = true; const pending = [...admitting].map(entry => entry.done); for (const entry of admitting) { entry.revoked = true; entry.controller.abort(fail('PROJECT_RUNTIME_DISPOSED')); } for (const process of active) process.kill(); await processes.dispose(); await Promise.all([...pending, ...[...active].map(process => process.done)]); for (const remove of hooks) if (typeof remove === 'function') remove(); };
   ctx.effect?.(() => run.dispose, 'isolated guest project executor');
   return run;
 }

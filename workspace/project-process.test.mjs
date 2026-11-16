@@ -16,13 +16,13 @@ function sdk() {
     const cli = process.env.HARNESS_NATIVE_CLI ?? path.join(process.env.HOMEAI_RUNTIME ?? '/data/harness/runtime', 'node_modules/@deepseek-ai/dsh/lib/bin.js');
     const base = path.resolve(path.dirname(cli), '../..');
     const load = name => import(pathToFileURL(path.join(base, name, 'lib/index.js')));
-    const [cordis, prompt, tools, pipeline, scope, jobs, jobTools, bash] = await Promise.all([
+    const [cordis, prompt, tools, pipeline, scope, jobs, jobTools, bash, sessions, policy] = await Promise.all([
       load('cordis'), load('dsh-system-prompt'), load('dsh-tools'),
       import(pathToFileURL(path.join(base, 'dsh-tools/lib/pipeline.js'))), load('dsh-scope'),
-      load('dsh-jobs-local'), load('dsh-tool-jobs'), load('dsh-tool-bash'),
+      load('dsh-jobs-local'), load('dsh-tool-jobs'), load('dsh-tool-bash'), load('dsh-session'), load('dsh-sandbox-policy'),
     ]);
     return { ...cordis, SystemPrompt: prompt.default, Tools: tools.default, ...pipeline, ...scope,
-      LocalJobs: jobs.default, applyJobTools: jobTools.apply, applyBash: bash.apply };
+      LocalJobs: jobs.default, applyJobTools: jobTools.apply, applyBash: bash.apply, SessionStore: sessions.default, setSandboxMode: policy.setSandboxMode };
   })();
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -105,6 +105,32 @@ test('real SDK owns a guest-backed background handle and collects its observed r
   assert.equal(f.calls.length,0);assert.equal(f.ctx.jobs.get(result.value.jobId,owner.id).owner,owner.id);
   terminal=true;await eventually(()=>f.ctx.jobs.get(result.value.jobId,owner.id).status==='completed');
   const output=await f.call(owner,'job_output',{job_id:result.value.jobId});assert.equal(output.isError,false,JSON.stringify(output));assert.match(JSON.stringify(output),/exit code: 23/);
+});
+
+for (const [event, target] of [['policy','owner'],['policy','child'],['archive','owner'],['archive','child']]) test('real SDK '+event+' of '+target+' stops its guest-backed child job only after exact stop confirmation', async t => {
+  const f=await fixture(t);new f.SessionStore(f.ctx);
+  const owner=f.agent('guest-owner'),child=f.agent('guest-child',{owner}),other=f.agent('guest-other');
+  for(const agent of [owner,child,other]){agent.inbox.remove=()=>false;agent.session=f.ctx.sessions.create(agent.id);}
+  f.manager.data.sessions[owner.id].independentRepository=true;
+  let admission,releaseStop;const requests=[];
+  f.manager.withProjectRuntimeAuthority=async(input,action)=>{assert.equal(input.accessSessionId,child.id);return action('f'.repeat(32));};
+  const callApps=async(route,data)=>{
+    requests.push([route,data]);
+    if(data?.op==='execute')return admission={version:1,state:'running',sessionId:owner.id,generation:data.generation,jobId:'a'.repeat(16),operationId:'b'.repeat(32),stopToken:'c'.repeat(43)};
+    if(data?.op==='stop'){await new Promise(r=>releaseStop=r);return{version:1,state:'stopped',sessionId:owner.id,generation:admission.generation,operationId:admission.operationId};}
+    if(route.startsWith('/job-log'))return{text:'guest still running\n'};
+    return{version:1,job:{id:admission.jobId,action:'project-executor',status:'running',terminal:false}};
+  };
+  const guest=createGuestProjectCommandRunner(f.ctx,f.manager,{appsConfig:{projectRuntime:{enabled:true}},callApps,pollMs:1,wait:()=>new Promise(r=>setTimeout(r,1))});
+  f.managed.dispose();const managed=createManagedShell(f.ctx,f.manager,guest);managed.install(child);
+  t.after(async()=>{releaseStop?.();await guest.dispose();managed.dispose();});
+  const result=await f.call(child);assert.equal(result.isError,false,JSON.stringify(result));await eventually(()=>requests.some(([route])=>route.startsWith('/job-log')));
+  f.setSandboxMode(other.session,'read-only');assert.equal(requests.some(([,data])=>data?.op==='stop'),false);
+  const selected=target==='owner'?owner:child;
+  if(event==='policy')f.setSandboxMode(selected.session,'read-only');else await f.ctx.parallel('workspace/session-archived',{sessionId:selected.id});
+  await eventually(()=>Boolean(releaseStop));assert.equal(f.ctx.jobs.get(result.value.jobId,child.id).status,'running');
+  const stop=requests.find(([,data])=>data?.op==='stop')[1];assert.equal(stop.sessionId,owner.id);assert.equal(stop.generation,admission.generation);assert.equal(stop.stopToken,admission.stopToken);
+  releaseStop();await eventually(()=>f.ctx.jobs.get(result.value.jobId,child.id).status==='killed');assert.equal(f.calls.length,0);
 });
 
 test('two SDK projects share heavy admission for managed bash and project_exec through background process settlement', async t => {

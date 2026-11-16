@@ -5,20 +5,20 @@ import { createGuestProjectCommandRunner } from './project-guest-runner.mjs';
 import { bindHeavyToolLease } from '../efficiency/heavy-tool-lease.mjs';
 function fixture() {
   const owner={id:'owner',session:{mode:'workspace-write'}},child={id:'child',owner,session:{mode:'read-only'}},root=path.resolve('/synthetic-project');
-  const calls=[],authorities=[],ctx={sandboxPolicy:{resolve:({session})=>({mode:session.mode})},shell:{execute(){assert.fail('Host shell must never execute');}}};
-  let runtime,jobStatus='running',code=0,holdStop=false,releaseStop;
+  const hooks=new Map(),calls=[],authorities=[],ctx={on(name,fn){const list=hooks.get(name)??[];list.push(fn);hooks.set(name,list);return()=>{const at=list.indexOf(fn);if(at>=0)list.splice(at,1);};},workspaceRegistry:{archivedSessionIds:[]},sandboxPolicy:{resolve:({session})=>({mode:session.mode})},shell:{execute(){assert.fail('Host shell must never execute');}}};
+  let runtime,jobStatus='running',code=0,holdStop=false,releaseStop,holdAdmission=false,releaseAdmission,failStops=0;
   const manager={ownerAgent:a=>a.owner||a,data:{sessions:{owner:{root,independentRepository:true}}},async withProjectRuntimeAuthority(input,action){authorities.push(input);return action('a'.repeat(32));}};
   const callApps=async(route,data,cfg)=>{
     calls.push({route,data,cfg});
-    if(data?.op==='execute'){runtime={version:1,state:'running',sessionId:data.sessionId,generation:data.generation,jobId:'b'.repeat(16),operationId:'c'.repeat(32),stopToken:'d'.repeat(43)};return runtime;}
-    if(data?.op==='stop'){if(holdStop)await new Promise(r=>releaseStop=r);jobStatus='interrupted';return{version:1,state:'stopped',sessionId:data.sessionId,generation:data.generation,operationId:runtime.operationId};}
+    if(data?.op==='execute'){runtime={version:1,state:'running',sessionId:data.sessionId,generation:data.generation,jobId:'b'.repeat(16),operationId:'c'.repeat(32),stopToken:'d'.repeat(43)};if(holdAdmission)await new Promise(r=>releaseAdmission=r);return runtime;}
+    if(data?.op==='stop'){if(failStops-->0)throw Error('Synthetic lost stop response');if(holdStop)await new Promise(r=>releaseStop=r);jobStatus='interrupted';return{version:1,state:'stopped',sessionId:data.sessionId,generation:data.generation,operationId:runtime.operationId};}
     if(route.startsWith('/job-status'))return{version:1,job:{id:runtime.jobId,action:'project-executor',status:jobStatus,terminal:jobStatus!=='running',...(['passed','failed'].includes(jobStatus)?{exitCode:code}:{})}};
     if(route.startsWith('/job-log'))return{text:'actual synthetic output\n'};
     assert.fail('Unexpected RPC');
   };
   const run=createGuestProjectCommandRunner(ctx,manager,{appsConfig:{projectRuntime:{enabled:true}},callApps,pollMs:1,wait:()=>new Promise(r=>setTimeout(r,1))});
   const controller=new AbortController(),execution={agent:child,signal:controller.signal,callId:'tool1'};
-  return{run,ctx,manager,owner,child,calls,authorities,controller,execution,finish(value=0){code=value;jobStatus=value===0?'passed':'failed';},holdStop(){holdStop=true;},releaseStop(){holdStop=false;releaseStop?.();}};
+  return{run,ctx,manager,owner,child,calls,authorities,controller,execution,emit(name,...args){for(const fn of hooks.get(name)??[])fn(...args);},finish(value=0){code=value;jobStatus=value===0?'passed':'failed';},holdStop(){holdStop=true;},releaseStop(){holdStop=false;releaseStop?.();},holdAdmission(){holdAdmission=true;},releaseAdmission(){holdAdmission=false;releaseAdmission?.();},failStops(count){failStops=count;}};
 }
 const args={command:'node check.mjs',description:'Check project',timeoutMs:1000};
 const eventually=async check=>{for(let n=0;n<100&&!check();n++)await new Promise(r=>setTimeout(r,2));assert(check());};
@@ -37,4 +37,27 @@ test('outside target, legacy project and unavailable executor refuse without an 
   const f=fixture();await assert.rejects(f.run({...args,workdir:'../foreign'},f.execution),{code:'PROJECT_RUNTIME_OUTSIDE_PROJECT'});
   f.manager.data.sessions.owner.independentRepository=false;await assert.rejects(f.run(args,f.execution),{code:'PROJECT_RUNTIME_NOT_ISOLATED'});assert.equal(f.calls.length,0);
   const unavailable=createGuestProjectCommandRunner(f.ctx,f.manager);await assert.rejects(unavailable(args,f.execution),{code:'PROJECT_RUNTIME_ISOLATION_UNAVAILABLE'});await f.run.dispose();await unavailable.dispose();
+});
+
+for(const id of ['owner','child'])test('policy changes revoke the exact '+id+' command and retain the lease through stop confirmation',async()=>{
+  const f=fixture();f.holdStop();let released=0;const releaseTool=bindHeavyToolLease(f.execution,{release(){released++;}});
+  const pending=f.run({...args,timeoutMs:10000},f.execution);pending.catch(()=>{});await eventually(()=>f.calls.some(c=>c.route.startsWith('/job-status')));
+  f.emit('session/event',{id:'foreign'},{type:'sandbox/mode'});assert.equal(f.calls.some(c=>c.data?.op==='stop'),false);
+  f.emit('session/event',f[id].session.id?f[id].session:{id},{type:'sandbox/mode'});releaseTool();await assert.rejects(pending,{code:'PROJECT_RUNTIME_ACCESS_REVOKED'});await eventually(()=>f.calls.some(c=>c.data?.op==='stop'));
+  assert.equal(released,0);assert.throws(()=>f.emit('workspace/session-unarchiving',{sessionId:id}),{code:'PROJECT_RUNTIME_RECONCILIATION_REQUIRED'});
+  const command=f.calls.find(c=>c.data?.op==='execute').data,stop=f.calls.find(c=>c.data?.op==='stop').data;assert.equal(stop.sessionId,'owner');assert.equal(stop.generation,command.generation);assert.equal(stop.stopToken,'d'.repeat(43));
+  f.releaseStop();await eventually(()=>released===1);f.emit('workspace/session-unarchiving',{sessionId:id});await f.run.dispose();
+});
+
+test('archive revocation during admission aborts transport and drains a late running receipt before disposal',async()=>{
+  const f=fixture();f.holdAdmission();f.holdStop();const pending=f.run({...args,timeoutMs:10000},f.execution);pending.catch(()=>{});await eventually(()=>f.calls.some(c=>c.data?.op==='execute'));
+  f.ctx.workspaceRegistry.archivedSessionIds.push('child');f.emit('workspace/session-archived',{sessionId:'child'});
+  assert.equal(f.calls.find(c=>c.data?.op==='execute').cfg.signal.aborted,true);
+  let disposed=false;const drain=f.run.dispose().then(()=>{disposed=true;});f.releaseAdmission();await eventually(()=>f.calls.some(c=>c.data?.op==='stop'));assert.equal(disposed,false);
+  f.releaseStop();await assert.rejects(pending,{code:'PROJECT_RUNTIME_ACCESS_REVOKED'});await drain;assert.equal(disposed,true);
+});
+
+test('revoked command retries a lost stop response until owned stop is confirmed',async()=>{
+  const f=fixture();f.failStops(2);const pending=f.run({...args,timeoutMs:10000},f.execution);pending.catch(()=>{});await eventually(()=>f.calls.some(c=>c.route.startsWith('/job-status')));
+  f.emit('workspace/session-stop',{sessionId:'owner'});await assert.rejects(pending,{code:'PROJECT_RUNTIME_ACCESS_REVOKED'});await f.run.dispose();assert(f.calls.filter(c=>c.data?.op==='stop').length>=3);
 });
