@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
+      HARNESS_EXPECTED_SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
       HOMEAI_RUNTIME: ${{ github.workspace }}/runtime
       EFFICIENCY_SDK_ROOT: ${{ github.workspace }}/runtime/node_modules
       HARNESS_NATIVE_CLI: ${{ github.workspace }}/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js
@@ -30,6 +31,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, verified 2026-11-15
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24.22.1'
@@ -43,7 +45,9 @@ jobs:
           cache: pip
           cache-dependency-path: development/ci/requirements.txt
       - name: Record all test inventory before dependency admission
-        run: node development/release-ci.mjs --inventory --output "$RUNNER_TEMP/release-ci"
+        run: |
+          test "$(git rev-parse HEAD)" = "$HARNESS_EXPECTED_SOURCE_COMMIT"
+          node development/release-ci.mjs --inventory --output "$RUNNER_TEMP/release-ci"
       - name: Install exact production SDK and isolated test tooling
         id: dependencies
         run: |
@@ -67,7 +71,13 @@ jobs:
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.worker-build.outcome == 'success' }}
         run: |
           CI_NODE_EXE=$(command -v node)
-          sudo -n --preserve-env=PATH,HOMEAI_RUNTIME,EFFICIENCY_SDK_ROOT,HARNESS_NATIVE_CLI,HARNESS_WEB_PUSH_MODULE,HARNESS_PLAYWRIGHT_MODULE,HARNESS_WRANGLER_CLI,HARNESS_PYTHON,PLAYWRIGHT_BROWSERS_PATH,PYTHONDONTWRITEBYTECODE,WRANGLER_SEND_METRICS env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$GITHUB_WORKSPACE" "$CI_NODE_EXE" development/release-ci.mjs --lane linux-root --output "$RUNNER_TEMP/release-ci/linux-root"
+          CI_ROOT_SOURCE="/tmp/stratadashseek-ci-root-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          sudo -n mkdir --mode=0755 -- "$CI_ROOT_SOURCE"
+          trap 'CI_ROOT_EXIT=$?; trap - EXIT; cd "$GITHUB_WORKSPACE"; if mountpoint -q -- "$CI_ROOT_SOURCE"; then sudo -n umount -- "$CI_ROOT_SOURCE" || CI_ROOT_EXIT=1; fi; sudo -n rmdir -- "$CI_ROOT_SOURCE" || CI_ROOT_EXIT=1; exit "$CI_ROOT_EXIT"' EXIT
+          sudo -n mount --bind "$GITHUB_WORKSPACE" "$CI_ROOT_SOURCE"
+          sudo -n mount -o remount,bind,ro "$CI_ROOT_SOURCE"
+          cd "$CI_ROOT_SOURCE"
+          sudo -n --preserve-env=PATH,HARNESS_PYTHON,PLAYWRIGHT_BROWSERS_PATH,PYTHONDONTWRITEBYTECODE,WRANGLER_SEND_METRICS env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0="$CI_ROOT_SOURCE" GIT_OPTIONAL_LOCKS=0 HOMEAI_RUNTIME="$CI_ROOT_SOURCE/runtime" EFFICIENCY_SDK_ROOT="$CI_ROOT_SOURCE/runtime/node_modules" HARNESS_NATIVE_CLI="$CI_ROOT_SOURCE/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js" HARNESS_WEB_PUSH_MODULE="$CI_ROOT_SOURCE/runtime/node_modules/web-push" HARNESS_PLAYWRIGHT_MODULE="$CI_ROOT_SOURCE/development/ci/node_modules/playwright" HARNESS_WRANGLER_CLI="$CI_ROOT_SOURCE/development/ci/node_modules/wrangler/bin/wrangler.js" "$CI_NODE_EXE" development/release-ci.mjs --lane linux-root --output "$RUNNER_TEMP/release-ci/linux-root"
       - name: Execute actual local workerd and SQLite restart proof when present in this revision
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.worker-build.outcome == 'success' && hashFiles('development/device-workerd-check.mjs') != '' }}
         run: node development/release-ci.mjs --lane local-engine --output "$RUNNER_TEMP/release-ci/local-engine"
@@ -78,12 +88,12 @@ jobs:
         if: always()
         run: |
           if [ ! -f "$RUNNER_TEMP/release-ci/report.json" ]; then
-            node --input-type=module -e 'import fs from "node:fs/promises";import path from "node:path";const out=path.join(process.env.RUNNER_TEMP,"release-ci");await fs.mkdir(out,{recursive:true});await fs.writeFile(path.join(out,"report.json"),JSON.stringify({passed:false,outcome:"unrunnable",reason:"CI_SETUP_OR_RUNNER_DID_NOT_COMPLETE",commit:process.env.GITHUB_SHA},null,2));'
+            node --input-type=module -e 'import fs from "node:fs/promises";import path from "node:path";const out=path.join(process.env.RUNNER_TEMP,"release-ci");await fs.mkdir(out,{recursive:true});await fs.writeFile(path.join(out,"report.json"),JSON.stringify({passed:false,outcome:"unrunnable",reason:"CI_SETUP_OR_RUNNER_DID_NOT_COMPLETE",commit:process.env.HARNESS_EXPECTED_SOURCE_COMMIT,eventCommit:process.env.GITHUB_SHA},null,2));'
           fi
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
-          name: release-checks-${{ github.sha }}
+          name: release-checks-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/release-ci
           if-no-files-found: error
           retention-days: 7

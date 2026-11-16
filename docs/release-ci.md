@@ -85,3 +85,13 @@ Only the Linux-root lane uses sudo. The final combine step requires every
 inventoried suite exactly once, all required lanes, matching clean source and
 bundle identities, and successful individual results. Missing lanes, duplicate
 suites or a positive lane summary hiding a failed suite cannot pass.
+
+Hosted pull requests check out the requested head commit explicitly; the
+workflow verifies it before discovery and uses it in the artifact name. The
+event's synthetic merge commit remains a separate identifier. Privileged
+fixtures read the same source inodes through a temporary read-only bind view
+under `/tmp`, with matching dependency paths. This permits dropped-privilege
+reads without opening the runner's private home directories. The view is
+unmounted and removed on exit, and cleanup failure fails the step. Source and
+before/after metadata comparisons still cover the original files. Linux secret
+fixtures use private `/dev/shm` directories rather than assuming `/tmp` is RAM.

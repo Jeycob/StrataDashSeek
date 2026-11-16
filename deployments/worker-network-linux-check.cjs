@@ -10,10 +10,13 @@ test('the generated worker firewall isolates both bridges and old connections wh
   const tools=process.env.HARNESS_FIREWALL_TOOLS||'/usr/sbin',python=process.env.HARNESS_PYTHON||'python3';
   assert(path.isAbsolute(tools));assert(fs.statSync(path.join(tools,'iptables')).isFile(),'iptables prerequisite is missing');
   const result=cp.spawnSync('/usr/bin/unshare',['--net','--',python,path.join(__dirname,'test-worker-network.py'),firewall,tools],{encoding:'utf8',windowsHide:true,timeout:65000,killSignal:'SIGTERM',maxBuffer:65536});
-  assert.equal(result.error,undefined,result.error?.message);assert.equal(result.status,0,result.stderr);
+  const diagnostics=JSON.stringify({status:result.status,signal:result.signal,errorCode:result.error?.code})+'\n'+result.stderr;
+  assert.equal(result.error,undefined,diagnostics);assert.equal(result.status,0,diagnostics);
   const proof=JSON.parse(result.stdout.trim().split('\n').at(-1));
   for(const name of ['realLinuxFirewall','hostControlAllowed','containerControlDenied','composeControlDenied','hostLoopbackDenied','workerProcessLoopbackDenied','preexistingAppConnectionDenied','previewPreserved','dnsAndDhcpPreserved','idempotent','ipv6Disabled'])assert.equal(proof[name],true,name);
   assert.equal(proof.dockerRuntime,false,'This proves network isolation, not a running Docker daemon');
+  assert.equal(proof.fixtureReadiness?.ready,true,'All positive fixtures must be ready before applying rules');
+  assert.equal(proof.fixtureReadiness.positiveEndpoints,8);assert.equal(proof.fixtureReadiness.deadlineMs,10000);assert(proof.fixtureReadiness.elapsedMs<=10000);
  }finally{
   const actual=fs.realpathSync(directory);assert.equal(path.dirname(actual),fs.realpathSync(os.tmpdir()));assert(path.basename(actual).startsWith('harness-firewall-'));assert(!fs.lstatSync(directory).isSymbolicLink());fs.rmSync(actual,{recursive:true,force:true});
  }
