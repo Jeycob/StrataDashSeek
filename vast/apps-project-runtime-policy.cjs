@@ -15,6 +15,12 @@ function checkProof(manager, filesystem = fs) {
   if (!cfg?.enabled || !worker || !proof?.verified || proof.version !== 1 || !Number.isInteger(proof.bootPid) || proof.bootPid !== worker.pid() || proof.guestProjectsRoot !== '/srv/homeai/projects' || !Number.isInteger(proof.uid) || proof.uid < 1000 || proof.uid > 65534 || !Number.isInteger(proof.gid) || proof.gid < 1000 || proof.gid > 65534) throw fail('PROJECT_RUNTIME_ISOLATION_UNAVAILABLE');
   const base = filesystem.realpathSync(cfg.projectsRoot), info = filesystem.lstatSync(base);
   if (!info.isDirectory() || info.isSymbolicLink() || proof.projectsRoot !== base || proof.hostDev !== info.dev || proof.hostIno !== info.ino || proof.uid !== cfg.uid || proof.gid !== cfg.gid) throw fail('PROJECT_RUNTIME_MAPPING_CHANGED');
+  if (cfg.toolchain !== undefined) {
+    const tools = proof.toolchain, configured = cfg.toolchain;
+    if (!configured || !/^[a-f0-9]{64}$/.test(configured.manifestSha256 || '') || tools?.version !== 1 || tools.verified !== true || tools.bootPid !== proof.bootPid || tools.readOnly !== true || tools.guestRoot !== '/srv/homeai/toolchain' || tools.root !== configured.root || tools.manifestSha256 !== configured.manifestSha256) throw fail('PROJECT_RUNTIME_TOOLCHAIN_UNAVAILABLE');
+    const directory = filesystem.lstatSync(configured.root);
+    if (!directory.isDirectory() || directory.isSymbolicLink() || filesystem.realpathSync(configured.root) !== configured.root || directory.uid !== 0 || directory.mode & 0o022 || directory.dev !== tools.hostDev || directory.ino !== tools.hostIno) throw fail('PROJECT_RUNTIME_TOOLCHAIN_CHANGED');
+  }
   return { cfg, proof, base };
 }
 function runtimeRequest(manager, input) {
@@ -41,15 +47,17 @@ function createRuntimePlan(manager, input, { guestPort, filesystem = fs, compone
   if (kind !== 'executor') mounts.push({ Type: 'bind', Source: socketRoot, Target: '/run/homeai-editor', ReadOnly: isRelay, BindOptions: { Propagation: 'rprivate' } });
   if (isRelay) mounts.push({ Type: 'bind', Source: '/srv/homeai/transport/' + scopeId + '/' + input.generation, Target: '/run/homeai-transport', ReadOnly: true, BindOptions: { Propagation: 'rprivate' } });
   if (kind === 'editor') mounts.push({ Type: 'bind', Source: '/var/lib/harness/editor-state/' + scopeId, Target: '/home/coder', ReadOnly: false, BindOptions: { Propagation: 'rprivate' } });
+  if (cfg.toolchain) for (const name of ['code-server','homeai','dotnet','playwright','npm']) mounts.push({Type:'bind',Source:'/srv/homeai/toolchain/'+name,Target:'/opt/'+name,ReadOnly:true,BindOptions:{Propagation:'rprivate'}});
   if (isRelay && (!Number.isInteger(guestPort) || guestPort < 1024 || guestPort > 65535)) throw fail('PROJECT_RUNTIME_PORTS_INVALID');
   const memory = (isRelay ? 64 : kind === 'editor' ? 1024 : 512) * 1024 ** 2;
-  const env = ['HOME=/home/coder', 'USER=coder', 'LANG=C.UTF-8', 'PATH=/opt/code-server/lib:/opt/code-server/bin:/usr/bin:/bin'];
+  const env = ['HOME=/home/coder', 'USER=coder', 'LANG=C.UTF-8', 'PATH=/opt/code-server/lib:/opt/code-server/bin:/opt/npm/bin:/opt/dotnet:/usr/bin:/bin'];
+  if (cfg.toolchain) env.push('DOTNET_ROOT=/opt/dotnet','DOTNET_CLI_HOME=/home/coder','DOTNET_CLI_TELEMETRY_OPTOUT=1','DOTNET_NOLOGO=1','NPM_CONFIG_CACHE=/home/coder/.npm','NPM_CONFIG_PREFIX=/home/coder/.npm-global','HARNESS_PLAYWRIGHT_MODULE=/opt/playwright/node_modules/playwright','PLAYWRIGHT_BROWSERS_PATH=/opt/playwright/browsers','NODE_PATH=/opt/playwright/node_modules');
   if (!isRelay) env.push('PORT=' + context.ports[0], 'API_PORT=' + context.ports[1], 'TEST_PORT=' + context.ports[2], 'DATABASE_URL=file:/workspace/.harness/data/app.sqlite');
   const entry = isRelay ? ['/opt/code-server/lib/node', '/opt/homeai/socket-relay.cjs'] : kind === 'editor' ? ['/opt/code-server/bin/code-server'] : ['/bin/bash', '-o', 'pipefail', '-c'];
   const cmd = isRelay ? ['--port', String(guestPort)] : kind === 'editor' ? ['--config', '/etc/homeai/code-server.yaml', '--auth', 'none', '--socket', '/run/homeai-editor/code.sock', '--socket-mode', '0600', '--disable-proxy', '--disable-telemetry', '--disable-update-check', '--disable-file-cache', '--enable-remote-storage', '--user-data-dir', '/home/coder/user-data', '--extensions-dir', '/home/coder/extensions', '--vscode-option', 'file-watcher-polling=1000:/workspace', '/workspace'] : [input.command];
   const body = { Image: image, User: user, Entrypoint: entry, Cmd: cmd, Env: env, WorkingDir: isRelay ? '/' : '/workspace', Labels: { [LABEL]: 'managed', [LABEL + '.project']: projectId, [LABEL + '.role']: 'project-' + kind, [LABEL + '.generation']: input.generation }, HostConfig: { ReadonlyRootfs: true, Privileged: false, CapDrop: ['ALL'], SecurityOpt: ['no-new-privileges:true'], RestartPolicy: { Name: 'no' }, NetworkMode: isRelay ? 'host' : 'none', CgroupnsMode: 'private', Memory: memory, MemorySwap: memory, NanoCpus: isRelay ? 250000000 : 1000000000, PidsLimit: isRelay ? 64 : 128, Mounts: mounts, Tmpfs: { '/tmp': 'rw,nosuid,nodev,size=134217728,mode=1777', ...(kind === 'executor' ? { '/home/coder': 'rw,nosuid,nodev,size=67108864,mode=0700,uid=' + proof.uid + ',gid=' + proof.gid } : {}) } } };
   const grant = Object.freeze({});
-  grants.set(grant, { manager, binding: hash(bodyBinding(body)), expiresAt: authority.expiresAt, authorityToken: input.token, contextHash: hash(context), root, sourceIdentity: [stat.dev, stat.ino, stat.uid, stat.gid], proof: structuredClone(proof), filesystem, runtime: { version: 1, kind, scopeId, sessionId: input.sessionId, generation: input.generation, readOnly: context.readOnly, rootHash: hash(root), launchHash: launchHash(body) } });
+  grants.set(grant, { manager, binding: hash(bodyBinding(body)), expiresAt: authority.expiresAt, authorityToken: input.token, contextHash: hash(context), root, sourceIdentity: [stat.dev, stat.ino, stat.uid, stat.gid], proof: structuredClone(proof), filesystem, runtime: { version: 1, kind, scopeId, sessionId: input.sessionId, generation: input.generation, readOnly: context.readOnly, rootHash: hash(root), launchHash: launchHash(body),...(cfg.toolchain?{toolchainManifestSha256:cfg.toolchain.manifestSha256}:{}) } });
   return { body, grant, projectId, scopeId, guestRoot, socketRoot, user, guestPort };
 }
 function runtimePolicy(manager, body, grant) {

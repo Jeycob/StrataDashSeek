@@ -73,3 +73,15 @@ test('a reconstructed manager cannot automatically resume a runtime using a hist
   const f = fixture(); await f.create(); const replacement = { ...f.m, store: structuredClone(f.m.store) }; f.calls.length = 0;
   await assert.rejects(startManagedContainer(replacement, id), { code: 'PROJECT_RUNTIME_FRESH_AUTHORITY_REQUIRED' }); assert(!f.calls.some(([method]) => method === 'POST'));
 });
+
+test('configured shared toolchain requires a current boot witness and binds only fixed readonly subtrees',async()=>{
+  const f=fixture('editor'),toolRoot=path.resolve('/synthetic-tools'),digest='f'.repeat(64);
+  f.m.cfg.projectRuntime.toolchain={root:toolRoot,manifestSha256:digest};
+  assert.throws(()=>f.plan(),{code:'PROJECT_RUNTIME_TOOLCHAIN_UNAVAILABLE'});
+  f.metadata.set(toolRoot,{ino:7,uid:0,gid:0,mode:0o555});
+  f.proof.toolchain={version:1,verified:true,bootPid:123,root:toolRoot,guestRoot:'/srv/homeai/toolchain',manifestSha256:digest,hostDev:10,hostIno:7,readOnly:true};
+  const p=await f.create(),mounts=p.body.HostConfig.Mounts.filter(m=>m.Source.startsWith('/srv/homeai/toolchain/'));
+  assert.equal(p.body.HostConfig.Mounts.length,8);assert.equal(mounts.length,5);assert(mounts.every(m=>m.ReadOnly&&m.Target==='/opt/'+m.Source.split('/').at(-1)));
+  assert.equal(f.job.creations[0].resourcePolicy.policy.projectRuntime.toolchainManifestSha256,digest);assert(p.body.Env.includes('PLAYWRIGHT_BROWSERS_PATH=/opt/playwright/browsers'));
+  f.metadata.set(toolRoot,{ino:7,uid:0,gid:0,mode:0o777});f.calls.length=0;await assert.rejects(startManagedContainer(f.m,id),{code:'PROJECT_RUNTIME_TOOLCHAIN_CHANGED'});assert(!f.calls.some(([method])=>method==='POST'));
+});

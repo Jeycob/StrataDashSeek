@@ -1,7 +1,7 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto'), https = require('node:https');
 const fail = code => Object.assign(Error(code), { code, status: 409 });
-const PROJECTS = '/srv/homeai/projects', TRANSPORT = '/srv/homeai/transport';
+const PROJECTS = '/srv/homeai/projects', TRANSPORT = '/srv/homeai/transport', TOOLCHAIN = '/srv/homeai/toolchain';
 const HEX32 = /^[a-f0-9]{32}$/, HEX16 = /^[a-f0-9]{16}$/;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function openDirectory(directory, uid, gid) {
@@ -10,7 +10,7 @@ function openDirectory(directory, uid, gid) {
   try {
     const s = fs.fstatSync(fd);
     if (!s.isDirectory() || s.uid !== uid || s.gid !== gid || s.mode & 0o022) throw fail('PROJECT_RUNTIME_EXPORT_OWNER_INVALID');
-    return { fd, path: directory, dev: s.dev, ino: s.ino };
+    return { fd, path: directory, dev: s.dev, ino: s.ino, uid: s.uid, gid: s.gid };
   } catch (error) { fs.closeSync(fd); throw error; }
 }
 function openExports(cfg) {
@@ -20,25 +20,48 @@ function openExports(cfg) {
   const transportRoot = settings.editorTransportRoot || '/data/harness/secrets/editor-transport', transport = path.join(transportRoot, 'guest-server');
   if (!path.isAbsolute(transportRoot) || !path.isAbsolute(settings.projectsRoot || '') || transportRoot.startsWith(settings.projectsRoot + path.sep) || settings.projectsRoot.startsWith(transportRoot + path.sep) || settings.projectsRoot === transportRoot) throw fail('PROJECT_RUNTIME_EXPORT_PATH_INVALID');
   fs.mkdirSync(transport, { recursive: true, mode: 0o700 });
-  const projects = openDirectory(settings.projectsRoot, uid, gid);
-  try { return { projects, transport: openDirectory(transport, uid, gid), transportRoot, uid, gid }; }
-  catch (error) { fs.closeSync(projects.fd); throw error; }
+  const result = { projects: openDirectory(settings.projectsRoot, uid, gid), transport: null, toolchain: null, transportRoot, uid, gid };
+  try {
+    result.transport = openDirectory(transport, uid, gid);
+    if (settings.toolchain !== undefined) {
+      const value = settings.toolchain;
+      if (!value || Object.keys(value).some(key=>!['root','manifestSha256'].includes(key)) || !path.isAbsolute(value.root || '') || !/^[a-f0-9]{64}$/.test(value.manifestSha256 || '') || [settings.projectsRoot,transportRoot].some(root=>value.root===root||value.root.startsWith(root+path.sep)||root.startsWith(value.root+path.sep))) throw fail('PROJECT_RUNTIME_TOOLCHAIN_UNAVAILABLE');
+      // This verifier is a packaging contract, never a downloader or installer.
+      const checked = require('../development/project-toolchain.cjs').verifyToolchain(value.root,{expectedDigest:value.manifestSha256,expectedUid:0});
+      if (checked?.version !== 1 || checked.root !== value.root || checked.manifestSha256 !== value.manifestSha256 || checked.uid !== 0) throw fail('PROJECT_RUNTIME_TOOLCHAIN_UNAVAILABLE');
+      result.toolchain = {...openDirectory(value.root,0,checked.gid),manifestSha256:checked.manifestSha256};
+      if (result.toolchain.dev !== checked.dev || result.toolchain.ino !== checked.ino) throw fail('PROJECT_RUNTIME_TOOLCHAIN_CHANGED');
+    }
+    return result;
+  } catch (error) { closeExports(result); throw error; }
 }
-function closeExports(exports) { if (exports) for (const item of [exports.projects, exports.transport]) if (Number.isInteger(item.fd)) { fs.closeSync(item.fd); item.fd = null; } }
-function qemuArguments() {
-  return ['-fsdev', 'local,id=homeai-projects,path=/proc/self/fd/3,security_model=none,multidevs=forbid,writeout=immediate', '-device', 'virtio-9p-pci,fsdev=homeai-projects,mount_tag=homeai-projects', '-fsdev', 'local,id=homeai-transport,path=/proc/self/fd/4,security_model=none,multidevs=forbid,readonly=on', '-device', 'virtio-9p-pci,fsdev=homeai-transport,mount_tag=homeai-transport'];
+function closeExports(exports) { if (exports) for (const item of [exports.projects, exports.transport, exports.toolchain]) if (Number.isInteger(item?.fd)) { fs.closeSync(item.fd); item.fd = null; } }
+function qemuArguments(toolchain = false) {
+  return ['-fsdev', 'local,id=homeai-projects,path=/proc/self/fd/3,security_model=none,multidevs=forbid,writeout=immediate', '-device', 'virtio-9p-pci,fsdev=homeai-projects,mount_tag=homeai-projects', '-fsdev', 'local,id=homeai-transport,path=/proc/self/fd/4,security_model=none,multidevs=forbid,readonly=on', '-device', 'virtio-9p-pci,fsdev=homeai-transport,mount_tag=homeai-transport', ...(toolchain ? ['-fsdev','local,id=homeai-toolchain,path=/proc/self/fd/5,security_model=none,multidevs=forbid,readonly=on','-device','virtio-9p-pci,fsdev=homeai-toolchain,mount_tag=homeai-toolchain'] : [])];
 }
 function forwards() { return Array.from({ length: 64 }, (_, n) => 'hostfwd=tcp:127.0.0.1:' + (19180 + n) + '-:' + (19180 + n)); }
 function verifyProcessExports(vm) {
   const exports = vm.projectExports, pid = vm.pid();
   if (!exports || !Number.isInteger(pid) || pid < 1) throw fail('PROJECT_RUNTIME_EXPORT_UNVERIFIED');
   const command = fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8').split('\0');
-  for (const arg of qemuArguments()) if (!command.includes(arg)) throw fail('PROJECT_RUNTIME_EXPORT_UNVERIFIED');
-  for (const [fd, item] of [[3, exports.projects], [4, exports.transport]]) {
+  for (const arg of qemuArguments(Boolean(exports.toolchain))) if (!command.includes(arg)) throw fail('PROJECT_RUNTIME_EXPORT_UNVERIFIED');
+  for (const [fd, item] of [[3, exports.projects], [4, exports.transport], ...(exports.toolchain ? [[5,exports.toolchain]] : [])]) {
     const held = fs.statSync('/proc/' + pid + '/fd/' + fd), current = fs.lstatSync(item.path);
-    if (!current.isDirectory() || current.isSymbolicLink() || fs.realpathSync(item.path) !== item.path || held.dev !== item.dev || held.ino !== item.ino || current.dev !== item.dev || current.ino !== item.ino || current.uid !== exports.uid || current.gid !== exports.gid) throw fail('PROJECT_RUNTIME_EXPORT_CHANGED');
+    if (!current.isDirectory() || current.isSymbolicLink() || fs.realpathSync(item.path) !== item.path || held.dev !== item.dev || held.ino !== item.ino || current.dev !== item.dev || current.ino !== item.ino || current.uid !== item.uid || current.gid !== item.gid || current.mode & 0o022) throw fail('PROJECT_RUNTIME_EXPORT_CHANGED');
   }
   return pid;
+}
+function toolchainScript(digest) {
+  if (!/^[a-f0-9]{64}$/.test(digest || '')) throw fail('PROJECT_RUNTIME_TOOLCHAIN_UNAVAILABLE');
+  return `set -eu
+mkdir -p ${TOOLCHAIN}
+if ! mountpoint -q ${TOOLCHAIN}; then mount -t 9p -o ro,trans=virtio,version=9p2000.L,cache=none,msize=262144,access=client homeai-toolchain ${TOOLCHAIN}; fi
+awk '$1=="homeai-toolchain" && $2=="${TOOLCHAIN}" && $3=="9p" && $4 ~ /(^|,)ro(,|$)/ {ok++} END {exit ok==1?0:1}' /proc/mounts
+test "$(stat -c %u ${TOOLCHAIN})" = '0'
+test "$(sha256sum ${TOOLCHAIN}/.homeai-toolchain.json | cut -d ' ' -f 1)" = '${digest}'
+if printf forbidden > ${TOOLCHAIN}/.homeai-toolchain.json 2>/dev/null; then exit 71; fi
+for directory in code-server homeai dotnet playwright npm; do test -d ${TOOLCHAIN}/$directory && test ! -L ${TOOLCHAIN}/$directory; done
+`;
 }
 function bootScript(nonce, uid, gid) {
   if (!HEX16.test(nonce || '') || !Number.isInteger(uid) || uid < 1000 || uid > 65534 || !Number.isInteger(gid) || gid < 1000 || gid > 65534) throw fail('PROJECT_RUNTIME_PROBE_INVALID');
@@ -89,12 +112,13 @@ async function proveExports(vm) {
       const file = path.join(item.path, marker); fs.writeFileSync(file, kind + '-' + nonce, { flag: 'wx', mode: 0o600 }); created.push([file,fs.lstatSync(file)]);
     }
     await guestScript(vm, bootScript(nonce, e.uid, e.gid)); verifyProcessExports(vm);
+    if (e.toolchain) { await guestScript(vm,toolchainScript(e.toolchain.manifestSha256)); verifyProcessExports(vm); }
     for (const [index, expected] of [[0,'guest-'],[1,'transport-']]) {
       const [file, before] = created[index], fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
       try { const after = fs.fstatSync(fd); if (!after.isFile() || after.nlink !== 1 || after.dev !== before.dev || after.ino !== before.ino || after.size > 64 || fs.readFileSync(fd,'utf8') !== expected + nonce) throw fail('PROJECT_RUNTIME_SHARE_WITNESS_FAILED'); }
       finally { fs.closeSync(fd); }
     }
-    vm.projectRuntimeIsolation = { version: 1, verified: true, bootPid: pid, projectsRoot: e.projects.path, guestProjectsRoot: PROJECTS, hostDev: e.projects.dev, hostIno: e.projects.ino, uid: e.uid, gid: e.gid, transportRoot: e.transport.path, guestTransportRoot: TRANSPORT, transportDev: e.transport.dev, transportIno: e.transport.ino, transportReadOnly: true };
+    vm.projectRuntimeIsolation = { version: 1, verified: true, bootPid: pid, projectsRoot: e.projects.path, guestProjectsRoot: PROJECTS, hostDev: e.projects.dev, hostIno: e.projects.ino, uid: e.uid, gid: e.gid, transportRoot: e.transport.path, guestTransportRoot: TRANSPORT, transportDev: e.transport.dev, transportIno: e.transport.ino, transportReadOnly: true, ...(e.toolchain ? {toolchain:{version:1,verified:true,bootPid:pid,root:e.toolchain.path,guestRoot:TOOLCHAIN,manifestSha256:e.toolchain.manifestSha256,hostDev:e.toolchain.dev,hostIno:e.toolchain.ino,readOnly:true}} : {}) };
   } finally {
     for (const [file, before] of created) { const current = fs.lstatSync(file); if (current.dev !== before.dev || current.ino !== before.ino || current.isSymbolicLink()) throw fail('PROJECT_RUNTIME_SHARE_CLEANUP_REFUSED'); fs.unlinkSync(file); }
   }
@@ -140,4 +164,4 @@ async function health(vm, { scopeId, generation, guestPort, serverName, timeoutM
     const timer=setTimeout(()=>finish(false),Math.max(100,Math.min(2000,timeoutMs)));timer.unref();request.on('error',()=>finish(false));request.end();
   });
 }
-module.exports = { openExports, closeExports, qemuArguments, forwards, verifyProcessExports, bootScript, guestScript, proveExports, preparationScript, prepare, health };
+module.exports = { openExports, closeExports, qemuArguments, forwards, verifyProcessExports, bootScript, toolchainScript, guestScript, proveExports, preparationScript, prepare, health };

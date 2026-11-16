@@ -6,6 +6,7 @@ test('QEMU receives two fixed separate descriptor exports and only private loopb
   assert(args.includes('local,id=homeai-transport,path=/proc/self/fd/4,security_model=none,multidevs=forbid,readonly=on'));
   const forward=vm.forwards();assert.equal(forward.length,64);assert.equal(forward[0],'hostfwd=tcp:127.0.0.1:19180-:19180');assert.equal(forward.at(-1),'hostfwd=tcp:127.0.0.1:19243-:19243');
   assert(args.every(value=>!value.includes('host-client')));
+  const withTools=vm.qemuArguments(true);assert(withTools.includes('local,id=homeai-toolchain,path=/proc/self/fd/5,security_model=none,multidevs=forbid,readonly=on'));assert.equal(withTools.filter(value=>value==='-fsdev').length,3);
 });
 test('trusted supervisor scripts require positive same-file challenge and a transport write denial',()=>{
   const script=vm.bootScript('a'.repeat(16),1001,1001);assert.match(script,/transport.*ro/);assert.match(script,/if printf forbidden > .* then exit 71/);assert.match(script,/printf 'guest-aaaaaaaaaaaaaaaa'/);
@@ -13,7 +14,8 @@ test('trusted supervisor scripts require positive same-file challenge and a tran
   const preparation=vm.preparationScript({scopeId:'b'.repeat(32),generation:'c'.repeat(32),guestRoot:'/srv/homeai/projects/session_one',uid:1001,gid:1001});
   assert.match(preparation,/mkdir \/run\/homeai-runtime\/b+\/c+/);assert.doesNotMatch(preparation,/host-client|client.key|rm -rf|openssl/);
   assert.throws(()=>vm.preparationScript({scopeId:'b'.repeat(32),generation:'c'.repeat(32),guestRoot:'/srv/homeai/projects/a/../../secrets',uid:1001,gid:1001}));
-  if(process.platform==='linux')for(const source of [script,preparation])assert.equal(cp.spawnSync('/bin/sh',['-n'],{input:source}).status,0);
+  const tools=vm.toolchainScript('d'.repeat(64));assert.match(tools,/homeai-toolchain.*ro/);assert.match(tools,/sha256sum.*\.homeai-toolchain\.json/);assert.match(tools,/if printf forbidden > .*\.homeai-toolchain\.json/);assert.throws(()=>vm.toolchainScript('untrusted-shell'));
+  if(process.platform==='linux')for(const source of [script,preparation,tools])assert.equal(cp.spawnSync('/bin/sh',['-n'],{input:source}).status,0);
 });
 test('serial success is nonce-bound and nonzero completion never claims a verified mapping',async()=>{
   const worker={phase:'ready',pid:()=>123,buffer:'',serial:{destroyed:false,write(command){const nonce=command.match(/HOMEAI_SCRIPT_([a-f0-9]{16})/)[1];worker.buffer='\nHOMEAI_SUPERVISOR_'+nonce+'=0\n';}}};

@@ -156,9 +156,9 @@ class DockerVM {
     '-kernel',this.root+'/vmlinuz-virt','-initrd',this.root+'/initramfs-virt','-cdrom',this.root+'/alpine.iso','-drive','file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback',
     '-append','console=ttyS0 alpine_dev=cdrom:iso9660 modules=loop,squashfs,sd-mod,usb-storage,virtio_blk quiet cgroup_no_v1=all swapaccount=1','-netdev','user,id=net0,'+forwards.join(','),'-device','virtio-net-pci,netdev=net0'];
    this.projectRuntimeIsolation=null;this.projectExports=projectVM.openExports(this.cfg);
-   if(this.projectExports)args.push(...projectVM.qemuArguments());
+   if(this.projectExports)args.push(...projectVM.qemuArguments(Boolean(this.projectExports.toolchain)));
    const log=fs.openSync(path.join(this.root,'qemu.log'),'a',0o600);
-   try{this.child=cp.spawn('nice',['-n','19','qemu-system-x86_64',...args],{cwd:this.root,stdio:['ignore',log,log,...(this.projectExports?[this.projectExports.projects.fd,this.projectExports.transport.fd]:[])]});}finally{fs.closeSync(log);projectVM.closeExports(this.projectExports);}
+   try{this.child=cp.spawn('nice',['-n','19','qemu-system-x86_64',...args],{cwd:this.root,stdio:['ignore',log,log,...(this.projectExports?[this.projectExports.projects.fd,this.projectExports.transport.fd,...(this.projectExports.toolchain?[this.projectExports.toolchain.fd]:[])]:[])]});}finally{fs.closeSync(log);projectVM.closeExports(this.projectExports);}
    this.child.on('error',e=>{this.error=e.message;});this.child.on('exit',()=>{this.serial?.destroy();this.serial=null;if(!this.stopping){this.phase='asleep';this.error='Worker exited; next operation will recover it';}});
   }
   const deadline=Date.now()+(this.saved.initialized?300000:900000);
