@@ -21,7 +21,7 @@ function prepare(recipe){
  return{inputs,archives};
 }
 function readSource(repo,commit,name){
- return cp.execFileSync('/usr/bin/git',['--no-pager','-c','safe.directory='+repo,'-C',repo,'show','--no-textconv',commit+':'+name],{env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1'},maxBuffer:2*1024**2,timeout:10000});
+ return cp.execFileSync('/usr/bin/git',['--no-pager','-c','safe.directory='+repo,'-C',repo,'show','--no-textconv',commit+':'+name],{env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1',GIT_NO_REPLACE_OBJECTS:'1',GIT_NO_LAZY_FETCH:'1'},maxBuffer:2*1024**2,timeout:10000});
 }
 function transformSource(name,bytes){
  let text=bytes.toString('utf8');
@@ -66,7 +66,7 @@ function buildOffline(recipe,output){
  fs.mkdirSync(output,{mode:0o700});const descriptors=[];let remainingBytes=toolchain.LIMITS.bytes-[...sources.values()].reduce((n,s)=>n+s.installed.length,0)-toolchain.LIMITS.manifestBytes-1024*1024,remainingEntries=toolchain.LIMITS.entries-128;
  try{
   for(const archive of plan.archives){
-   const fd=fs.openSync(archive.file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW);descriptors.push(fd);const s=fs.fstatSync(fd);
+   const fd=fs.openSync(archive.file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);descriptors.push(fd);const s=fs.fstatSync(fd);
    if(!s.isFile()||s.nlink!==1||s.size<1||s.size>2*1024**3)throw Error('TOOLCHAIN_ARTIFACT_INVALID');
    const h=crypto.createHash(archive.algorithm),buffer=Buffer.alloc(1024*1024);let offset=0;
    for(let n;(n=fs.readSync(fd,buffer,0,buffer.length,offset));){offset+=n;if(offset>s.size)throw Error('TOOLCHAIN_ARTIFACT_CHANGED');h.update(buffer.subarray(0,n));}

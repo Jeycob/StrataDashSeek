@@ -50,3 +50,11 @@ test('offline recipe requires concrete pinned inputs, whitelists sources and onl
  const lock=require('./project-toolchain-lock.json');assert.deepEqual(lock.npm,{version:T.NPM_VERSION,integrity:T.NPM_INTEGRITY});assert.equal(lock.playwright.integrity,T.PINS.playwrightIntegrity);assert.equal(lock.playwrightCore.integrity,T.PINS.playwrightCoreIntegrity);assert.equal(lock.dotnet.sha512,T.PINS.dotnetSHA512);
  const versions=require('./versions.json'),ci=require('./ci/package-lock.json');assert.equal(versions.dotnetSHA512,T.PINS.dotnetSHA512);assert.equal(versions.playwrightIntegrity,T.PINS.playwrightIntegrity);assert.equal(ci.packages['node_modules/playwright'].integrity,T.PINS.playwrightIntegrity);assert.equal(ci.packages['node_modules/playwright-core'].integrity,T.PINS.playwrightCoreIntegrity);
 });
+test('exact Git source ignores local replace refs and disables lazy fetch',{skip:process.platform!=='linux'},t=>{
+ const repo=fs.mkdtempSync(path.join(os.tmpdir(),'homeai-toolchain-git-'));t.after(()=>fs.rmSync(repo,{recursive:true,force:true}));
+ const git=(...args)=>{const result=spawnSync('/usr/bin/git',['-C',repo,'-c','user.name=Synthetic','-c','user.email=synthetic@example.invalid','-c','commit.gpgsign=false',...args],{encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1'}});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
+ git('init','-q');fs.writeFileSync(path.join(repo,'reference.txt'),'original');git('add','reference.txt');git('commit','-qm','original');const original=git('rev-parse','HEAD');
+ fs.writeFileSync(path.join(repo,'reference.txt'),'replacement');git('add','reference.txt');git('commit','-qm','replacement');git('replace',original,git('rev-parse','HEAD'));assert.equal(git('show',original+':reference.txt'),'replacement');
+ assert.equal(B.readSource(repo,original,'reference.txt').toString(),'original');
+ const cp=require('node:child_process'),prior=cp.execFileSync;let options;cp.execFileSync=(...args)=>{options=args[2];return Buffer.from('synthetic');};try{B.readSource('/synthetic',original,'reference.txt');}finally{cp.execFileSync=prior;}assert.equal(options.env.GIT_NO_LAZY_FETCH,'1');assert.equal(options.env.GIT_NO_REPLACE_OBJECTS,'1');
+});
