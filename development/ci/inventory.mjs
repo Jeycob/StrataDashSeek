@@ -9,6 +9,7 @@ const helpers = new Map([
   ['vast/apps-browser-check.cjs', 'Owned-release browser verification adapter; requires a project, plan and release ID.']
 ]);
 const hostFixtures = new Map([
+  ['development/guest-capability-probe.cjs', 'Operator-only disposable QEMU guest using pinned installed boot artifacts after fresh host quiescence; no production host or installed ISO in CI. Plan tests run separately.'],
   ['deployments/apps-live-lifecycle-check.cjs', 'Explicit live demo lifecycle check reads the installed private worker key; operator-run acceptance only.'],
   ['deployments/apps-real-worker-check.cjs', 'Acceptance against an explicitly prepared dedicated Docker worker; no such host or credentials in CI.'],
   ['deployments/docker-worker-provision-check.cjs', 'Operator check of the installed Docker VM/engine; not a disposable unit fixture.'],
@@ -18,6 +19,7 @@ const hostFixtures = new Map([
 const linuxChecks = new Set(['deployments/worker-network-linux-check.cjs','vast/runtime-paths-linux-check.cjs', 'vast/startup-update-linux-check.cjs', 'workspace/process-lock-linux-check.mjs', 'workspace/checkpoint-restore-linux-check.mjs', 'mobile/runtime-readiness-native-check.cjs', 'vast/apps-context-linux-check.cjs','vast/runtime-lease-linux-check.cjs','vast/startup-hook-linux-check.cjs']);
 const rootTests = new Set(['mobile/runtime-readiness.test.cjs', 'vast/apps-data-linux-check.cjs']);
 export function candidate(name) {
+  if (hostFixtures.has(name.replaceAll('\\', '/'))) return true;
   const base = path.posix.basename(name);
   return /\.test\.[cm]js$|[-_](?:check|smoke)\.[cm]js$|^test[-_].+\.[cm]js$|^test[-_].+\.py$|[-_]tests\.py$/u.test(base);
 }

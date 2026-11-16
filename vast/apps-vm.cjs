@@ -30,7 +30,14 @@ function bootstrap(manifest, initialize, nonce, repairCache=false) {
 set -eu
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 isolate_control_plane() { ${controlFirewall()} }
-if command -v docker >/dev/null && docker info >/dev/null 2>&1; then isolate_control_plane; echo HARNESS_READY_${nonce}; exit 0; fi
+require_unified_cgroups() {
+ test "$(stat -f -c %T /sys/fs/cgroup)" = cgroup2fs || { echo REFUSE_NON_UNIFIED_CGROUPS; exit 1; }
+ for controller in memory cpu pids; do grep -qw "$controller" /sys/fs/cgroup/cgroup.controllers || { echo REQUIRED_CGROUP_CONTROLLER_MISSING; exit 1; }; done
+}
+# Existing v1/hybrid guests require a deliberate cold boot. Never remount a
+# running workload's hierarchy or relax the managed resource admission gate.
+grep -qw 'cgroup_no_v1=all' /proc/cmdline || { echo REFUSE_UNIFIED_COLD_BOOT_REQUIRED; exit 1; }
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then require_unified_cgroups; isolate_control_plane; echo HARNESS_READY_${nonce}; exit 0; fi
 ip link set eth0 up
 udhcpc -i eth0 -q -n
 printf '%s\\n' 'https://dl-cdn.alpinelinux.org/alpine/v3.24/main' 'https://dl-cdn.alpinelinux.org/alpine/v3.24/community' > /etc/apk/repositories
@@ -56,7 +63,9 @@ if ! apk --cache-dir /var/lib/harness/apk-cache --no-network add docker acpid; t
  ${initialize||repairCache ? 'apk --cache-dir /var/lib/harness/apk-cache update\n apk --cache-dir /var/lib/harness/apk-cache add docker acpid' : 'echo OFFLINE_PACKAGE_CACHE_UNAVAILABLE; exit 1'}
 fi
 ${initialize||repairCache ? 'apk --cache-dir /var/lib/harness/apk-cache cache sync' : ''}
+printf '\\nrc_cgroup_mode="unified"\\n' >> /etc/rc.conf
 rc-service cgroups start
+require_unified_cgroups
 rc-service acpid start
 if ! pidof dockerd >/dev/null; then
  dockerd --storage-driver=${PILOT_WORKER_PROFILE.storageDriver} --data-root=/var/lib/harness/docker --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --tls=false --label=io.stratadashseek.worker=${manifest.volumeId} > /tmp/docker.log 2>&1 &
@@ -116,7 +125,7 @@ class DockerVM {
  }
  async start(){
   requireControl(this);
-  if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1){await this.engine.available();return;}
+  if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1 && this.saved.resourceBootstrapVersion===1){await this.engine.available();return;}
   this.phase='starting';this.error=null;this.scriptSent=false;this.nonce=crypto.randomBytes(8).toString('hex');
   if(this.serial&&!this.serial.destroyed)this.serial.write('\n');
   if(!this.pid()){
@@ -127,7 +136,7 @@ class DockerVM {
    const args=['-name','stratadashseek-docker','-accel',PILOT_WORKER_PROFILE.acceleration+',thread=single','-smp',String(PILOT_WORKER_PROFILE.vcpus),'-m',String(PILOT_WORKER_PROFILE.memoryMiB),'-cpu','max','-display','none','-monitor','none','-no-reboot',
     '-chardev','socket,id=console,path='+this.root+'/serial.sock,server=on,wait=off','-serial','chardev:console','-qmp','unix:'+this.root+'/qmp.sock,server=on,wait=off','-pidfile',this.root+'/qemu.pid',
     '-kernel',this.root+'/vmlinuz-virt','-initrd',this.root+'/initramfs-virt','-cdrom',this.root+'/alpine.iso','-drive','file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback',
-    '-append','console=ttyS0 alpine_dev=cdrom:iso9660 modules=loop,squashfs,sd-mod,usb-storage,virtio_blk quiet','-netdev','user,id=net0,'+forwards.join(','),'-device','virtio-net-pci,netdev=net0'];
+    '-append','console=ttyS0 alpine_dev=cdrom:iso9660 modules=loop,squashfs,sd-mod,usb-storage,virtio_blk quiet cgroup_no_v1=all swapaccount=1','-netdev','user,id=net0,'+forwards.join(','),'-device','virtio-net-pci,netdev=net0'];
    const log=fs.openSync(path.join(this.root,'qemu.log'),'a',0o600);this.child=cp.spawn('nice',['-n','19','qemu-system-x86_64',...args],{cwd:this.root,stdio:['ignore',log,log]});fs.closeSync(log);
    this.child.on('error',e=>{this.error=e.message;});this.child.on('exit',()=>{this.serial?.destroy();this.serial=null;if(!this.stopping){this.phase='asleep';this.error='Worker exited; next operation will recover it';}});
   }
@@ -140,13 +149,14 @@ class DockerVM {
     try{
      const info=await this.engine.json('GET','/info',{timeout:2000});
      if(!info.Labels?.includes('io.stratadashseek.worker='+this.manifest.volumeId))throw Error('Unexpected Docker worker identity');
+     if(info.CgroupVersion!=='2')throw Object.assign(Error('Unified cgroup v2 was not reported by the managed Docker worker; cold reconciliation is required'),{code:'APPS_CGROUP_V2_REQUIRED'});
      this.observedStorageDriver=info.Driver;this.storageObservedAt=Date.now();
-     this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.save();
+     this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.saved.resourceBootstrapVersion=1;this.save();
      const resumeIds=this.saved.resumeIds||[];
      if(resumeIds.length){if(typeof this.validateResume!=='function')throw Error('Published application resume identities require the application controller');await this.validateResume(resumeIds);}
      for(const id of resumeIds){if(typeof this.startManagedContainer!=='function')throw Error('Managed container resource admission requires the application controller');await this.startManagedContainer(id);}
      this.phase='ready';this.touch();await this.diskFree();this.save();return;
-    }catch(e){if(this.phase!=='starting')throw e;}
+    }catch(e){if(this.phase!=='starting'||e.code==='APPS_CGROUP_V2_REQUIRED')throw e;}
     await pause(1000);
    }
    throw Error('Docker worker startup exceeded five minutes; inspect its console');

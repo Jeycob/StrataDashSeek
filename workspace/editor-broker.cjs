@@ -64,6 +64,6 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
    socket.write('HTTP/1.1 101 Switching Protocols\r\n'+Object.entries(h).map(([k,v])=>k+': '+v).join('\r\n')+'\r\n\r\n');if(upstreamHead.length)socket.write(upstreamHead);if(head.length)peer.write(head);socket.pipe(peer).pipe(socket);deadline=setTimeout(remove,Math.max(1,expires-now()));deadline.unref?.();
   });request.end();
  });
- return{server,sessionId,generation,origin,cookieName,issue(){if(closed)throw Error('EDITOR_CLOSED');sweep();if(grants.size>=maxGrants)throw Error('EDITOR_GRANT_LIMIT');const v=token(),expiresAt=now()+grantMs;grants.set(digest(v),expiresAt);return{version:1,sessionId,generation,state:'ready',url:origin+'/__editor/bootstrap#'+v,expiresAt};},close(){closed=true;grants.clear();sessions.clear();for(const s of sockets)s.destroy();server.closeAllConnections();server.close();}};
+ return{server,sessionId,generation,origin,cookieName,issue(){if(closed)throw Error('EDITOR_CLOSED');sweep();if(grants.size>=maxGrants)throw Error('EDITOR_GRANT_LIMIT');const v=token(),grantExpiresAt=now()+grantMs;grants.set(digest(v),grantExpiresAt);return{version:1,sessionId,generation,state:'ready',url:origin+'/__editor/bootstrap#'+v,grantExpiresAt,expiresAt:now()+sessionMs};},close(){closed=true;grants.clear();sessions.clear();for(const s of sockets)s.destroy();server.closeAllConnections();server.close();}};
 }
 module.exports={createEditorBroker,safePath,incoming,outgoing};

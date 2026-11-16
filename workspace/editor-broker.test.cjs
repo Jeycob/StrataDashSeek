@@ -16,6 +16,7 @@ async function fixture(t){
 }
 test('one-use scoped claims, expiry and ownership are enforced before connecting to editor',async t=>{
  const f=await fixture(t),issued=f.broker.issue();assert.equal(issued.sessionId,'project-A');assert.equal(issued.generation,'g1');assert.ok(!issued.url.includes('?'));
+ assert.equal(issued.grantExpiresAt,61000);assert.equal(issued.expiresAt,1801000);
  assert.equal((await f.request('/',{headers:{cookie:'dsh-auth-owner=SYNTHETIC_OWNER'}})).status,401);
  assert.equal(f.seen.length,0);const c=await f.claim();
  assert.equal((await f.request('/__editor/claim',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({grant:c.grant})})).status,403);
