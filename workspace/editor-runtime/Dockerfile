@@ -18,8 +18,8 @@ RUN apt-get update \
     && test "$EDITOR_UID" -ge 1000 && test "$EDITOR_GID" -ge 1000 \
     && groupadd -g "$EDITOR_GID" coder \
     && useradd --uid "$EDITOR_UID" --gid "$EDITOR_GID" --home-dir /home/coder --shell /bin/sh coder \
-    && mkdir -p /home/coder /workspace /etc/homeai \
-    && chown "$EDITOR_UID:$EDITOR_GID" /home/coder /workspace
+    && mkdir -p /home/coder /workspace /etc/homeai /run/homeai-editor \
+    && chown "$EDITOR_UID:$EDITOR_GID" /home/coder /workspace /run/homeai-editor
 COPY --from=unpack --chown=0:0 /code-server /opt/code-server
 COPY --chown=0:0 code-server.yaml /etc/homeai/code-server.yaml
 ENV HOME=/home/coder USER=coder LANG=C.UTF-8 \
@@ -29,6 +29,5 @@ ENV HOME=/home/coder USER=coder LANG=C.UTF-8 \
     EXTENSIONS_GALLERY='{"serviceUrl":"http://127.0.0.1:9/disabled","itemUrl":"http://127.0.0.1:9/disabled"}'
 USER ${EDITOR_UID}:${EDITOR_GID}
 WORKDIR /workspace
-EXPOSE 8080
 ENTRYPOINT ["/opt/code-server/bin/code-server", "--config", "/etc/homeai/code-server.yaml"]
-CMD ["--auth", "none", "--bind-addr", "0.0.0.0:8080", "--disable-proxy", "--disable-telemetry", "--disable-update-check", "--disable-file-cache", "--enable-remote-storage", "--user-data-dir", "/home/coder/user-data", "--extensions-dir", "/home/coder/extensions", "--vscode-option", "file-watcher-polling=1000:/workspace", "/workspace"]
+CMD ["--auth", "none", "--socket", "/run/homeai-editor/code.sock", "--socket-mode", "0600", "--disable-proxy", "--disable-telemetry", "--disable-update-check", "--disable-file-cache", "--enable-remote-storage", "--user-data-dir", "/home/coder/user-data", "--extensions-dir", "/home/coder/extensions", "--vscode-option", "file-watcher-polling=1000:/workspace", "/workspace"]

@@ -1,4 +1,5 @@
-# Authentication belongs to the scoped root broker, never a public listener.
+# Authentication belongs to the scoped root broker. Editor has network=none.
 auth: none
 cert: false
-bind-addr: 0.0.0.0:8080
+socket: /run/homeai-editor/code.sock
+socket-mode: "0600"
