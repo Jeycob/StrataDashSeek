@@ -11,7 +11,7 @@ export function renderProjectBackground(args, value) {
 
 // Only SDK-owned handles are retained. Never discover/adopt arbitrary PIDs or
 // use a process name as an authority to signal another program.
-export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearTimer = clearTimeout, execute = spec => ctx.shell.execute(spec) } = {}) {
   const active = new Map(); let disposed = false;
   async function dispose() {
     if (disposed && active.size === 0) return;
@@ -58,7 +58,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
             try {
               controller.signal.throwIfAborted();
               for (const adaptation of adaptations) handle.append(adaptation + '\n', { channel: 'stdout' });
-              process = await ctx.shell.execute({ ...spec, onExpiry: 'none', timeoutMs: lifetimeMs, signal: controller.signal });
+              process = await execute({ ...spec, onExpiry: 'none', timeoutMs: lifetimeMs, signal: controller.signal });
               if (controller.signal.aborted) process.kill();
               await process.done;
               const result = { exitCode: process.exitCode, signal: process.signal ?? null, lifetimeMs, lifetimeExpired: stopReason?.startsWith('project job lifetime limit') ?? false,

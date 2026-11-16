@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { createProjectCommandRunner, registerProjectTool } from './project-tool.mjs';
 import { createManagedShell } from './managed-shell.mjs';
 import { createProjectProcessStarter } from './project-process.mjs';
+import { createGuestProjectCommandRunner } from './project-guest-runner.mjs';
 import { apply as applyEfficiency } from '../efficiency/plugin.mjs';
 
 let modules;
@@ -92,6 +93,19 @@ async function fixture(t, { controller = true, admission = false } = {}) {
   });
   return { ...S, ctx, root, directory, manager, native, managed, run, agent, call, processes, calls, timers, events, notices };
 }
+
+test('real SDK owns a guest-backed background handle and collects its observed remote exit', async t => {
+  const f=await fixture(t),owner=f.agent('guest-owner');owner.inbox.remove=()=>false;f.manager.data.sessions[owner.id].independentRepository=true;
+  let admission,terminal=false;const requests=[];f.manager.withProjectRuntimeAuthority=async(input,action)=>{assert.equal(input.accessSessionId,owner.id);return action('f'.repeat(32));};
+  const callApps=async(route,data)=>{requests.push([route,data]);if(data?.op==='execute')return admission={version:1,state:'running',sessionId:owner.id,generation:data.generation,jobId:'a'.repeat(16),operationId:'b'.repeat(32),stopToken:'c'.repeat(43)};if(data?.op==='stop'){terminal=true;return{version:1,state:'stopped',sessionId:owner.id,generation:admission.generation,operationId:admission.operationId};}if(route.startsWith('/job-log'))return{text:'guest job output\n'};return{version:1,job:{id:admission.jobId,action:'project-executor',status:terminal?'failed':'running',terminal,...(terminal?{exitCode:23}:{})}};};
+  const guest=createGuestProjectCommandRunner(f.ctx,f.manager,{appsConfig:{projectRuntime:{enabled:true}},callApps,pollMs:1,wait:()=>new Promise(r=>setTimeout(r,1))});
+  f.managed.remove(owner);const managed=createManagedShell(f.ctx,f.manager,guest);managed.install(owner);
+  t.after(async()=>{terminal=true;await guest.dispose();managed.dispose();});
+  const result=await f.call(owner);assert.equal(result.isError,false,JSON.stringify(result));await eventually(()=>requests.some(([route])=>route.startsWith('/job-log')));
+  assert.equal(f.calls.length,0);assert.equal(f.ctx.jobs.get(result.value.jobId,owner.id).owner,owner.id);
+  terminal=true;await eventually(()=>f.ctx.jobs.get(result.value.jobId,owner.id).status==='completed');
+  const output=await f.call(owner,'job_output',{job_id:result.value.jobId});assert.equal(output.isError,false,JSON.stringify(output));assert.match(JSON.stringify(output),/exit code: 23/);
+});
 
 test('two SDK projects share heavy admission for managed bash and project_exec through background process settlement', async t => {
   const f = await fixture(t, { admission: true }), a = f.agent('heavy-a'), b = f.agent('heavy-b');
