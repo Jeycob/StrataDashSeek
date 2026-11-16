@@ -33,3 +33,18 @@ test('owner route rejects cross-origin callers and reports missing OS configurat
  const send=origin=>route.fetch(new Request('http://native.internal/api/workbench/editor',{method:'POST',headers:{host:'owner.test',origin,'content-type':'application/json'},body:JSON.stringify({op:'open',sessionId:'A'})}));
  assert.equal((await send('https://owner.test:19443')).status,403);const response=await send('https://owner.test');assert.equal(response.status,200);assert.deepEqual(await response.json(),{version:1,sessionId:'A',state:'unavailable',code:'EDITOR_ISOLATION_NOT_CONFIGURED'});
 });
+
+test('browser activity rechecks project policy and closes a revoked editor before renewal',async t=>{
+ const f=await fixture(t);let touches=0;f.adapter.touchEditor=async()=>{touches++;};
+ await f.api.run({op:'open',sessionId:'A'});await f.brokers[0].onActivity();assert.equal(touches,1);
+ f.api.revoke('A');await assert.rejects(f.brokers[0].onActivity());assert.equal(touches,1);assert.equal(f.brokers[0].closed,true);
+ await f.api.run({op:'open',sessionId:'B'});f.ctx.sandboxPolicy.resolve=()=>({mode:'read-only'});
+ await assert.rejects(f.brokers[1].onActivity(),{code:'EDITOR_ACCESS_CHANGED'});assert.equal(touches,1);assert.equal(f.brokers[1].closed,true);
+});
+
+test('close aborts the in-flight adapter RPC without waiting for admission to finish',async t=>{
+ const f=await fixture(t);let entered;const pending=new Promise(resolve=>entered=resolve);
+ f.adapter.ensureEditor=async({signal})=>{entered();return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));};
+ const opening=f.api.run({op:'open',sessionId:'A'});await pending;const closing=f.api.run({op:'close',sessionId:'A'});
+ await assert.rejects(opening,{code:'EDITOR_CLOSED'});assert.equal((await closing).state,'closed');assert.equal(f.brokers.length,0);
+});

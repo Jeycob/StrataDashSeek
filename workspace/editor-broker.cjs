@@ -24,7 +24,7 @@ function outgoing(headers,ownerOrigin){
  const csp=String(out['content-security-policy']||'').split(';').map(x=>x.trim()).filter(x=>x&&!/^frame-ancestors(?:\s|$)/i.test(x));csp.push('frame-ancestors '+ownerOrigin);out['content-security-policy']=csp.join('; ');out['permissions-policy']='document-domain=()';
  return out;
 }
-function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,now=Date.now,grantMs=60000,sessionMs=30*60000,requestMs=30000,maxGrants=16}){
+function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,onActivity=async()=>{},now=Date.now,grantMs=60000,sessionMs=30*60000,requestMs=30000,maxGrants=16}){
  const u=new URL(origin),owner=new URL(ownerOrigin);
  if(u.protocol!=='https:'||owner.protocol!=='https:'||u.origin!==origin||owner.origin!==ownerOrigin||origin===ownerOrigin||!/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)||typeof generation!=='string'||!generation||typeof socketPath!=='string'||!(socketPath.startsWith('/')||process.platform==='win32'&&socketPath.startsWith('\\\\.\\pipe\\homeai-editor-'))||![grantMs,sessionMs,requestMs,maxGrants].every(x=>Number.isSafeInteger(x)&&x>0)||grantMs>120000||sessionMs>3600000)throw Error('EDITOR_CONFIGURATION_INVALID');
  const cookieName='__Secure-homeai-editor-'+digest(origin).slice(0,20),grants=new Map(),sessions=new Map(),sockets=new Set();let closed=false;
@@ -58,20 +58,26 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
   }
   if(!authorized(req))return denied(res,401);const route=safePath(req.url);if(!route)return denied(res,404);
   if(!['GET','HEAD','OPTIONS'].includes(req.method)&&req.headers.origin!==origin)return denied(res);
+  try{await onActivity();}catch{return denied(res,503,'EDITOR_RUNTIME_UNAVAILABLE');}if(closed||res.destroyed)return;
   const upstream=http.request({socketPath,path:route,method:req.method,headers:incoming(req,u.host)},reply=>{
    const location=reply.headers.location;if(location){const normalized=safeRedirect(location,origin,route);if(!normalized){reply.destroy();return denied(res,502,'EDITOR_REDIRECT_REFUSED');}reply.headers.location=normalized;}
    res.writeHead(reply.statusCode,outgoing(reply.headers,ownerOrigin));reply.on('error',()=>res.destroy());reply.pipe(res);
   });upstream.setTimeout(requestMs,()=>upstream.destroy());upstream.on('error',()=>{if(res.headersSent)res.destroy();else denied(res,502,'EDITOR_UPSTREAM_UNAVAILABLE');});req.on('aborted',()=>upstream.destroy());res.on('close',()=>upstream.destroy());req.pipe(upstream);
  });
- server.on('upgrade',(req,socket,head)=>{
+ server.on('upgrade',async(req,socket,head)=>{
   const expires=authorized(req);if(!expires||req.headers.origin!==origin||req.headers.upgrade?.toLowerCase()!=='websocket'||!safePath(req.url)){socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
+  socket.pause();try{await onActivity();}catch{socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');return;}if(closed||socket.destroyed){socket.destroy();return;}
   let peer,deadline;const request=http.request({socketPath,path:safePath(req.url),method:'GET',headers:incoming(req,u.host,true)});sockets.add(socket);
   const remove=()=>{clearTimeout(deadline);sockets.delete(socket);sockets.delete(peer);socket.destroy();peer?.destroy();request.destroy();};socket.on('error',remove);socket.on('close',remove);request.on('error',remove);request.setTimeout(5000,remove);
   request.on('response',reply=>{reply.resume();socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');});
   request.on('upgrade',(reply,upstream,upstreamHead)=>{peer=upstream;sockets.add(peer);peer.on('error',remove);peer.on('close',remove);request.setTimeout(0);
    if(reply.headers['sec-websocket-extensions'])return remove();
    const h=outgoing(reply.headers,ownerOrigin);h.connection='Upgrade';h.upgrade='websocket';delete h['content-length'];
-   socket.write('HTTP/1.1 101 Switching Protocols\r\n'+Object.entries(h).map(([k,v])=>k+': '+v).join('\r\n')+'\r\n\r\n');if(upstreamHead.length)socket.write(upstreamHead);if(head.length)peer.write(head);socket.pipe(peer).pipe(socket);deadline=setTimeout(remove,Math.max(1,expires-now()));deadline.unref?.();
+   socket.write('HTTP/1.1 101 Switching Protocols\r\n'+Object.entries(h).map(([k,v])=>k+': '+v).join('\r\n')+'\r\n\r\n');if(upstreamHead.length)socket.write(upstreamHead);if(head.length)peer.write(head);
+   // Only authenticated client traffic can renew a runtime lease. Server
+   // notifications and idle sockets do not keep a project running forever.
+   socket.on('data',()=>{void Promise.resolve().then(onActivity).catch(remove);});
+   socket.pipe(peer).pipe(socket);socket.resume();deadline=setTimeout(remove,Math.max(1,expires-now()));deadline.unref?.();
   });request.end();
  });
  return{server,sessionId,generation,origin,cookieName,issue(){if(closed)throw Error('EDITOR_CLOSED');sweep();if(grants.size>=maxGrants)throw Error('EDITOR_GRANT_LIMIT');const v=token(),grantExpiresAt=now()+grantMs;grants.set(digest(v),grantExpiresAt);return{version:1,sessionId,generation,state:'ready',url:origin+'/__editor/bootstrap#'+v,grantExpiresAt,expiresAt:now()+sessionMs};},close(){closed=true;grants.clear();sessions.clear();for(const s of sockets)s.destroy();server.closeAllConnections();server.close();}};

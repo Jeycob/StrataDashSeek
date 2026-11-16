@@ -4,7 +4,11 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WorkspaceManager } from './manager.mjs';
 import { WorkbenchError, DEFAULTS } from './policy.mjs';
-import { createProjectCommandRunner, registerProjectTool } from './project-tool.mjs';
+import { registerProjectTool } from './project-tool.mjs';
+import { createGuestProjectCommandRunner } from './project-guest-runner.mjs';
+import { createProjectFileTools } from './project-file-tools.mjs';
+import { createProjectFileHandlers } from './project-file-executor.mjs';
+import { installProjectVerification } from './project-verification.mjs';
 import { createManagedShell } from './managed-shell.mjs';
 import { sameRequestOrigin, boundedJSON } from './http.mjs';
 import { createRequire } from 'node:module';
@@ -17,7 +21,10 @@ import { automaticReviewView } from './automatic-review.mjs';
 import { installDockerCleanup } from './docker-cleanup.mjs';
 import { installModelSelection } from './model-selection.mjs';
 import { installEditorSessions } from './editor-session.mjs';
+import { createProjectEditorAdapter } from './editor-runtime-adapter.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
+const { EditorOrigins } = createRequire(import.meta.url)('./editor-origins.cjs');
+const { EditorTransportStore } = createRequire(import.meta.url)('./editor-transport.cjs');
 
 export const name = 'workspace-runtime';
 export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt'];
@@ -28,12 +35,20 @@ export async function apply(ctx, config = {}) {
   const admission = installRuntimeAdmission(ctx, { expectedCommit: sourceCommit });
   const manager = new WorkspaceManager(ctx, config); await manager.initialize();
   const models = installModelSelection(ctx, manager, { lifecycle: false });
-  // The endpoint stays explicitly unavailable until a verified OS adapter is
-  // installed. A project command or client cannot supply its own launcher.
-  installEditorSessions(ctx, manager);
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
   installDockerCleanup(ctx,manager,appsConfig,callApps);
+  const editorBrowser = appsConfig?.projectRuntime?.editorBrowser;
+  let editorOptions;
+  if (appsConfig?.projectRuntime?.enabled && editorBrowser) {
+    const transport = new EditorTransportStore(appsConfig.projectRuntime.editorTransportRoot ?? '/data/harness/secrets/editor-transport');
+    editorOptions = {
+      ownerOrigin: editorBrowser.ownerOrigin,
+      origins: new EditorOrigins(path.join(manager.root, 'editor-origins.json'), editorBrowser),
+      adapter: createProjectEditorAdapter(manager, { appsConfig, callApps, socketDirectory: path.join(manager.root, 'editor-sockets'), transportIdentity: ({scopeId,generation}) => transport.clientIdentity(scopeId,generation) }),
+    };
+  }
+  installEditorSessions(ctx, manager, editorOptions);
   const capabilities = createRuntimeCapabilities({ workspaceRoot: config.appsWorkspaceRoot ?? appsConfig?.workspaceRoot ?? path.dirname(manager.projectsRoot), capacityPath: appsConfig?.stateDir ?? '/data/harness/state/applications', minFreeBytes: appsConfig?.minFreeBytes ?? 2 * 1024 ** 3,
     ...(appsConfig ? { readAppsState: ({ signal }) => callApps('/state', undefined, { ...appsConfig, signal, timeoutMs: 1500 }) } : {}) });
   registerRuntimeCapabilities(ctx, manager, capabilities);
@@ -53,14 +68,16 @@ export async function apply(ctx, config = {}) {
   const environmentReport = config.environmentReport ?? '/data/harness/state/development.json';
   const preflight = doctor({ output: environmentReport, directory: path.join(path.dirname(environmentReport), 'development') }).catch(error => ({ browser: { ok: false, error: error.message }, dotnet: { available: false } }));
   manager.environmentReady = preflight;
-  const runProjectCommand = createProjectCommandRunner(ctx, manager);
+  const runProjectCommand = createGuestProjectCommandRunner(ctx, manager, { appsConfig, callApps });
+  installProjectVerification(ctx, manager, runProjectCommand);
   registerProjectTool(ctx, manager, runProjectCommand);
   const managedShell = createManagedShell(ctx, manager, runProjectCommand);
+  const projectFiles = createProjectFileTools(ctx, manager, createProjectFileHandlers(runProjectCommand));
   // SDK tool admission precedes pre-step. Register at creation and enrollment,
   // including seeded future projects, before the first tool-set snapshot.
-  for (const agent of ctx.agents.list()) { await models.restore(agent); managedShell.install(agent); }
-  ctx.effect(() => () => managedShell.dispose());
-  ctx.on('agent/created', async ({ agent, source, signal }) => { await models.restoreAfterDefaults(agent, source, (a, s) => manager.applyDefaults(a, s)); if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal); managedShell.install(agent); }, { global: true });
+  for (const agent of ctx.agents.list()) { await models.restore(agent); managedShell.install(agent); projectFiles.install(agent); }
+  ctx.effect(() => () => { managedShell.dispose(); projectFiles.dispose(); });
+  ctx.on('agent/created', async ({ agent, source, signal }) => { await models.restoreAfterDefaults(agent, source, (a, s) => manager.applyDefaults(a, s)); if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal); managedShell.install(agent); projectFiles.install(agent); }, { global: true });
   ctx.on('agent/pre-step', async (input, next) => {
     await manager.preStep(input); manager.frozenSettings.set(input.agent.id, { ...manager.settings(manager.ownerAgent(input.agent).session) });
     const decision = await next(), id = manager.ownerAgent(input.agent).id, message = manager.pendingNotices.get(id), diagnostics = manager.pendingDiagnostics.get(id);
@@ -77,9 +94,9 @@ export async function apply(ctx, config = {}) {
     manager.observeToolResult({ ...exec, agent: manager.ownerAgent(exec.agent), managedProjectShell: managedShell.handles(exec) }, result);
   }, { global: true });
   ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
-  ctx.on('workspace-runtime/review', async ({ sessionId }, next) => (await manager.review(sessionId)) ?? next());
+  ctx.on('workspace-runtime/review', async ({ sessionId, execution }, next) => {const owner=execution?manager.ownerAgent(execution.agent)?.id:sessionId;if(!owner)return next();const value=await manager.review(owner);return value?{...value,sessionId:owner}:next();});
   ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.releaseIfIdle(session.id).then(cleanupCaches).catch(() => {}), 0); });
-  ctx.on('agent/disposed', ({ agent }) => { managedShell.remove(agent); manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); manager.pendingDiagnostics.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
+  ctx.on('agent/disposed', ({ agent }) => { managedShell.remove(agent); projectFiles.remove(agent); manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); manager.pendingDiagnostics.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
   const timer = setInterval(() => { for (const id of manager.running.keys()) void manager.releaseIfIdle(id).catch(() => {}); }, 10000); timer.unref();
   ctx.effect(() => () => clearInterval(timer));
   const cleanupTimer = setInterval(() => void cleanupCaches(), 60000); cleanupTimer.unref();

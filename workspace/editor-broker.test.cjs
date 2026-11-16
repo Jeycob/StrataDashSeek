@@ -6,13 +6,13 @@ test('editor relative redirects resolve within their exact origin and cannot ent
  for(const value of ['?folder=%2Fworkspace','./?folder=%2Fworkspace',origin+'/?folder=%2Fworkspace'])assert.equal(safeRedirect(value,origin,'/'),'/?folder=%2Fworkspace');
  for(const value of ['https://evil.test/','//owner.test:19444/','javascript:alert(1)','/proxy/3090/','/__editor/claim','https://user@owner.test:19443/'])assert.equal(safeRedirect(value,origin,'/'),null,value);
 });
-async function fixture(t){
+async function fixture(t,options={}){
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'editor-broker-')),socketPath=process.platform==='win32'?'\\\\.\\pipe\\homeai-editor-'+crypto.randomUUID():path.join(dir,'code.sock'),seen=[];let clock=1000;
  const upstream=http.createServer((req,res)=>{seen.push(req.headers);if(req.url==='/redirect')res.writeHead(302,{'Location':'https://evil.test/','Set-Cookie':'dsh-auth-fixation=evil'});else res.writeHead(200,{'Content-Type':'application/json','Set-Cookie':'dsh-auth-fixation=evil','Access-Control-Allow-Origin':'*'});res.end('{"editor":true}');});
  const live=new Set();upstream.on('connection',s=>{live.add(s);s.on('close',()=>live.delete(s));});
  upstream.on('upgrade',(req,socket)=>{seen.push(req.headers);const accept=crypto.createHash('sha1').update(req.headers['sec-websocket-key']+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: '+accept+'\r\nSet-Cookie: dsh-auth-fixation=evil\r\n\r\n');});
  await new Promise((resolve,reject)=>{upstream.once('error',reject);upstream.listen(socketPath,resolve);});
- const broker=createEditorBroker({sessionId:'project-A',generation:'g1',origin,ownerOrigin,socketPath,now:()=>clock});await new Promise(resolve=>broker.server.listen(0,'127.0.0.1',resolve));
+ const broker=createEditorBroker({sessionId:'project-A',generation:'g1',origin,ownerOrigin,socketPath,now:()=>clock,...options});await new Promise(resolve=>broker.server.listen(0,'127.0.0.1',resolve));
  t.after(async()=>{broker.close();for(const s of live)s.destroy();await new Promise(resolve=>upstream.close(resolve));await fs.rm(dir,{recursive:true,force:true});});
  function request(url,{method='GET',headers={},body}={}){return new Promise((resolve,reject)=>{const req=http.request({hostname:'127.0.0.1',port:broker.server.address().port,path:url,method,headers:{host:new URL(origin).host,'sec-fetch-site':'same-origin',...headers}},res=>{let text='';res.on('data',c=>text+=c);res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,text}));});req.on('error',reject);req.end(body);});}
  async function claim(){const grant=broker.issue().url.split('#')[1],r=await request('/__editor/claim',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({grant})});assert.equal(r.status,200);return{grant,cookie:r.headers['set-cookie'][0].split(';')[0],response:r};}
@@ -51,4 +51,12 @@ test('sibling editor no-cors subresources cannot use the victim cookie',async t=
  const nativeFrame=await f.request('/',{headers:{cookie:c.cookie,'sec-fetch-site':'same-site','sec-fetch-mode':'navigate','sec-fetch-dest':'iframe'}});
  assert.equal(nativeFrame.status,200);assert.equal(nativeFrame.headers['cross-origin-resource-policy'],'same-origin');
  assert.match(nativeFrame.headers['content-security-policy'],/frame-ancestors https:\/\/owner.test/);
+});
+
+test('runtime renewal happens only after browser authorization and failure prevents upstream access',async t=>{
+ let calls=0,allowed=false;const f=await fixture(t,{onActivity:async()=>{calls++;if(!allowed)throw Error('LEASE_EXPIRED');}});
+ assert.equal((await f.request('/')).status,401);assert.equal(calls,0);
+ const c=await f.claim();assert.equal(calls,0);
+ assert.equal((await f.request('/',{headers:{cookie:c.cookie}})).status,503);assert.equal(calls,1);assert.equal(f.seen.length,0);
+ allowed=true;assert.equal((await f.request('/',{headers:{cookie:c.cookie}})).status,200);assert.equal(calls,2);assert.equal(f.seen.length,1);
 });

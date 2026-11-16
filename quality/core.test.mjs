@@ -124,13 +124,12 @@ test('browser plan cannot silently ignore misspelled expectations or use foreign
 function pluginContext({stale=false,exitCode=0}={}) {
   const root=path.resolve('managed-project'), events=[], specs=[]; let reviews=0;
   const report={passed:true,complete:true,stale:false,checks:[{passed:true,checksPassed:4,checksTotal:4,artifactPaths:[]}]};
-  const ctx={waterfall:async()=>({root,sourceHash:stale && reviews++ ? 'new' : 'original',ports:[4000]}),serial:async(name,value)=>events.push({name,value}),shellEnv:{collect:()=>({DSH_APP_PORT:'4000'})},shell:{sandboxMode:'workspace-write',resolve:s=>{specs.push(s);return s;},execute:async()=>({result:async()=>({exitCode,stdout:{text:JSON.stringify(report)}})})}};
+  const ctx={waterfall:async(name,input)=>{if(name==='workspace-runtime/verify-command'){specs.push(input);return{result:{exitCode,stdout:{text:JSON.stringify(report)}}};}return{root,sessionId:'fixture',sourceHash:stale && reviews++ ? 'new' : 'original',ports:[4000]};},serial:async(name,value)=>events.push({name,value}),shell:{resolve(){throw Error('HOST_SHELL_FORBIDDEN');},execute(){throw Error('HOST_SHELL_FORBIDDEN');}}};
   return {ctx,root,events,specs,execution:{agent:{session:{id:'fixture'}},signal:new AbortController().signal}};
 }
-test('plugin uses managed root and native confinement and reports once',async()=>{
+test('plugin uses trusted isolated execution and reports once without calling a host shell',async()=>{
   const f=pluginContext(); const r=await executeVerification(f.ctx,{},f.execution);
-  assert.equal(r.complete,true); assert.deepEqual(f.specs[0].sandboxPolicy,{mode:'workspace-write',workspaceRoot:f.root});
-  assert.equal(f.specs[0].workdir,f.root); assert.deepEqual(f.specs[0].dshEnv,{DSH_APP_PORT:'4000'});
+  assert.equal(r.complete,true);assert.equal(f.specs[0].projectRoot,f.root);assert.equal(f.specs[0].kind,'all');assert.equal(f.specs[0].execution,f.execution);
   assert.equal(f.events.length,1); assert.equal(f.events[0].value.sourceHash,'original'); assert.equal(f.events[0].value.checksTotal,4);
 });
 test('native tool definition uses a concurrency callback',()=>{
@@ -152,9 +151,13 @@ test('manager rejection is returned as failed evidence, never a pass',async()=>{
   const f=pluginContext();f.ctx.serial=async()=>{throw Object.assign(Error('Source changed before acceptance'),{code:'STALE_VERIFICATION'});};
   const r=await executeVerification(f.ctx,{},f.execution);assert.equal(r.complete,false);assert.equal(r.passed,false);assert.equal(r.code,'STALE_VERIFICATION');
 });
-test('malformed native runner output cannot earn a manager pass',async()=>{
-  const f=pluginContext();f.ctx.shell.execute=async()=>({result:async()=>({exitCode:0,stdout:{text:'not JSON'}})});
+test('malformed guest runner output cannot earn a manager pass',async()=>{
+  const f=pluginContext(),original=f.ctx.waterfall;f.ctx.waterfall=(name,input)=>name==='workspace-runtime/verify-command'?{result:{exitCode:0,stdout:{text:'not JSON'}}}:original(name,input);
   const r=await executeVerification(f.ctx,{},f.execution);assert.equal(r.passed,false);assert.equal(f.events[0].value.exitCode,1);
+});
+
+test('missing isolated verifier and truncated guest output cannot earn a pass',async()=>{
+ for(const result of [undefined,{result:{exitCode:0,stdout:{text:'{}',truncated:true}}}]){const f=pluginContext(),original=f.ctx.waterfall;f.ctx.waterfall=(name,input)=>name==='workspace-runtime/verify-command'?result:original(name,input);const r=await executeVerification(f.ctx,{},f.execution);assert.equal(r.passed,false);assert.equal(r.complete,false);assert.equal(r.code,'QUALITY_RUNNER_FAILED');}
 });
 test('unavailable Chromium produces failure with no invented screenshots',async t=>{
   const workspace=await project(t,[passing]);

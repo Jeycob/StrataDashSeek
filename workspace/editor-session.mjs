@@ -21,10 +21,24 @@ async function listen(broker,endpoint){await new Promise((resolve,reject)=>{brok
 // Only a trusted OS launcher may supply the adapter. No client path, port,
 // command, provider credential or caller-supplied isolation claim is accepted.
 export function createEditorSessions(ctx,manager,{adapter,origins,ownerOrigin,brokerFactory=createEditorBroker,bind=listen}={}){
- const active=new Map(),queues=new Map(),epochs=new Map();let disposed=false;
+ const active=new Map(),queues=new Map(),epochs=new Map(),openings=new Map();let disposed=false;
  function ordered(id,action){const before=queues.get(id)??Promise.resolve(),next=before.catch(()=>{}).then(action);queues.set(id,next);void next.finally(()=>{if(queues.get(id)===next)queues.delete(id);}).catch(()=>{});return next;}
  async function close(sessionId){const current=active.get(sessionId);if(current){active.delete(sessionId);current.broker.close();await adapter.stopEditor({sessionId,generation:current.generation});}return{version:1,sessionId,state:'closed'};}
- async function open(sessionId,signal){
+ function activity(sessionId,generation){
+  const entry=active.get(sessionId);if(disposed||!entry||entry.generation!==generation||entry.epoch!==(epochs.get(sessionId)??0))return Promise.reject(fail('EDITOR_ACCESS_CHANGED'));
+  if(entry.activity)return entry.activity;
+  if(entry.nextActivity>Date.now())return Promise.resolve();
+  const epoch=epochs.get(sessionId)??0;
+  entry.activity=ordered(sessionId,async()=>{
+   try{const project=await editorProject(ctx,manager,sessionId);if(disposed||(epochs.get(sessionId)??0)!==epoch||active.get(sessionId)!==entry||project.readOnly!==entry.readOnly)throw fail('EDITOR_ACCESS_CHANGED');
+    await adapter.touchEditor?.({...project,generation});
+    if((epochs.get(sessionId)??0)!==epoch||active.get(sessionId)!==entry)throw fail('EDITOR_ACCESS_CHANGED');entry.nextActivity=Date.now()+30000;
+   }catch(error){entry.broker.close();await close(sessionId).catch(()=>{});throw error;}
+  }).finally(()=>{entry.activity=null;});return entry.activity;
+ }
+ async function open(sessionId,requestSignal){
+  const controller=new AbortController();openings.set(sessionId,controller);const signal=requestSignal?AbortSignal.any([requestSignal,controller.signal]):controller.signal;
+  try{
   if(disposed)throw fail('EDITOR_CLOSED');const epoch=epochs.get(sessionId)??0,project=await editorProject(ctx,manager,sessionId);
   if(!adapter||!origins)return{version:1,sessionId,state:'unavailable',code:'EDITOR_ISOLATION_NOT_CONFIGURED'};
   const endpoint=origins.allocate(sessionId),process=await adapter.ensureEditor({...project,signal});
@@ -35,14 +49,16 @@ export function createEditorSessions(ctx,manager,{adapter,origins,ownerOrigin,br
    const prior=active.get(sessionId);
    if(prior&&(prior.generation!==process.generation||prior.socketPath!==process.socketPath||prior.readOnly!==project.readOnly)){prior.broker.close();active.delete(sessionId);}
    let entry=active.get(sessionId);
-   if(!entry){const broker=brokerFactory({sessionId,generation:process.generation,origin:endpoint.origin,ownerOrigin,socketPath:process.socketPath});try{await bind(broker,endpoint);}catch(error){broker.close();throw error;}entry={broker,generation:process.generation,socketPath:process.socketPath,readOnly:project.readOnly};active.set(sessionId,entry);}
+   if(!entry){const broker=brokerFactory({sessionId,generation:process.generation,origin:endpoint.origin,ownerOrigin,socketPath:process.socketPath,onActivity:()=>activity(sessionId,process.generation)});try{await bind(broker,endpoint);}catch(error){broker.close();throw error;}entry={broker,generation:process.generation,socketPath:process.socketPath,readOnly:project.readOnly,epoch};active.set(sessionId,entry);}
    return{...entry.broker.issue(),readOnly:project.readOnly};
   }catch(error){await close(sessionId).catch(()=>{});await adapter.stopEditor({sessionId,generation:process.generation}).catch(()=>{});throw error;}
+  }finally{if(openings.get(sessionId)===controller)openings.delete(sessionId);}
  }
- return{revoke(sessionId){epochs.set(sessionId,(epochs.get(sessionId)??0)+1);active.get(sessionId)?.broker.close();void ordered(sessionId,()=>close(sessionId)).catch(()=>ctx.logger?.warn('Editor shutdown needs reconciliation.'));},run(input,signal){
+ return{revoke(sessionId){epochs.set(sessionId,(epochs.get(sessionId)??0)+1);openings.get(sessionId)?.abort(fail('EDITOR_ACCESS_CHANGED'));active.get(sessionId)?.broker.close();void ordered(sessionId,()=>close(sessionId)).catch(()=>ctx.logger?.warn('Editor shutdown needs reconciliation.'));},run(input,signal){
   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['op','sessionId'].includes(k))||!['open','close'].includes(input.op)||typeof input.sessionId!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(input.sessionId))return Promise.reject(fail('EDITOR_REQUEST_INVALID'));
+  if(input.op==='close')openings.get(input.sessionId)?.abort(fail('EDITOR_CLOSED'));
   return ordered(input.sessionId,()=>input.op==='close'?close(input.sessionId):open(input.sessionId,signal));
- },async dispose(){disposed=true;await Promise.allSettled([...queues.values()]);await Promise.allSettled([...active.keys()].map(close));}};
+ },async dispose(){disposed=true;for(const controller of openings.values())controller.abort(fail('EDITOR_CLOSED'));await Promise.allSettled([...queues.values()]);await Promise.allSettled([...active.keys()].map(close));await adapter?.dispose?.();}};
 }
 export function installEditorSessions(ctx,manager,options){
  const editors=createEditorSessions(ctx,manager,options),reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
