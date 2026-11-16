@@ -14,6 +14,7 @@ import { cleanupIdleProjectCaches } from './cache-cleanup.mjs';
 import { checkpointOperation } from './checkpoint-api.mjs';
 import { installRuntimeAdmission } from './runtime-admission-hooks.mjs';
 import { automaticReviewView } from './automatic-review.mjs';
+import { installDockerCleanup } from './docker-cleanup.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -26,6 +27,7 @@ export async function apply(ctx, config = {}) {
   const manager = new WorkspaceManager(ctx, config); await manager.initialize();
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
+  installDockerCleanup(ctx,manager,appsConfig,callApps);
   const capabilities = createRuntimeCapabilities({ workspaceRoot: config.appsWorkspaceRoot ?? appsConfig?.workspaceRoot ?? path.dirname(manager.projectsRoot), capacityPath: appsConfig?.stateDir ?? '/data/harness/state/applications', minFreeBytes: appsConfig?.minFreeBytes ?? 2 * 1024 ** 3,
     ...(appsConfig ? { readAppsState: ({ signal }) => callApps('/state', undefined, { ...appsConfig, signal, timeoutMs: 1500 }) } : {}) });
   registerRuntimeCapabilities(ctx, manager, capabilities);

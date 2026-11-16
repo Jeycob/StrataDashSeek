@@ -28,6 +28,7 @@ function createAppsService(cfg={},injected){
   let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>16384)throw Object.assign(Error('Request too large'),{status:413});}let data;try{data=JSON.parse(raw)}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}
   if(!data||typeof data!=='object'||Array.isArray(data))throw Object.assign(Error('Expected an operation object'),{status:400});
   await guardAppsTarget(manager,u.pathname,data);
+  if(u.pathname==='/archived-cleanup')return json(res,200,await manager.archivedCleanup.handle(data));
   if(u.pathname==='/register')return json(res,200,await manager.register(data.path,data._contextProjectId));
   if(u.pathname==='/scaffold')return json(res,200,await manager.scaffold(data.path,data.dryRun===true,data._contextProjectId));
   if(u.pathname==='/vault-config')return json(res,200,await manager.configureVault(data));
@@ -43,7 +44,7 @@ function createAppsService(cfg={},injected){
   if(u.pathname==='/project-action')return json(res,202,manager.enqueue(data.id,data.action,{releaseId:data.releaseId,targetId:data.targetId}));
   if(u.pathname==='/container-action')return json(res,200,await manager.containerAction(data.id,data.action));
   return json(res,404,{error:'Not found'});
- }catch(e){const resourceDiagnostic=diagnosticFor(e);if(!res.headersSent)json(res,e.status||400,{error:e.message,...(resourceDiagnostic?{code:e.code,resourceDiagnostic}:{})});else res.destroy();}});
+ }catch(e){const resourceDiagnostic=diagnosticFor(e);if(!res.headersSent)json(res,e.status||400,{error:e.message,...(/^CLEANUP_[A-Z_]+$/.test(e.code||'')?{code:e.code}:{}),...(resourceDiagnostic?{code:e.code,resourceDiagnostic}:{})});else res.destroy();}});
  server.on('close',()=>{clearInterval(clock);for(const p of previews)p.close();});return{server,manager,previews};
 }
 module.exports={createAppsService};

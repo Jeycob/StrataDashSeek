@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "status": "stable-v1",
+  "publicEndpoint": "/api/workbench/docker-cleanup",
+  "authentication": "Existing authenticated Harness owner connection; POST requires same-origin. Global Settings administration, never project-context or model-tool authority.",
+  "requests": {
+    "GET": "Status/inventory without selector; ?operationId=<32hex> or ?planId=<32hex> returns/reconciles that exact durable receipt, never latest. Both selectors may be supplied only if they identify the same operation. Unknown selector: 404 CLEANUP_OPERATION_NOT_FOUND; malformed selector: 400 CLEANUP_REQUEST_INVALID.",
+    "settings": {
+      "method": "POST",
+      "body": {
+        "op": "settings",
+        "enabled": "boolean; default true, persisted"
+      }
+    },
+    "preview": {
+      "method": "POST",
+      "body": {
+        "op": "preview",
+        "selections": "optional array<{kind:container|image,id:string}>; absent selects all eligible"
+      }
+    },
+    "apply": {
+      "method": "POST",
+      "body": {
+        "op": "apply",
+        "planId": "32hex",
+        "planHash": "64hex",
+        "selections": "array<{kind:container|image,id:string}>, eligible preview subset; max100"
+      }
+    }
+  },
+  "response": {
+    "version": 1,
+    "enabled": "boolean",
+    "availability": "ready|deferred|unavailable",
+    "reasonCode": "string|null",
+    "observedAt": "epoch ms",
+    "inventory": "Resource[]",
+    "plan": "Plan|null",
+    "operation": "Operation|null"
+  },
+  "Resource": {
+    "kind": "container|image",
+    "id": "container64hex or sha256:64hex",
+    "projectIds": "string[]",
+    "sessionIds": "string[]",
+    "eligible": "boolean; manual eligibility, NOT_ARCHIVED alone never blocks manual choice",
+    "reasonCodes": "string[]",
+    "afterContainerIds": "string[]; image deletion ordering dependencies",
+    "sizeBytes": "integer|null; estimate",
+    "automaticEligible": "boolean; eligible AND authoritative owners archived/unpinned",
+    "automaticReasonCodes": "string[]; includes NOT_ARCHIVED when applicable",
+    "displayName": "bounded text: container name or known image tag, otherwise ID",
+    "tags": "string[]; image tags only",
+    "projectNames": "string[]; known authoritative project names",
+    "chatNames": "string[]; known authoritative session titles, may be empty"
+  },
+  "Plan": {
+    "id": "32hex",
+    "hash": "64hex",
+    "createdAt": "epoch ms",
+    "expiresAt": "epoch ms, max5min",
+    "rows": "Resource[]",
+    "selection": "{kind,id}[]",
+    "availability": "ready|deferred|unavailable"
+  },
+  "Operation": {
+    "id": "32hex",
+    "state": "running|completed|deferred|reconciliation_required",
+    "startedAt": "epoch ms",
+    "finishedAt": "epoch ms|null",
+    "results": "{kind,id,outcome:removed|already_absent|kept|uncertain,reasonCode:string|null}[]",
+    "trigger": "manual|archive|periodic",
+    "errorCode": "string|null",
+    "planId": "32hex; original consumed plan, null for legacy operation",
+    "planHash": "64hex; original plan hash, null for legacy operation",
+    "selection": "{kind,id}[]; original canonical selected set sorted by kind:id, null for legacy operation"
+  },
+  "errors": {
+    "400": "CLEANUP_REQUEST_INVALID",
+    "403": "Owner/origin authorization failed",
+    "409": "CLEANUP_PLAN_STALE|CLEANUP_BUSY|CLEANUP_RECONCILIATION_REQUIRED|CLEANUP_PLAN_CONSUMED",
+    "503": "CLEANUP_UNAVAILABLE",
+    "404": "CLEANUP_OPERATION_NOT_FOUND"
+  },
+  "reasonCodes": [
+    "NOT_ARCHIVED",
+    "SESSION_ACTIVE",
+    "OWNER_UNKNOWN",
+    "OWNER_SHARED",
+    "OWNERSHIP_CHANGED",
+    "PUBLISHED",
+    "ROLLBACK_REFERENCE",
+    "RESUME_REFERENCE",
+    "INFLIGHT_REFERENCE",
+    "PERSISTENT_DATA",
+    "CONTAINER_RUNNING",
+    "IMAGE_IN_USE",
+    "IMAGE_DESCENDANT",
+    "INVENTORY_INCOMPLETE",
+    "REFERENCE_UNKNOWN",
+    "DOCKER_ASLEEP",
+    "DOCKER_UNAVAILABLE",
+    "APPS_BUSY",
+    "PLAN_STALE"
+  ],
+  "safety": [
+    "No volumes/persistent data/project/log deletion",
+    "No ensure/wake/auto-resume",
+    "Complete daemon census or KEEP",
+    "Verified control-plane ownership; labels alone insufficient",
+    "Registry mutations and build/deploy serialized",
+    "Non-force ID DELETE; image graph re-read after containers",
+    "Durable intent and uncertain outcome reconciliation"
+  ],
+  "uiNotes": [
+    "Localize reasonCodes; no Env/log/manifest/credential payloads",
+    "Deferred does not imply wake",
+    "Refresh stale previews",
+    "Image dependencies must be selected with the image",
+    "eligible describes manual Settings choice, automaticEligible restricts automatic runs to archived chats",
+    "Render displayName/tags/projectNames/chatNames as text, never raw HTML",
+    "On selected GET verify operation.id/planId echo; after lost apply use original planId, never infer completion from global latest."
+  ],
+  "idempotency": "Before first DELETE, persist planId + planHash + canonical selection -> one operation ID. Exact apply retry returns its saved receipt without DELETE, including after a new preview/operation, plan expiry or restart. Different hash/selection for consumed plan: 409 CLEANUP_PLAN_CONSUMED. Recover a lost apply response by GET ?planId=<original>; validate operation.planId/planHash/selection and operation.id echo. Receipts are not replaced by later operations."
+}

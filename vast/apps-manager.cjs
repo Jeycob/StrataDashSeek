@@ -21,12 +21,12 @@ class AppsManager {
   for(const job of this.store.jobs)if(['queued','running'].includes(job.status)){job.status='interrupted';job.error='Service restarted; inspect containers before retrying';job.endedAt=Date.now();}
   this.holdUntil=Math.min(this.store.holdUntil||0,Date.now()+3600000);this.worker=worker||(cfg.vm?.enabled?new DockerVM(this.cfg,this.engine):null);
   if(this.worker){this.worker.validateResume=ids=>validateResume(this,ids);this.worker.startManagedContainer=(id,options)=>startManagedContainer(this,id,options);}
-  this.save();this.heartbeat();
+  this.save();this.archivedCleanup=new (require('./apps-archived-cleanup.cjs').ArchivedDockerCleanup)(this);this.heartbeat();
  }
  save(){this.store.jobs=retainJobs(this.store.jobs,this.store.projects);atomic(this.storeFile,this.store);}
  heartbeat(){const w=this.worker?.status();atomic(this.cfg.activityFile||path.join(this.cfg.stateDir,'activity.json'),{at:Date.now(),active:this.busy||this.previewRequests||this.holdUntil>Date.now()?1:0,lastActivity:this.lastActivity,holdUntil:this.holdUntil,previewRequests:this.previewRequests,servicePid:process.pid,worker:w||null,draining:!!this.sleepToken()});}
  setBusy(value){this.busy=value;this.lastActivity=Date.now();this.heartbeat();}
- requireEnabled(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(!this.cfg.enabled)throw Object.assign(Error('Docker worker is not enabled'),{status:409,code:'APPS_WORKER_DISABLED'});}
+ requireEnabled(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(this.archivedCleanup?.data.operation&&['running','reconciliation_required'].includes(this.archivedCleanup.data.operation.state))throw Object.assign(Error('CLEANUP_RECONCILIATION_REQUIRED'),{status:409,code:'CLEANUP_RECONCILIATION_REQUIRED'});if(!this.cfg.enabled)throw Object.assign(Error('Docker worker is not enabled'),{status:409,code:'APPS_WORKER_DISABLED'});}
  sleepToken(){if(this.drain&&this.drain.until<=Date.now())this.drain=null;return this.drain?.token;}
  acceptActivity(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(this.sleepToken()){this.drain=null;this.heartbeat();throw Object.assign(Error('Server sleep was cancelled; retry this action shortly'),{status:409});}this.lastActivity=Date.now();this.worker?.touch();this.heartbeat();}
  async ready(){this.requireEnabled();assertStartOutcomesKnown(this);assertDeploymentIdle(this);if(this.worker)await this.worker.ensure();else await this.engine.available();await reconcilePendingCreations(this);await reconcileLegacyCreations(this);}

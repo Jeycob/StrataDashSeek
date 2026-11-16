@@ -637,6 +637,175 @@
  const tApps=key=>messages[key]?.[window.HarnessI18n?.language==='cs'?'cs':'en']||key;
  const appsLocale=()=>window.HarnessI18n?.language==='cs'?'cs-CZ':'en-GB';
 
+ // The adapter owns the HTTP contract; this view never infers deletion eligibility.
+ function mountCleanup(host,adapter,{signal,blocked=()=>false}={}){
+  const strings={en:{title:'Storage cleanup',auto:'Automatically clean up resources of archived chats',autoHelp:'Keeps resources that are running, published, shared or needed for recovery.',refresh:'Refresh resources',containers:'Containers',images:'Images',empty:'No resources to display.',loading:'Loading resources…',unknown:'Unavailable. Resource status has not been verified.',deferred:'Cleanup is deferred while Docker is unavailable.',select:'Select',preview:'Review selection',remove:'Delete selected resources',selected:'selected',estimate:'Estimated space',partial:'Some sizes are unknown. Shared image layers may reduce the space recovered.',unknownSize:'Size unknown',protected:'Protected',eligible:'Eligible for cleanup',unlinked:'Chat/project link unavailable',saving:'Saving preference…',saved:'Preference saved.',failed:'The operation could not be verified. Refresh before trying again.',changed:'The resource state changed. Review the selection again.',working:'Cleanup in progress…',removed:'Removed',skipped:'Skipped',result:'Cleanup result',cancel:'Back to selection',pending:'Result not yet confirmed. Refresh to check the operation.',off:'Resource management is unavailable while Applications are disabled.'},cs:{title:'Úklid úložiště',auto:'Automaticky uklízet zdroje archivovaných chatů',autoHelp:'Zachová běžící, publikované a sdílené zdroje i zdroje potřebné pro obnovu.',refresh:'Obnovit přehled',containers:'Kontejnery',images:'Obrazy',empty:'Žádné zdroje k zobrazení.',loading:'Načítám zdroje…',unknown:'Nedostupné. Stav zdrojů nebyl ověřen.',deferred:'Úklid je odložený, dokud nebude Docker dostupný.',select:'Vybrat',preview:'Zkontrolovat výběr',remove:'Smazat vybrané zdroje',selected:'vybráno',estimate:'Odhad místa',partial:'Některé velikosti nejsou známé. Sdílené vrstvy obrazů mohou uvolněné místo snížit.',unknownSize:'Velikost neznámá',protected:'Chráněno',eligible:'Lze uklidit',unlinked:'Vazba na chat/projekt není dostupná',saving:'Ukládám nastavení…',saved:'Nastavení uloženo.',failed:'Výsledek se nepodařilo ověřit. Před dalším pokusem obnov přehled.',changed:'Stav zdrojů se změnil. Zkontroluj výběr znovu.',working:'Probíhá úklid…',removed:'Odstraněno',skipped:'Přeskočeno',result:'Výsledek úklidu',cancel:'Zpět k výběru',pending:'Výsledek zatím není potvrzený. Obnov přehled pro kontrolu operace.',off:'Správa zdrojů není dostupná, když jsou Aplikace vypnuté.'}};
+  const tr=k=>strings[window.HarnessI18n?.language==='cs'?'cs':'en'][k];
+  Object.assign(strings.en,{deferred:'Cleanup is deferred while Docker is unavailable.',absent:'Already absent',uncertain:'Unconfirmed',remaining:'Without a result'});
+  Object.assign(strings.cs,{deferred:'Úklid je odložený, dokud nebude Docker dostupný.',absent:'Už neexistuje',uncertain:'Nepotvrzeno',remaining:'Bez výsledku'});
+  const element=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
+  const box=element('section',undefined,'apps-cleanup');box.dataset.appsCleanup='';host.append(box);
+  let dead=false,readEpoch=0,revision=0,inventory=null,selected=new Set(),preview=null,operation=null,loading=false,mutating=false,error='',notice='',saveNotice='',saving=false,prefDraft=null,prefRevision=0,preferenceEpoch=0,timer;
+  const hintKey='harness.docker-cleanup.pending.v1';
+  function readHint(){try{const r=JSON.parse(sessionStorage.getItem(hintKey));if(r&&/^[a-f0-9]{32}$/.test(r.token)&&/^[a-f0-9]{64}$/.test(r.hash)&&(!r.id||/^[a-f0-9]{32}$/.test(r.id))&&Array.isArray(r.items)&&r.items.length>0&&r.items.length<=100&&r.items.every(s=>s&&['container','image'].includes(s.kind)&&(s.kind==='container'?/^[a-f0-9]{64}$/:/^sha256:[a-f0-9]{64}$/).test(s.id))&&new Set(r.items.map(s=>s.kind+':'+s.id)).size===r.items.length)return r;}catch{}return null;}
+  let receiptRequest=readHint(),awaitingReceipt=Boolean(receiptRequest);
+  function saveHint(){try{sessionStorage.setItem(hintKey,JSON.stringify(receiptRequest));}catch{/* Memory recovery remains available when tab storage is unavailable. */}}
+  function clearHint(){try{const saved=readHint();if(saved?.token===receiptRequest?.token&&saved?.hash===receiptRequest?.hash)sessionStorage.removeItem(hintKey);}catch{}}
+  const alive=()=>!dead&&!signal?.aborted;
+  const key=r=>r.kind+':'+r.id;
+  const rows=()=>Array.isArray(inventory?.resources)?inventory.resources:[];
+  const ready=()=>inventory?.availability==='ready'&&!blocked()&&!mutating&&!loading&&!awaitingReceipt;
+  const canSelect=r=>ready()&&r.eligible===true&&Array.isArray(r.reasons)&&r.reasons.length===0;
+  const chosen=()=>rows().filter(r=>selected.has(key(r)));
+  function select(r,checked){
+   if(!canSelect(r))return;
+   if(checked){
+    const dependencies=(r.afterContainerIds||[]).map(id=>rows().find(v=>v.kind==='container'&&v.id===id));
+    if(dependencies.some(v=>!v||!canSelect(v))||new Set([...selected,key(r),...dependencies.map(key)]).size>100){error=tr('changed');render();return;}
+    selected.add(key(r));for(const d of dependencies)selected.add(key(d));
+   }else{selected.delete(key(r));if(r.kind==='container')for(const image of rows().filter(v=>v.kind==='image'&&v.afterContainerIds?.includes(r.id)))selected.delete(key(image));}
+   invalidate();notice='';render();
+  }
+  const bytes=n=>Number.isSafeInteger(n)&&n>=0?new Intl.NumberFormat(window.HarnessI18n?.language==='cs'?'cs-CZ':'en-GB',{maximumFractionDigits:1}).format(n/1048576)+' MB':tr('unknownSize');
+  function action(label,fn,disabled=false){const b=element('button',label);b.type='button';b.disabled=disabled;b.onclick=()=>void fn();return b;}
+  function invalidate(){revision++;preview=null;}
+  function render(){
+   if(!alive())return;
+   const focus=box.contains(document.activeElement)?document.activeElement?.dataset.cleanupFocus:null;
+   box.replaceChildren(element('h3',tr('title')));box.setAttribute('aria-busy',String(loading||mutating));
+   const pref=element('label',undefined,'apps-cleanup-auto'),input=element('input');input.type='checkbox';input.dataset.cleanupFocus='preference';input.checked=prefDraft??inventory?.autoCleanup??false;input.disabled=typeof inventory?.autoCleanup!=='boolean';input.onchange=()=>{prefDraft=input.checked;prefRevision++;void savePreference();};pref.append(input,element('span',tr('auto')));box.append(pref,element('p',tr('autoHelp'),'apps-note'));
+   if(saveNotice){const p=element('p',saveNotice);p.setAttribute('role','status');box.append(p);}
+   const refresh=action(tr('refresh'),()=>refreshInventory(),loading||mutating);refresh.dataset.cleanupFocus='refresh';box.append(refresh);
+   if(error){const p=element('p',error);p.setAttribute('role','alert');box.append(p);}
+   const status=element('p',loading?tr('loading'):mutating?tr('working'):notice||(!inventory?tr('unknown'):inventory.availability==='disabled'?tr('off'):inventory.availability==='deferred'?tr('deferred'):inventory.availability!=='ready'?tr('unknown'):''));status.setAttribute('role','status');status.setAttribute('aria-live','polite');box.append(status);
+   for(const kind of ['container','image']){
+    const group=element('fieldset'),legend=element('legend',tr(kind==='container'?'containers':'images'));group.append(legend);
+    const items=rows().filter(r=>r.kind===kind);
+    if(!items.length)group.append(element('p',tr('empty')));
+    for(const r of items){
+     const card=element('div',undefined,'apps-cleanup-resource'),label=element('label'),check=element('input');check.type='checkbox';check.dataset.cleanupFocus=key(r);check.checked=selected.has(key(r));check.disabled=!canSelect(r);check.setAttribute('aria-label',tr('select')+' '+r.label);check.onchange=()=>select(r,check.checked);label.append(check,element('strong',r.label));card.append(label,element('p',[r.stateLabel,...(r.ownerLabels?.length?r.ownerLabels:[tr('unlinked')])].filter(Boolean).join(' · ')),element('p',bytes(r.sizeBytes)));
+     card.append(element('p',r.reasons?.length?r.reasons.join(' · '):r.eligible===true?tr('eligible'):tr('protected'),'apps-note'));if(r.automaticReasons?.length)card.append(element('p',(window.HarnessI18n?.language==='cs'?'Automatický úklid: ':'Automatic cleanup: ')+r.automaticReasons.join(' · '),'apps-note'));group.append(card);
+    }box.append(group);
+   }
+   const items=chosen(),known=items.filter(r=>Number.isSafeInteger(r.sizeBytes)&&r.sizeBytes>=0),total=known.reduce((n,r)=>n+r.sizeBytes,0);
+   box.append(element('p',items.length+' '+tr('selected')+' · '+tr('estimate')+': '+(known.length?bytes(total):tr('unknownSize'))),element('p',tr('partial'),'apps-note'));
+   if(preview){const review=element('section',undefined,'apps-cleanup-review');review.setAttribute('aria-label',tr('preview'));review.append(element('p',preview.count+' '+tr('selected')+' · '+tr('estimate')+': '+bytes(preview.estimatedBytes)));review.append(action(tr('cancel'),()=>{preview=null;render();},mutating));const remove=action(tr('remove'),removeSelected,!ready()||!items.length||preview.revision!==revision);remove.dataset.cleanupFocus='remove';review.append(remove);box.append(review);}
+   else {const b=action(tr('preview'),reviewSelection,!ready()||!items.length);b.dataset.cleanupFocus='preview';box.append(b);}
+   if(operation?.result){const result=element('section');result.setAttribute('aria-label',tr('result'));result.setAttribute('role','status');const counts=[['removed',operation.result.removedCount],['skipped',operation.result.skippedCount],['absent',operation.result.absentCount],['uncertain',operation.result.uncertainCount],['remaining',operation.result.remainingCount]].filter(([,n],i)=>i<2||n>0);result.append(element('h4',tr('result')),element('p',counts.map(([label,n])=>tr(label)+': '+n).join(' · ')));for(const s of operation.result.details||[])result.append(element('p',s));box.append(result);}
+   if(focus){const target=[...box.querySelectorAll('[data-cleanup-focus]')].find(e=>e.dataset.cleanupFocus===focus);if(target&&!target.disabled)target.focus({preventScroll:true});}
+  }
+  async function refreshInventory(){
+   if(!alive()||mutating)return;
+   if(awaitingReceipt){mutating=true;error='';render();await recoverReceipt();return;}
+   const epoch=++readEpoch,preferenceToken=prefRevision+':'+preferenceEpoch;loading=true;error='';render();
+   try{const next=await adapter.inventory();if(!alive()||epoch!==readEpoch)return;
+    if(!next||!Array.isArray(next.resources)||typeof next.autoCleanup!=='boolean')throw Error('INVALID_CLEANUP_STATE');
+    if(preferenceToken!==prefRevision+':'+preferenceEpoch&&inventory)next.autoCleanup=inventory.autoCleanup;
+    const previous=JSON.stringify(inventory?.resources),previousAvailability=inventory?.availability;inventory=next;
+    if(previous!==JSON.stringify(next.resources)||previousAvailability!==next.availability)invalidate();
+    // Keep unaffected choices; newly protected/unknown resources are deselected.
+    if(next.availability==='ready')selected=new Set(next.resources.filter(r=>r.eligible===true&&Array.isArray(r.reasons)&&!r.reasons.length&&selected.has(key(r))).map(key));
+   }catch(e){if(alive()&&epoch===readEpoch){error=tr('failed');inventory=null;invalidate();}}
+   finally{if(alive()&&epoch===readEpoch){loading=false;render();}}
+  }
+  async function savePreference(){
+   if(saving||!alive()||prefDraft===null)return;const value=prefDraft,rev=prefRevision;saving=true;saveNotice=tr('saving');render();
+   try{const result=await adapter.preference(value);if(!alive())return;if(result.autoCleanup!==value)throw Error('UNCONFIRMED_PREFERENCE');preferenceEpoch++;if(inventory)inventory.autoCleanup=value;if(rev===prefRevision){prefDraft=null;saveNotice=tr('saved');}}
+   catch(e){if(alive())saveNotice=tr('failed');}
+   finally{saving=false;if(alive()){render();if(rev!==prefRevision&&prefDraft!==null)void savePreference();}}
+  }
+  async function reviewSelection(){
+   if(!ready()||!chosen().length)return;const rev=revision,items=chosen().map(r=>({kind:r.kind,id:r.id}));mutating=true;error='';notice='';render();
+   try{const result=await adapter.preview(items);if(!alive())return;if(rev!==revision||!result?.token||result.count!==items.length)throw Error('CHANGED');preview={...result,revision:rev,items};}
+   catch(e){if(alive()){preview=null;error=tr('changed');}}
+   finally{if(alive()){mutating=false;render();}}
+  }
+  async function removeSelected(){
+   if(!ready()||!preview||preview.revision!==revision)return;
+   if(preview.expiresAt<=Date.now()){preview=null;notice=tr('changed');render();return;}
+   const reviewed=preview;receiptRequest={token:reviewed.token,hash:reviewed.hash,items:reviewed.items,expiresAt:reviewed.expiresAt};awaitingReceipt=true;saveHint();operation=null;mutating=true;readEpoch++;error='';notice='';preview=null;render();
+   try{const next=await adapter.remove(receiptRequest);if(!alive())return;acceptReceipt(next);if(operation.status==='running')await poll();}
+   catch(e){if(alive()){error=tr('pending');inventory=null;invalidate();}}
+   finally{if(alive()){mutating=operation?.status==='running'&&!error;render();if(['completed','deferred'].includes(operation?.status))void refreshInventory();}}
+  }
+  function acceptReceipt(next){
+   operation=next;receiptRequest={...receiptRequest,id:next.id};awaitingReceipt=['running','uncertain'].includes(next.status);
+   if(awaitingReceipt)saveHint();else clearHint();
+   if(next.status==='deferred')notice=tr('deferred');
+   if(next.status==='uncertain'){error=tr('pending');inventory=null;}
+   if(next.status==='completed'){selected.clear();invalidate();}
+  }
+  async function recoverReceipt(){
+   try{const next=receiptRequest.id?await adapter.operation(receiptRequest.id,receiptRequest):await adapter.recover(receiptRequest);if(!alive())return;acceptReceipt(next);if(next.status==='running'){timer=setTimeout(()=>void poll(),1500);return;}mutating=false;render();if(!awaitingReceipt)void refreshInventory();}
+   catch(e){if(alive()){mutating=false;error=tr('pending');inventory=null;render();}}
+  }
+  async function poll(){
+   if(!alive()||!['running','uncertain'].includes(operation?.status))return;
+   try{const next=await adapter.operation(operation.id,receiptRequest);if(!alive())return;acceptReceipt(next);if(operation.status==='running'){timer=setTimeout(()=>void poll(),1500);return;}mutating=false;render();if(!awaitingReceipt)void refreshInventory();}
+   catch(e){if(alive()){mutating=false;error=tr('pending');inventory=null;render();}}
+  }
+  const language=()=>render();window.addEventListener('harness-language-change',language);signal?.addEventListener('abort',destroy,{once:true});
+  function destroy(){dead=true;readEpoch++;clearTimeout(timer);window.removeEventListener('harness-language-change',language);box.remove();}
+  let previousBlocked=blocked();
+  render();void refreshInventory();return{refresh:refreshInventory,render,updateSafety(){if(previousBlocked!==blocked()){previousBlocked=blocked();render();}},destroy};
+ }
+ function cleanupAdapter(signal,getState){
+  const cs=()=>window.HarnessI18n?.language==='cs';
+  const text=value=>typeof value==='string'?value.replace(/[\u0000-\u001f\u007f]/g,' ').trim().slice(0,200):'';
+  const names=values=>Array.isArray(values)?values.map(text).filter(Boolean):[];
+  const reasons={NOT_ARCHIVED:['Chat is not archived','Chat není archivovaný'],SESSION_ACTIVE:['Chat is active','Chat je aktivní'],OWNER_UNKNOWN:['Ownership is not verified','Vlastnictví není ověřené'],OWNER_SHARED:['Shared by multiple chats or projects','Sdíleno více chaty nebo projekty'],OWNERSHIP_CHANGED:['Ownership changed','Vlastnictví se změnilo'],PUBLISHED:['Published application','Publikovaná aplikace'],ROLLBACK_REFERENCE:['Needed for rollback','Potřebné pro návrat verze'],RESUME_REFERENCE:['Needed to resume','Potřebné pro obnovení'],INFLIGHT_REFERENCE:['An operation is using this resource','Zdroj používá probíhající operace'],PERSISTENT_DATA:['Contains persistent data','Obsahuje trvalá data'],CONTAINER_RUNNING:['Container is running','Kontejner běží'],IMAGE_IN_USE:['Image is in use','Obraz se používá'],IMAGE_DESCENDANT:['Another image depends on this image','Na obrazu závisí jiný obraz'],INVENTORY_INCOMPLETE:['Resource inventory is incomplete','Přehled zdrojů není úplný'],REFERENCE_UNKNOWN:['References are not verified','Vazby nejsou ověřené'],DOCKER_ASLEEP:['Docker is asleep','Docker spí'],DOCKER_UNAVAILABLE:['Docker is unavailable','Docker není dostupný'],APPS_BUSY:['Applications are busy','Aplikace právě pracují'],PLAN_STALE:['Review is out of date','Náhled už není aktuální']};
+  const reason=code=>reasons[code]?.[cs()?1:0]||(cs()?'Stav vyžaduje kontrolu':'Status needs review');
+  async function request(body,selector={}){
+   const controller=new AbortController(),abort=()=>controller.abort();signal.addEventListener('abort',abort,{once:true});if(signal.aborted)controller.abort();
+   // Match the backend's bounded mutation/reconciliation RPC deadline. A slower
+   // synchronous apply must not turn into an avoidable unknown outcome at 20s.
+   const params=new URLSearchParams(Object.entries(selector).filter(([,v])=>v!==undefined));
+   const timeout=setTimeout(abort,body?.op==='apply'||params.size?180000:20000);
+   try{const response=await fetch('/api/workbench/docker-cleanup'+(params.size?'?'+params:''),{method:body?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const value=await response.json();if(!response.ok||value.version!==1)throw Error('CLEANUP_UNVERIFIED');return value;}
+   finally{clearTimeout(timeout);signal.removeEventListener('abort',abort);}
+  }
+  function normalize(value){
+   if(typeof value.enabled!=='boolean'||!Array.isArray(value.inventory)||!['ready','deferred','unavailable'].includes(value.availability))throw Error('CLEANUP_UNVERIFIED');
+   return{autoCleanup:value.enabled,availability:getState()?.enabled===false?'disabled':value.availability,resources:value.inventory.map((r,index)=>{
+    if(!['container','image'].includes(r.kind)||typeof r.id!=='string'||!Array.isArray(r.reasonCodes)||!Array.isArray(r.projectIds)||!Array.isArray(r.sessionIds))throw Error('CLEANUP_UNVERIFIED');
+    const state=getState(),projectLabels=names(r.projectNames).length?names(r.projectNames):names(r.projectIds.map(id=>state?.projects?.find(p=>p.id===id)?.name)),chatLabels=names(r.chatNames),container=state?.containers?.find(c=>c.id===r.id),display=text(r.displayName)||names(r.tags)[0]||text(container?.name),label=display&&!/^(?:sha256:)?[a-f0-9]{12,64}$/i.test(display)?display:((r.kind==='container'?(cs()?'Kontejner':'Container'):(cs()?'Obraz':'Image'))+' '+(index+1));
+    return{...r,label,ownerLabels:[...projectLabels.map(v=>(cs()?'Projekt: ':'Project: ')+v),...chatLabels.map(v=>(cs()?'Chat: ':'Chat: ')+v),...(r.projectIds.length>projectLabels.length?[(cs()?'Projekty bez názvu: ':'Unnamed projects: ')+(r.projectIds.length-projectLabels.length)]:[]),...(r.sessionIds.length>chatLabels.length?[(cs()?'Chaty bez názvu: ':'Unnamed chats: ')+(r.sessionIds.length-chatLabels.length)]:[])],stateLabel:r.reasonCodes.includes('CONTAINER_RUNNING')?(cs()?'Běží':'Running'):r.eligible?(cs()?'Nepoužívaný zdroj':'Unused resource'):(cs()?'Zachovat':'Keep'),reasons:r.reasonCodes.map(reason),automaticReasons:r.automaticEligible===false?names(r.automaticReasonCodes).map(reason):[]};
+   })};
+  }
+  function operation(value,expected={}){
+   const op=value.operation;if(!op||!/^[a-f0-9]{32}$/.test(op.id)||expected.id&&op.id!==expected.id||!Array.isArray(op.results))throw Error('CLEANUP_UNVERIFIED');
+   if(!expected.token||op.planId!==expected.token||op.planHash!==expected.hash||!Array.isArray(op.selection)||selectionKey(op.selection)!==selectionKey(expected.items))throw Error('CLEANUP_UNVERIFIED');
+   const keys=op.results.map(r=>r.kind+':'+r.id);
+   if(new Set(keys).size!==keys.length||op.results.some(r=>!['container','image'].includes(r.kind)||typeof r.id!=='string'||!['removed','already_absent','kept','uncertain'].includes(r.outcome)||expected.items&&!expected.items.some(s=>s.kind===r.kind&&s.id===r.id)))throw Error('CLEANUP_UNVERIFIED');
+   const status=op.state==='reconciliation_required'||op.results.some(r=>r.outcome==='uncertain')?'uncertain':({running:'running',deferred:'deferred',completed:'completed'})[op.state];if(!status)throw Error('CLEANUP_UNVERIFIED');
+   return{id:op.id,status,items:expected.items,result:{removedCount:op.results.filter(r=>r.outcome==='removed').length,skippedCount:op.results.filter(r=>r.outcome==='kept').length,absentCount:op.results.filter(r=>r.outcome==='already_absent').length,uncertainCount:op.results.filter(r=>r.outcome==='uncertain').length,remainingCount:expected.items?Math.max(0,expected.items.length-op.results.length):null,details:op.results.filter(r=>r.outcome!=='removed').map(r=>r.outcome==='already_absent'?(cs()?'Zdroj už neexistuje.':'Resource is already absent.'):r.outcome==='uncertain'?(cs()?'Výsledek odstranění není potvrzený.':'Deletion outcome is unconfirmed.'):reason(r.reasonCode))}};
+  }
+  const selectionKey=items=>JSON.stringify(items.map(r=>r.kind+':'+r.id).sort());
+  return{
+   async inventory(){return normalize(await request());},
+   async preference(enabled){const value=await request({op:'settings',enabled});return{autoCleanup:value.enabled};},
+   async preview(selections){
+    const value=await request({op:'preview',selections}),plan=value.plan;
+    if(value.availability!=='ready'||!plan||plan.availability!=='ready'||
+      !/^[a-f0-9]{32}$/.test(plan.id)||!/^[a-f0-9]{64}$/.test(plan.hash)||
+      !Number.isFinite(plan.expiresAt)||plan.expiresAt<=Date.now()||
+      !Array.isArray(plan.selection)||!Array.isArray(plan.rows)||
+      selectionKey(plan.selection)!==selectionKey(selections))throw Error('CLEANUP_STALE');
+    const selectedRows=selections.map(s=>plan.rows.find(r=>r.kind===s.kind&&r.id===s.id));
+    if(selectedRows.some(r=>!r||r.eligible!==true||!Array.isArray(r.reasonCodes)||r.reasonCodes.length))throw Error('CLEANUP_STALE');
+    const sizes=selectedRows.map(r=>r.sizeBytes);
+    return{token:plan.id,hash:plan.hash,count:plan.selection.length,
+     estimatedBytes:sizes.every(n=>Number.isSafeInteger(n)&&n>=0)?sizes.reduce((a,b)=>a+b,0):null,
+     expiresAt:plan.expiresAt};
+   },
+   async remove(plan){
+    if(plan.expiresAt<=Date.now())throw Error('CLEANUP_STALE');
+    return operation(await request({op:'apply',planId:plan.token,planHash:plan.hash,selections:plan.items}),plan);
+   },
+   async operation(id,expected){return operation(await request(undefined,{operationId:id,planId:expected.token}),{...expected,id});},
+   async recover(expected){return operation(await request(undefined,{planId:expected.token}),expected);}
+  };
+ }
  window.HarnessApps={mount(host,options={}){
  const embedded=Boolean(host),prefix='aview-'+(++serial)+'-',lifetime=new AbortController();
  const view=Object.freeze({scope:options.scope==='global'?'global':'project',sessionId:options.sessionId||null,workspaceId:options.workspaceId||null});
@@ -675,7 +844,7 @@
  if(embedded){style.textContent+='#'+prefix+'root{position:relative;inset:auto;width:100%;height:100%;min-height:200px;padding:16px;overflow:auto}#'+prefix+'root>.apps-head{display:none}';if(options.settings){for(const child of panel.children)child.hidden=child!==el('apps-settings-group')&&child!==el('apps-error')&&child!==el('apps-connection');el('apps-settings-group').open=true;}else{el('apps-settings-group').hidden=true;}}
  if(embedded)style.textContent+='#'+prefix+'root{container-type:inline-size}#'+prefix+'root button{white-space:normal}@container(max-width:600px){#'+prefix+'root table,#'+prefix+'root tbody{display:block;width:100%}#'+prefix+'root thead{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}#'+prefix+'root tr{display:flex;flex-wrap:wrap;border:1px solid #dce5e9;border-radius:9px;margin:10px 0;padding:10px}#'+prefix+'root td{display:block;white-space:normal;border:0;padding:4px;overflow-wrap:anywhere}#'+prefix+'root td:first-child{font-weight:600;width:100%}#'+prefix+'root td:last-child{display:flex;flex-wrap:wrap;gap:6px;width:100%}#'+prefix+'root .apps-actions{flex-direction:column}#'+prefix+'root .apps-actions>*{max-width:100%;width:100%}#'+prefix+'apps-add>div{flex-direction:column}}';
  if(window.HarnessNativeTheme){panel.classList.add('harness-native-surface');style.textContent=window.HarnessNativeTheme.css(style.textContent,panel.id);}
- let loading=false,acting=false,state=null,selectedLog=null,restoreFocus=null,renderedKey='',connectionText='',addPanelInitialized=false;
+ let loading=false,acting=false,state=null,selectedLog=null,restoreFocus=null,renderedKey='',connectionText='',addPanelInitialized=false,cleanup=null;
  const recoveryBox=node('section',undefined,'apps-context');recoveryBox.dataset.appsRecovery='';recoveryBox.setAttribute('role','status');recoveryBox.setAttribute('aria-live','polite');recoveryBox.hidden=true;const recoveryTitle=node('strong'),recoveryHelp=node('p');recoveryBox.append(recoveryTitle,recoveryHelp);contextBox.after(recoveryBox);
  const recoveryRequired=()=>state?.deploymentRecovery?.version===1&&state.deploymentRecovery.required===true;
  const canStart=id=>{const c=state?.containers.find(c=>c.id===id);return c?.canStart===true&&!['data-helper','test'].includes(c.role);};
@@ -798,9 +967,9 @@
    const next=await api('state');
    // A GET begun before a confirmed write cannot replace the saved references.
    if(epoch!==stateEpoch){refreshAfterMutation=true;return;}
-   state=next;renderContext();renderConnection();const key=JSON.stringify([state.enabled,state.available,state.error,state.busy,state.worker,state.previewSettings,state.holdUntil,state.draining,state.deploymentRecovery,state.projects,state.containers.map(c=>[c.id,c.name,c.state,c.ports,c.role,c.dataGeneration,c.releaseId,c.canStart]),state.jobs,state.vault?.configured,state.remoteTargets,state.features]);
+   const firstState=state===null;state=next;renderContext();renderConnection();const key=JSON.stringify([state.enabled,state.available,state.error,state.busy,state.worker,state.previewSettings,state.holdUntil,state.draining,state.deploymentRecovery,state.projects,state.containers.map(c=>[c.id,c.name,c.state,c.ports,c.role,c.dataGeneration,c.releaseId,c.canStart]),state.jobs,state.vault?.configured,state.remoteTargets,state.features]);
    if(key!==renderedKey&&!(el('apps-projects').contains(document.activeElement)&&document.activeElement?.matches('input,textarea,select'))){render();renderedKey=key;}
-   applySafety();await refreshLog();
+   applySafety();if(firstState)void cleanup?.refresh();await refreshLog();
   }catch(e){if(alive()&&e.name!=='AbortError')setConnectionText(tApps("apps.application_management_is_unavailable_c57dbf")+e.message);}
   finally{loading=false;if(refreshAfterMutation){refreshAfterMutation=false;if(alive())void refresh();}}
  }
@@ -818,9 +987,14 @@
  allApps.onclick=()=>window.HarnessApps.mount(undefined,{scope:'global',transient:true}).open();
  const languageChanged=()=>{if(!alive())return;const origin=el('apps-vault-origin').value,client=el('apps-vault-client').value;if(state)render();el('apps-vault-origin').value=origin;el('apps-vault-client').value=client;applyCopy();renderContext();};
  window.addEventListener('harness-language-change',languageChanged,{signal:lifetime.signal});applyCopy();renderContext();
+ if(options.settings&&view.scope==='global'){
+  style.textContent+=`#${panel.id} .apps-cleanup{margin-top:24px;padding-top:16px;border-top:1px solid var(--dsw-alias-border-l3,#dce5e9);min-width:0}#${panel.id} .apps-cleanup fieldset{min-width:0;margin:16px 0;padding:12px;border:1px solid var(--dsw-alias-border-l3,#dce5e9);border-radius:8px}#${panel.id} .apps-cleanup legend{font-weight:600}#${panel.id} .apps-cleanup-resource{border-top:1px solid var(--dsw-alias-border-l3,#dce5e9);padding:12px 0}#${panel.id} .apps-cleanup-resource:first-of-type{border-top:0}#${panel.id} .apps-cleanup :where(label,p,strong){overflow-wrap:anywhere;white-space:normal}#${panel.id} .apps-cleanup label{display:flex;gap:10px;align-items:flex-start}#${panel.id} .apps-cleanup input[type=checkbox]{flex:0 0 auto;width:18px;height:18px;margin-top:3px}#${panel.id} .apps-cleanup p{margin:8px 0}#${panel.id} .apps-cleanup-review{padding:12px;border:1px solid var(--dsw-alias-border-l3,#dce5e9);border-radius:8px}#${panel.id} .apps-cleanup button{white-space:normal;margin:4px 8px 4px 0;max-width:100%}`;
+  cleanup=mountCleanup(el('apps-settings-group'),cleanupAdapter(lifetime.signal,()=>state),{signal:lifetime.signal,blocked:()=>!state||contextInvalid||recoveryRequired()||!!state.busy||acting||state.worker?.phase==='saving'});
+ }
  const timer=setInterval(()=>void refresh(),5000);
+ const cleanupTimer=cleanup?setInterval(()=>{cleanup.updateSafety();},500):null;
  void refresh();
- function destroy(){clearInterval(timer);lifetime.abort();cancelRequests();credentialEditors.clear();panel.remove();style.remove();}
+ function destroy(){clearInterval(timer);clearInterval(cleanupTimer);cleanup?.destroy();lifetime.abort();cancelRequests();credentialEditors.clear();panel.remove();style.remove();}
  return{element:panel,refresh,open:openView,async useProject(relative){if(!alive())return false;el('apps-path').value=relative;const result=await act('scaffold',{path:relative});if(!result)return false;return Boolean(await act('register',{path:relative}));},destroy};
  }};
  if(!window.HARNESS_NATIVE_WORKBENCH)window.HarnessApps.mount();
