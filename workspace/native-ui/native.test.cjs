@@ -68,7 +68,11 @@ test('rc.2 Native Settings, CtrlAltP, Docker and EN/CZ compose on desktop and mo
   await runChangesScenarios(page,{sid,sid2,data:changes,evidence,wireRoutes});
   await page.evaluate(id=>window.HarnessNativeUI.openDocker(id),sid);await page.waitForTimeout(300);await page.screenshot({path:path.join(evidence,'native-docker-desktop-en.png'),fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
- }catch(error){if(browser){const pages=browser.contexts().flatMap(context=>context.pages());if(pages[0]){await pages[0].screenshot({path:path.join(evidence,'native-failure.png'),fullPage:true}).catch(()=>{});fs.writeFileSync(path.join(evidence,'native-failure.json'),JSON.stringify(await pages[0].evaluate(()=>({text:document.body.innerText.slice(0,12000),language:window.HarnessI18n?.language,cards:[...document.querySelectorAll('[data-device-id]')].map(e=>e.outerHTML)})).catch(()=>({})),null,2));}}throw error;
+ }catch(error){
+  // Publish only this isolated fixture's assertion, never its login URL or logs.
+  const safe=String(error.message||error.name||'Native fixture failed').replace(/https?:\/\/[^\s]+/g,'[fixture-url]').slice(0,2000);
+  console.error('HARNESS_NATIVE_ASSERTION: '+JSON.stringify(safe));
+  if(browser){const pages=browser.contexts().flatMap(context=>context.pages());if(pages[0]){await pages[0].screenshot({path:path.join(evidence,'native-failure.png'),fullPage:true}).catch(()=>{});fs.writeFileSync(path.join(evidence,'native-failure.json'),JSON.stringify(await pages[0].evaluate(()=>({text:document.body.innerText.slice(0,12000),language:window.HarnessI18n?.language,cards:[...document.querySelectorAll('[data-device-id]')].map(e=>e.outerHTML)})).catch(()=>({})),null,2));}}throw error;
  }finally{
   if(browser)await browser.close();child.kill();await new Promise(resolve=>{if(child.exitCode!==null)return resolve();const timer=setTimeout(resolve,5000);child.once('exit',()=>{clearTimeout(timer);resolve();});});
   // Only our freshly minted fixture directory may be recursively removed.

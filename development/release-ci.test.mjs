@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {spawnSync} from 'node:child_process';
-import {summary, gateOutcome, testEnvironment, combineReports, failureAnnotations} from './release-ci.mjs';
+import {summary, gateOutcome, testEnvironment, combineReports, failureAnnotations, nativeFixtureAssertion} from './release-ci.mjs';
 import {candidate, classify, inventory} from './ci/inventory.mjs';
 const run = (stdout, extra = {}) => ({stdout, stderr: '', exitCode: 0, error: null, timedOut: false, truncated: false, aborted: false, ...extra});
 const tap = '# tests 2\n# pass 2\n# fail 0\n# skipped 0\n# cancelled 0\n# todo 0\n';
@@ -93,4 +93,14 @@ test('an actual Git child cannot recover operator global headers through inherit
   await fs.mkdir(env.HOME,{recursive:true,mode:0o700});
   const run=spawnSync('git',['config','--get','http.extraheader'],{cwd:directory,env,encoding:'utf8',windowsHide:true});
   assert.equal(run.error,undefined);assert.equal(run.status,1,run.stderr);assert.equal(run.stdout,'');
+});
+
+test('Native fixture annotations accept only their explicit JSON marker and redact fixture URLs',()=>{
+ const detail=nativeFixtureAssertion(run('# HARNESS_NATIVE_ASSERTION: '+JSON.stringify('Expected visible\nhttps://fixture.test/?token=PRIVATE_VALUE % detail')));
+ assert.equal(detail,'Expected visible\n[fixture-url] % detail');
+ assert.equal(nativeFixtureAssertion(run('arbitrary PRIVATE_PROCESS_OUTPUT')),null);
+ assert.equal(nativeFixtureAssertion(run('# HARNESS_NATIVE_ASSERTION: {bad json}')),null);
+ assert.equal(nativeFixtureAssertion(run('# HARNESS_NATIVE_ASSERTION: {}')),null);
+ const [line]=failureAnnotations({passed:false,results:[{file:'workspace/native-ui/native.test.cjs',outcome:'failed',fixtureAssertion:detail}]});
+ assert.match(line,/Expected visible%0A\[fixture-url\] %25 detail/);assert.equal(line.includes('PRIVATE_VALUE'),false);assert.equal(line.includes('\n'),false);
 });

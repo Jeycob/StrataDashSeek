@@ -121,6 +121,7 @@ export async function releaseCI({lane = 'all', output, inventoryOnly = false, al
           const run = await runProgram(command, {cwd: root, env: {...childEnv,...suite.environment}, timeoutMs: suite.timeoutMs, outputLimit: 2 * 1024 * 1024});
           await fs.writeFile(path.join(output, log), redact(run.stdout + '\n[stderr]\n' + run.stderr));
           result = {...summary(suite.kind, run), exitCode: run.exitCode, timedOut: run.timedOut, truncated: run.truncated, log};
+          if(suite.file==='workspace/native-ui/native.test.cjs')result.fixtureAssertion=nativeFixtureAssertion(run);
           if(result.outcome==='passed'&&suite.minTests&&!(result.counts?.total>=suite.minTests))result={...result,outcome:'unrunnable',reason:'REQUIRED_FIXTURE_NOT_EXECUTED'};
         }
         results.push({...suite, ...result, durationMs: Date.now() - began});
@@ -160,6 +161,11 @@ async function combineDirectory(output){
   if(!report.workerArtifacts?.length){report.passed=false;report.outcome='unrunnable';report.reason='WORKER_ARTIFACT_UNAVAILABLE';}
   await fs.writeFile(path.join(output,'report.json'),JSON.stringify(report,null,2));return report;
 }
+export function nativeFixtureAssertion(run) {
+  const match=(run.stdout+'\n'+run.stderr).match(/(?:^|\n)(?:# )?HARNESS_NATIVE_ASSERTION: ([^\r\n]+)/u);
+  if(!match)return null;
+  try {const value=JSON.parse(match[1]);return typeof value==='string'?value.replace(/https?:\/\/[^\s]+/giu,'[fixture-url]').slice(0,2000):null;} catch {return null;}
+}
 export function failureAnnotations(report) {
   if (report.inventory || report.passed) return [];
   const escape = value => String(value).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
@@ -169,8 +175,9 @@ export function failureAnnotations(report) {
   return rows.slice(0, 30).map(row => {
     const counts = row.counts ? `; failed=${row.counts.failed ?? 0}; skipped=${row.counts.skipped ?? 0}; cancelled=${row.counts.cancelled ?? 0}` : '';
     const reason = /^[A-Z0-9_]+$/.test(row.reason || '') ? `; ${row.reason}` : '';
-    // Only structured suite metadata is public. Never copy process logs or env.
-    const message = `${row.lane || 'unknown'}: ${row.outcome || 'unrunnable'}${Number.isInteger(row.exitCode) ? '; exit=' + row.exitCode : ''}${counts}${reason}`;
+    // Only structured metadata and an explicit isolated Native assertion are public.
+    // Never copy arbitrary process logs or environment values.
+    const message = `${row.lane || 'unknown'}: ${row.outcome || 'unrunnable'}${Number.isInteger(row.exitCode) ? '; exit=' + row.exitCode : ''}${counts}${reason}${row.fixtureAssertion ? '; '+row.fixtureAssertion : ''}`;
     return `::error file=${property(row.file)},line=1,title=Release check failed::${escape(message)}`;
   });
 }
