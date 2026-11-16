@@ -9,6 +9,9 @@ const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 const failure = (code, extra = {}) => Object.assign(Error(code), { code, status: 409, ...extra });
 const pause = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
 const serverName = (scope, generation) => scope + '.' + generation + '.editor.homeai.invalid';
+function readyValue(runtime, stopToken) {
+  return { version: 1, operationId: runtime.operationId, sessionId: runtime.sessionId, projectRoot: runtime.projectRoot, scopeId: runtime.scopeId, readOnly: runtime.readOnly, generation: runtime.generation, state: 'ready', containerIds: { ...runtime.containerIds }, expiresAt: runtime.expiresAt, hardDeadline: runtime.hardDeadline, transport: { host: '127.0.0.1', hostPort: runtime.guestPort, guestAddress: '10.0.2.15', guestPort: runtime.guestPort, bootPid: runtime.bootPid, serverName: serverName(runtime.scopeId, runtime.generation), mtls: true }, isolation: { enforced: true, sessionId: runtime.sessionId, projectRoot: runtime.projectRoot, readOnly: runtime.readOnly }, stopToken };
+}
 function active(manager) { return (manager.store?.jobs || []).some(job => activeStates.has(job.projectRuntime?.state)); }
 
 // The model cannot supply paths, mounts, transport addresses, credentials or
@@ -20,7 +23,7 @@ class ProjectRuntime {
     this.create = dependencies.create || createManagedContainer;
     this.start = dependencies.start || startManagedContainer;
     this.pause = dependencies.pause || pause;
-    this.monitors = new Map();
+    this.monitors = new Map(); this.stops = new Map();
   }
   save() { this.manager.save(); this.manager.heartbeat(); }
   port(scopeId) {
@@ -37,6 +40,7 @@ class ProjectRuntime {
   }
   async handle(input, { signal } = {}) {
     if (input?.op === 'stop') return this.stop(input);
+    if (input?.op === 'touch') return this.touch(input, { signal });
     const m = this.manager;
     m.requireEnabled();
     if (!m.cfg.projectRuntime?.enabled) throw failure('PROJECT_RUNTIME_ISOLATION_UNAVAILABLE');
@@ -89,8 +93,8 @@ class ProjectRuntime {
         }
         if (!healthy) throw failure('PROJECT_RUNTIME_HEALTH_UNVERIFIED');
         for (const record of job.creations) { const c = await this.owned(job, record); this.check(input, signal, deadline); if (!c.State.Running) throw failure('PROJECT_RUNTIME_EARLY_EXIT'); }
-        runtime.state = 'ready'; job.status = 'passed'; job.endedAt = Date.now(); this.save();
-        return { version: 1, operationId: admissionId, sessionId: runtime.sessionId, projectRoot: runtime.projectRoot, scopeId: runtime.scopeId, readOnly: runtime.readOnly, generation: runtime.generation, state: 'ready', containerIds: { ...runtime.containerIds }, transport: { host: '127.0.0.1', hostPort: runtime.guestPort, guestAddress: '10.0.2.15', guestPort: runtime.guestPort, bootPid: runtime.bootPid, serverName: serverName(runtime.scopeId, runtime.generation), mtls: true }, isolation: { enforced: true, sessionId: runtime.sessionId, projectRoot: runtime.projectRoot, readOnly: runtime.readOnly }, stopToken };
+        runtime.state = 'ready'; runtime.expiresAt = Date.now() + 300000; runtime.hardDeadline = Date.now() + 1800000; job.status = 'passed'; job.endedAt = Date.now(); this.save(); this.monitorEditor(job);
+        return readyValue(runtime, stopToken);
       }
       runtime.state = 'running'; runtime.expiresAt = Date.now() + 600000; this.save();
       this.monitor(job);
@@ -111,6 +115,11 @@ class ProjectRuntime {
     return c;
   }
   async stopOwned(job) {
+    if (this.stops.has(job.id)) return this.stops.get(job.id);
+    const task = this.stopOwnedOnce(job); this.stops.set(job.id, task);
+    try { return await task; } finally { this.stops.delete(job.id); }
+  }
+  async stopOwnedOnce(job) {
     const m = this.manager, runtime = job.projectRuntime;
     runtime.state = 'stopping'; this.save(); let known = true;
     for (const record of job.creations) {
@@ -140,6 +149,36 @@ class ProjectRuntime {
     if (runtime.state !== 'stopped' && !await this.stopOwned(job)) throw failure('PROJECT_RUNTIME_RECONCILIATION_REQUIRED', { operationId: runtime.operationId, jobId: job.id });
     if (job.status === 'running') { job.status = 'interrupted'; job.endedAt = Date.now(); this.save(); }
     return { version: 1, state: 'stopped', sessionId: runtime.sessionId, generation: runtime.generation, operationId: runtime.operationId };
+  }
+  async touch(input, { signal } = {}) {
+    if (!input || Object.keys(input).some(k => !['op', 'sessionId', 'generation', 'stopToken', 'token'].includes(k)) || !HEX32.test(input.generation || '') || !TOKEN.test(input.stopToken || '')) throw failure('PROJECT_RUNTIME_STOP_AUTHORITY_REQUIRED');
+    const jobs = this.manager.store.jobs.filter(job => job.projectRuntime?.sessionId === input.sessionId && job.projectRuntime?.generation === input.generation);
+    if (jobs.length !== 1 || jobs[0].projectRuntime.stopTokenHash !== hash(input.stopToken)) throw failure('PROJECT_RUNTIME_STOP_AUTHORITY_REQUIRED');
+    const runtime = jobs[0].projectRuntime;
+    if (runtime.kind !== 'editor' || runtime.state !== 'ready' || runtime.expiresAt <= Date.now() || runtime.hardDeadline <= Date.now()) throw failure('PROJECT_RUNTIME_EDITOR_EXPIRED');
+    const request = { op: 'ensure', kind: 'editor', sessionId: input.sessionId, generation: input.generation, token: input.token };
+    const deadline = Date.now() + 15000, plan = this.check(request, signal, deadline);
+    const context = this.manager.archivedCleanup.authority(input.token).runtimeContext;
+    if (plan.scopeId !== runtime.scopeId || context.projectRoot !== runtime.projectRoot || context.readOnly !== runtime.readOnly || this.manager.worker.pid() !== runtime.bootPid) throw failure('PROJECT_RUNTIME_AUTHORITY_REQUIRED');
+    for (const record of jobs[0].creations) {
+      const c = await this.owned(jobs[0], record); this.check(request, signal, deadline);
+      if (!c.State.Running) { await this.stopOwned(jobs[0]); throw failure('PROJECT_RUNTIME_EDITOR_EXPIRED'); }
+    }
+    if (runtime.state !== 'ready' || runtime.expiresAt <= Date.now() || runtime.hardDeadline <= Date.now()) throw failure('PROJECT_RUNTIME_EDITOR_EXPIRED');
+    runtime.expiresAt = Math.min(Date.now() + 300000, runtime.hardDeadline); this.save();
+    return readyValue(runtime, input.stopToken);
+  }
+  monitorEditor(job) {
+    const task = (async () => {
+      try {
+        while (job.projectRuntime.state === 'ready') {
+          if (Date.now() >= Math.min(job.projectRuntime.expiresAt, job.projectRuntime.hardDeadline)) { job.error = 'PROJECT_RUNTIME_EDITOR_EXPIRED'; await this.stopOwned(job); return; }
+          for (const record of job.creations) { const c = await this.owned(job, record); if (job.projectRuntime.state !== 'ready') return; if (!c.State.Running) { job.error = 'PROJECT_RUNTIME_EARLY_EXIT'; await this.stopOwned(job); return; } }
+          await this.pause(1000);
+        }
+      } catch { if (job.projectRuntime.state !== 'stopped') { job.projectRuntime.state = 'reconciliation_required'; job.status = 'recovery_required'; job.error = 'PROJECT_RUNTIME_RECONCILIATION_REQUIRED'; this.save(); } }
+    })();
+    this.monitors.set(job.id, task); void task.finally(() => this.monitors.delete(job.id));
   }
   monitor(job) {
     const task = (async () => {

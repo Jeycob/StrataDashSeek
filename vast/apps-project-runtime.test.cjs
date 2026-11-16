@@ -85,3 +85,20 @@ test('port assignments remain permanent and exhaustion does not reuse another pr
   const f = fixture(); for(let n=0;n<64;n++)assert.equal(f.runtime.port(String(n)),19180+n);
   assert.equal(f.runtime.port('0'),19180); assert.throws(()=>f.runtime.port('new'),{code:'PROJECT_RUNTIME_PORT_POOL_FULL'});
 });
+test('editor lease expires independently of browser close and frees activity only after verified stop', async () => {
+  const f = fixture(); f.runtime.pause = async () => {};
+  const result = await f.runtime.handle(f.input), job = f.m.store.jobs[0];
+  assert(job.projectRuntime.expiresAt <= Date.now()+300000);
+  job.projectRuntime.expiresAt = Date.now()-1;
+  await f.runtime.monitors.get(job.id);
+  assert.equal(job.projectRuntime.state,'stopped'); assert.equal(job.error,'PROJECT_RUNTIME_EDITOR_EXPIRED'); assert(!active(f.m));
+  await assert.rejects(f.runtime.touch({op:'touch',sessionId:result.sessionId,generation,stopToken:result.stopToken,token}),{code:'PROJECT_RUNTIME_EDITOR_EXPIRED'});
+});
+test('renewal needs fresh matching Native authority and cannot turn a read-only policy change into continued access', async () => {
+  const f=fixture(),result=await f.runtime.handle(f.input),job=f.m.store.jobs[0];job.projectRuntime.expiresAt=Date.now()+1000;
+  const touch={op:'touch',sessionId:result.sessionId,generation,stopToken:result.stopToken,token};
+  const value=await f.runtime.touch(touch);assert(value.expiresAt>Date.now()+299000);assert.deepEqual(value.containerIds,result.containerIds);assert.equal(value.stopToken,result.stopToken);
+  job.projectRuntime.hardDeadline=Date.now()+1500;const capped=await f.runtime.touch(touch);assert.equal(capped.expiresAt,job.projectRuntime.hardDeadline);
+  f.context.readOnly=true;await assert.rejects(f.runtime.touch(touch),{code:'PROJECT_RUNTIME_AUTHORITY_REQUIRED'});
+  await f.runtime.stop({op:'stop',sessionId:result.sessionId,generation,stopToken:result.stopToken});
+});
