@@ -10,12 +10,13 @@ const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const pause = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
 const id16 = /^[a-f0-9]{16}$/, id32 = /^[a-f0-9]{32}$/;
 function outputBuffer() {
-  let text = '', start = 0, end = 0;
-  return { append(value) { const buffer = Buffer.from(text + value); end += Buffer.byteLength(value); const kept = buffer.subarray(Math.max(0, buffer.length - 1024 * 1024)); text = kept.toString(); start = end - Buffer.byteLength(text); }, snapshot(value) {
+  let text = '', start = 0, end = 0, lossy = false;
+  return { append(value) { const buffer = Buffer.from(text + value); end += Buffer.byteLength(value); const kept = buffer.subarray(Math.max(0, buffer.length - 1024 * 1024)); text = kept.toString(); start = end - Buffer.byteLength(text); }, snapshot(value, truncated = false) {
+    lossy ||= truncated;
     if (value === text) return;
     if (value.startsWith(text)) this.append(value.slice(text.length));
     else this.append((text ? '\n[earlier log lines rolled out of the Docker tail]\n' : '') + value);
-  }, readFrom(offset) { const buffer = Buffer.from(text), at = Math.max(start, Math.min(end, offset)); return { text: buffer.subarray(at - start).toString(), nextOffset: end, lossy: offset < start }; }, value() { return { text, truncated: start > 0 }; } };
+  }, readFrom(offset) { const buffer = Buffer.from(text), at = Math.max(start, Math.min(end, offset)); return { text: buffer.subarray(at - start).toString(), nextOffset: end, lossy: offset < start || lossy }; }, value() { return { text, truncated: start > 0 || lossy }; } };
 }
 
 // Adapter for SDK-owned process/job handles. The only command execution is the
@@ -51,7 +52,8 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
         while (!stopped) {
           try {
             const value = await rpc(route('job-status')), log = await rpc(route('job-log'));
-            if (typeof log?.text === 'string') stdout.snapshot(log.text);
+            if (typeof log?.stdout === 'string' && typeof log?.stderr === 'string') { stdout.snapshot(log.stdout,log.truncated?.stdout===true); stderr.snapshot(log.stderr,log.truncated?.stderr===true); }
+            else if (typeof log?.text === 'string') stdout.snapshot(log.text);
             const job = value?.job;
             if (value?.version !== 1 || job?.id !== admission.jobId || job.action !== 'project-executor') throw fail('PROJECT_RUNTIME_JOB_IDENTITY_UNVERIFIED');
             if (job.terminal && ['passed', 'failed'].includes(job.status) && Number.isInteger(job.exitCode) && job.exitCode >= 0 && job.exitCode <= 255) { process.exitCode = job.exitCode; process.status = 'exited'; stopped = true; break; }

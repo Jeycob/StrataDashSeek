@@ -25,7 +25,7 @@ function createAppsService(cfg={},injected){
    res.writeHead(200,{'Content-Type':'application/x-tar','Content-Length':e.bytes,'Content-Disposition':'attachment; filename="'+e.filename+'"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
    const input=fs.createReadStream(null,{fd:e.descriptor,autoClose:true});input.on('error',()=>res.destroy());res.on('close',()=>input.destroy());return input.pipe(res);
   }
-  if(req.method==='GET'&&u.pathname==='/job-log')return json(res,200,{text:manager.jobLog(u.searchParams.get('id'))});
+  if(req.method==='GET'&&u.pathname==='/job-log')return json(res,200,manager.jobOutput?manager.jobOutput(u.searchParams.get('id')):{text:manager.jobLog(u.searchParams.get('id'))});
   if(req.method==='GET'&&u.pathname==='/container-log')return json(res,200,{text:await manager.logs(u.searchParams.get('id'))});
   if(req.method==='GET'&&u.pathname==='/releases')return json(res,200,{releases:await manager.releaseList(u.searchParams.get('id'))});
   if(req.method==='GET'&&u.pathname==='/release')return json(res,200,{release:await manager.releaseDetail(u.searchParams.get('id'),u.searchParams.get('releaseId'))});

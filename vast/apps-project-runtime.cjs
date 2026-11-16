@@ -176,7 +176,7 @@ class ProjectRuntime {
           for (const record of job.creations) { const c = await this.owned(job, record); if (job.projectRuntime.state !== 'ready') return; if (!c.State.Running) { job.error = 'PROJECT_RUNTIME_EARLY_EXIT'; await this.stopOwned(job); return; } }
           await this.pause(1000);
         }
-      } catch { if (job.projectRuntime.state !== 'stopped') { job.projectRuntime.state = 'reconciliation_required'; job.status = 'recovery_required'; job.error = 'PROJECT_RUNTIME_RECONCILIATION_REQUIRED'; this.save(); } }
+      } catch { if (job.projectRuntime.state !== 'stopped') { job.error = 'PROJECT_RUNTIME_MONITOR_FAILED'; if (await this.stopOwned(job)) { job.status = 'failed'; job.endedAt = Date.now(); this.save(); } } }
     })();
     this.monitors.set(job.id, task); void task.finally(() => this.monitors.delete(job.id));
   }
@@ -186,7 +186,7 @@ class ProjectRuntime {
         while (job.projectRuntime.state === 'running') {
           const record = job.creations.find(r => r.slot === 'executor'), c = await this.owned(job, record);
           if (job.projectRuntime.state !== 'running') return;
-          const output = await this.manager.engine.logs(c.Id, job.projectId);
+          const output = await this.manager.engine.runtimeLogs(c.Id, job.projectId);
           if (job.projectRuntime.state !== 'running') return;
           this.manager.replaceJobLog(job, output);
           if (!c.State.Running) {
@@ -196,7 +196,7 @@ class ProjectRuntime {
           if (Date.now() >= job.projectRuntime.expiresAt) { job.error = 'PROJECT_RUNTIME_LIFETIME_EXPIRED'; if (await this.stopOwned(job)) { job.status = 'failed'; job.endedAt = Date.now(); this.save(); } return; }
           await this.pause(1000);
         }
-      } catch { if (job.projectRuntime.state !== 'stopped') { job.projectRuntime.state = 'reconciliation_required'; job.status = 'recovery_required'; job.error = 'PROJECT_RUNTIME_RECONCILIATION_REQUIRED'; this.save(); } }
+      } catch { if (job.projectRuntime.state !== 'stopped') { job.error = 'PROJECT_RUNTIME_MONITOR_FAILED'; if (await this.stopOwned(job)) { job.status = 'failed'; job.endedAt = Date.now(); this.save(); } } }
     })();
     this.monitors.set(job.id, task); void task.finally(() => this.monitors.delete(job.id));
   }

@@ -33,7 +33,7 @@ function fixture(kind = 'editor') {
     if (route.endsWith('/start')) { c.State.Running = true; c.State.Status = 'running'; await m.onStart?.(c); return { status: 204 }; }
     if (route.includes('/stop?')) { await m.onStop?.(c); c.State.Running = false; c.State.Status = 'exited'; return { status: 204 }; }
     throw Error('UNEXPECTED_REQUEST');
-  }, async logs() { return 'bounded synthetic output\n'; } };
+  }, async runtimeLogs() { return {stdout:'bounded synthetic output\n',stderr:''}; } };
   const runtime = new ProjectRuntime(m, { plan: (manager, input, options) => createRuntimePlan(manager, input, { ...options, filesystem }) });
   const input = { op: context.op, kind, sessionId: context.sessionId, generation, token, ...(kind === 'executor' ? { command: 'printf test' } : {}) };
   return { m, runtime, input, context, authority, calls, containers };
@@ -79,7 +79,7 @@ test('executor uses existing job terminal status and retains a real nonzero exit
   const f = fixture('executor'); f.m.onStart = c => { c.State.Running=false;c.State.ExitCode=17; };
   const result = await f.runtime.handle(f.input); await f.runtime.monitors.get(result.jobId);
   const status = jobStatus(f.m,result.jobId); assert.equal(status.job.status,'failed'); assert.equal(status.job.exitCode,17); assert.equal(status.job.terminal,true);
-  assert.equal(f.m.store.jobs[0].testOutput,'bounded synthetic output\n'); assert(!active(f.m));
+  assert.deepEqual(f.m.store.jobs[0].testOutput,{stdout:'bounded synthetic output\n',stderr:''}); assert(!active(f.m));
 });
 test('port assignments remain permanent and exhaustion does not reuse another project origin', () => {
   const f = fixture(); for(let n=0;n<64;n++)assert.equal(f.runtime.port(String(n)),19180+n);
