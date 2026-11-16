@@ -16,7 +16,7 @@ function matches(record,c){
 function neverStarted(c){return c?.State?.Status==='created'&&c.State.Running===false&&/^0001-01-01T/.test(c.State.StartedAt||'');}
 async function inspect(manager,record,timeout=15000){try{return await manager.engine.json('GET','/containers/'+record.name+'/json',{timeout});}catch(e){if(e.dockerStatus===404)return null;throw e;}}
 function unknown(record,cause){record.state='unknown';return new Error('Container creation outcome is unresolved for '+record.name+'; inspect the existing operation before retrying',{cause});}
-async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,reconcileMs=30000,intervalMs=250,slot}={}){
+async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,reconcileMs=30000,intervalMs=250,slot,runtimeGrant}={}){
  const projectId=json?.Labels?.[LABEL+'.project'];
  if(!/^[a-f0-9]{16}$/.test(projectId||'')||!/^[a-f0-9]{16}$/.test(job?.id||'')||!/^sha256:[a-f0-9]{64}$/.test(json?.Image||'')||json.Labels[LABEL]!=='managed')throw Error('Managed container creation requires immutable image and project/job identities');
  if(!Number.isInteger(createTimeoutMs)||createTimeoutMs<1||createTimeoutMs>120000||!Number.isInteger(reconcileMs)||reconcileMs<1||reconcileMs>30000||!Number.isInteger(intervalMs)||intervalMs<1||intervalMs>1000)throw Error('Invalid bounded creation timing');
@@ -27,7 +27,7 @@ async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,r
  const body={...json,Labels:{...json.Labels,[LABEL+'.job']:job.id,[LABEL+'.create']:record.token,...(slot?{[LABEL+'.slot']:slot}:{})}};
  manager.log(job,'Creating '+role+' container; bounded Docker deadline '+createTimeoutMs+' ms.\n');
  let createIssued=false;try{
-  await prepareManagedCreate(manager,record,body);
+  await prepareManagedCreate(manager,record,body,runtimeGrant);
   let created;
   try{createIssued=true;created=await manager.engine.json('POST','/containers/create?name='+record.name,{json:body,timeout:createTimeoutMs});}
   catch(cause){
