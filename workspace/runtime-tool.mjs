@@ -3,7 +3,7 @@ export function registerRuntimeCapabilities(ctx, manager, capabilities) {
   const project = agent => manager.data.sessions[manager.ownerAgent(agent)?.id];
   ctx.tools.register({
     name: 'runtime_capabilities',
-    description: 'Read the current isolated project deployment capabilities: existing Docker/Compose files to reuse, registered build/deployment, owned jobs, managed Docker sleep/start state and real host disk reserve. This never wakes Docker, cleans files, installs software or deploys. Call before deployment; use the existing managed Apps CLI and wait for final tests/browser verification. An asleep VM is configured, not missing Docker. Automatic safe temporary cleanup runs before capacity rejection; never lower reserves or remove models, credentials or application data.',
+    description: 'Read the current isolated project deployment capabilities: existing Docker/Compose files to reuse, registered build/deployment, owned jobs, managed Docker sleep/start state and real host disk reserve. This never wakes Docker, cleans files, installs software or deploys. Call before deployment; use the typed project_apps tool and wait for final tests/browser verification. An asleep VM is configured, not missing Docker. Automatic safe temporary cleanup runs before capacity rejection; never lower reserves or remove models, credentials or application data.',
     parameters: { type: 'object', properties: {}, additionalProperties: false },
     isConcurrencySafe: () => true,
     output: { schema: { type: 'object', properties: { version: { type: 'integer' }, timestamp: { type: 'string' } }, required: ['version', 'timestamp'], additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },

@@ -21,28 +21,31 @@ function fixture({ files = ['Dockerfile', '.dockerignore', '.harness-app.json', 
 }
 function ownState(extra = {}) { return { enabled: true, available: true, worker: { phase: 'ready', freeBytes: 900 * MIB }, projects: [{ id, path: path.relative(root, project), imageId: 'sha256:' + cid, containerId: cid }], ...extra }; }
 test('a retained unresolved deployment is a hold with reviewable job identity, never a new verification recipe',async()=>{
- const f=fixture({state:ownState({deploymentRecovery:{required:true,projects:[otherId]},jobs:[{id:'d'.repeat(16),projectId:id,status:'recovery_required',action:'verify'}]})}),value=await f.service.snapshot(project);assert.equal(value.apps.recoveryRequired,true);assert.equal(value.capacity.canVerify,false);assert.equal(value.apps.jobs[0].status,'recovery_required');assert.equal(value.recipes.verify,undefined);assert.doesNotMatch(JSON.stringify(value),new RegExp(otherId));
+ const f=fixture({state:ownState({deploymentRecovery:{required:true,projects:[otherId]},jobs:[{id:'d'.repeat(16),projectId:id,status:'recovery_required',action:'verify'}]})}),value=await f.service.snapshot(project);assert.equal(value.apps.recoveryRequired,true);assert.equal(value.capacity.canVerify,false);assert.equal(value.apps.jobs[0].status,'recovery_required');assert.equal(value.recipes.verify_deploy,undefined);assert.doesNotMatch(JSON.stringify(value),new RegExp(otherId));
 });
 
-test('reads only deployment file metadata, never contents, and returns reusable fixed argv', async () => {
+test('reads only deployment file metadata and supplies typed current-project recipes without host authority', async () => {
   const { service, reads } = fixture({ state: ownState() }), s = await service.snapshot(project);
   assert.deepEqual(s.existingFiles, ['Dockerfile', '.dockerignore', '.harness-app.json', 'compose.yaml']);
   assert.equal(s.timestamp, '1970-01-01T00:00:10.000Z'); assert.equal(s.apps.state, 'ready');
-  assert.deepEqual(s.recipes.verify, ['/data/harness/node/bin/node', '/data/harness/app/vast/apps-cli.cjs', 'verify', id]);
-  assert.deepEqual(s.recipes.register.slice(-2), ['register', path.relative(root, project)]);
+  assert.deepEqual(s.recipes.verify_deploy, {tool:'project_apps',arguments:{operation:'verify_deploy'}});
+  assert.deepEqual(s.recipes.register, {tool:'project_apps',arguments:{operation:'register'}});
+  assert.equal(s.version,2);assert.equal(s.verificationRecipes.documentation,'/opt/homeai/quality/README.md');
+  assert.doesNotMatch(JSON.stringify(s),/\/data\/harness|apps-cli\.cjs/);
+  assert.doesNotMatch(runtimeCapabilitiesFallback,/\/data\/harness|apps-cli\.cjs/);
   assert.equal(s.apps.project.built, true); assert.equal(s.apps.project.deployed, true);
   assert.ok(reads.every(([op]) => ['realpath', 'stat', 'lstat', 'statfs', 'apps'].includes(op)));
   assert.ok(reads.filter(([op]) => op === 'lstat').every(([, p]) => path.dirname(p) === project));
   assert.equal(s.guidance.managedDockerOnly, true); assert.equal(s.guidance.enforceCapacityAgainAtExecution, true);
 });
 
-test('deployment recipes follow actual built/deployed state instead of suggesting invalid manual actions', async () => {
+test('one verify-deploy workflow applies to registered states without advertising unsupported manual actions', async () => {
   for (const [built, deployed] of [[false, false], [true, false], [true, true]]) {
     const registered = { id, path: path.relative(root, project), ...(built ? { imageId: 'sha256:' + cid } : {}), ...(deployed ? { containerId: cid } : {}) };
     const s = await fixture({ state: ownState({ projects: [registered] }) }).service.snapshot(project);
-    assert.ok(s.recipes.verify); assert.ok(s.recipes.build);
-    assert.equal(Boolean(s.recipes.deploy), built); assert.equal(Boolean(s.recipes.check), deployed);
-    assert.match(runtimeCapabilitiesFallback, /For a user preview, prefer verify/);
+    assert.deepEqual(Object.keys(s.recipes),['register','status','verify_deploy']);
+    assert.equal(s.apps.project.built,built);assert.equal(s.apps.project.deployed,deployed);
+    assert.match(runtimeCapabilitiesFallback, /For a user preview, use project_apps/);
   }
 });
 
@@ -57,7 +60,7 @@ test('does not disclose another project, secret, URL, job text, port or raw conf
   assert.equal(s.apps.jobs.length, 1); assert.equal(s.apps.containers.length, 1);
   assert.deepEqual(Object.keys(s.apps.jobs[0]), ['id', 'action', 'status', 'startedAt', 'endedAt']);
   assert.deepEqual(Object.keys(s.apps.containers[0]), ['id', 'state']);
-  assert.deepEqual(s.jobTracking.jobs, [{ id, status: ['/data/harness/node/bin/node', '/data/harness/app/vast/apps-cli.cjs', 'job-status', id], logs: ['/data/harness/node/bin/node', '/data/harness/app/vast/apps-cli.cjs', 'job-log', id] }]);
+  assert.deepEqual(s.jobTracking.jobs, [{id,status:{tool:'project_apps',arguments:{operation:'job_status',jobId:id}},logs:{tool:'project_apps',arguments:{operation:'job_log',jobId:id}}}]);
   assert.deepEqual(s.verificationRecipes.browser, { tool: 'verify_project', arguments: { kind: 'browser' } });
   assert.equal(s.jobTracking.repeatSubmission, false);
 });
@@ -66,7 +69,7 @@ test('requires full registered path and valid id; missing or ambiguous associati
   for (const projects of [[{ id: otherId, path: 'foreign/own' }], [{ id, path: '../workspaces/projects/own' }], [{ id: 'bad', path: path.relative(root, project) }], [ownState().projects[0], { ...ownState().projects[0], id: otherId }]]) {
     const s = await fixture({ state: ownState({ projects, jobs: [{ id, projectId: id, action: 'build', status: 'running' }], containers: [{ id: cid, projectId: id, state: 'running' }] }) }).service.snapshot(project);
     assert.equal(s.apps.project, null); assert.deepEqual(s.apps.jobs, []); assert.deepEqual(s.apps.containers, []);
-    assert.deepEqual(Object.keys(s.recipes), ['register']);
+    assert.deepEqual(Object.keys(s.recipes), ['register','status']);
   }
 });
 
@@ -136,7 +139,7 @@ test('inflight dedupe, project-scoped cache, bounded admission and immutable res
   const a = f.service.snapshot(project), b = f.service.snapshot(project); assert.equal(a, b);
   await assert.rejects(f.service.snapshot(path.join(root, 'projects', 'other')), /limit/);
   await new Promise(resolve => setImmediate(resolve)); assert.equal(calls, 1); finish(ownState());
-  const s = await a; assert.ok(Object.isFrozen(s.recipes.verify)); assert.throws(() => { s.apps.state = 'forged'; }, TypeError);
+  const s = await a; assert.ok(Object.isFrozen(s.recipes.verify_deploy)); assert.throws(() => { s.apps.state = 'forged'; }, TypeError);
   const other = await f.service.snapshot(path.join(root, 'projects', 'other'));
   assert.equal(other.apps.project, null); assert.equal(calls, 2);
   assert.equal(f.service.renderContext(project), runtimeCapabilitiesFallback);

@@ -73,7 +73,7 @@ test('real SDK rejects paths, project ids, primitives and arrays before any capa
 
 test('real SDK executes read-only success, validates output, renders actual snapshot and isolates child to owner', { timeout: 5000 }, async t => {
   const f = await fixture(t), result = await f.call(f.child);
-  assert.equal(result.isError, false, JSON.stringify(result)); assert.equal(result.value.version, 1);
+  assert.equal(result.isError, false, JSON.stringify(result)); assert.equal(result.value.version, 2);
   assert.equal(result.value.apps.state, 'asleep'); assert.equal(result.value.apps.project.id, ownId);
   assert.deepEqual(f.snapshotRoots, [ownRoot]); assert.equal(result.value.apps.jobs.length, 1);
   assert.ok(result.value.existingFiles.includes('Dockerfile')); assert.equal(result.value.capacity.canVerify, true);

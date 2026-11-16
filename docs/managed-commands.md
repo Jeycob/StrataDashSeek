@@ -4,8 +4,10 @@ The workspace plugin installs a project-scoped `bash` implementation for every
 managed project. Both `bash` and `project_exec` use the same command runner, so a
 model choosing the ordinary `bash` tool receives a real command result rather than
 the former “Use project_exec” refusal. This applies to restored managed chats,
-new chats, seeded sessions and their child agents. Legacy conversations retain
-their original Native bash implementation.
+new chats, seeded sessions and their child agents. Legacy, continued, unknown
+and shared-worktree conversations retain their files but cannot fall back to
+model-controlled host commands or host file tools. Commands require an
+independently enrolled project and an available isolated guest runtime.
 
 The registration happens during agent creation and enrollment. Harness rc.2
 captures its admitted tool set **before** `agent/pre-step`; installing a replacement
@@ -49,22 +51,38 @@ assertions to the requested behavior. Browser checks use the project's assigned
 port, a positive visible expectation and a screenshot checkpoint. Require
 `passed: true`, `complete: true`, and `stale: false` for full declared acceptance.
 
-Apps jobs use the existing Apps registry. Retain the ID returned by the original
-submission and call `apps-cli.cjs job-status JOB_ID` for bounded structured state,
-then `job-log JOB_ID` when diagnosis is needed. These reads never wake Docker.
-`runtime_capabilities.jobTracking` provides the exact argv for current owned jobs.
+`project_apps` uses the existing Apps registry through authenticated Native
+calls. `register` reads the current project's manifest; `verify_deploy` starts
+the existing verify-and-deploy workflow and returns an owned SDK monitoring job.
+Use `status`, `job_status` and `job_log` for the current project's bounded state
+and diagnostics, or the SDK job tools to follow the monitor. Guest commands do
+not receive Apps credentials or an arbitrary controller CLI. Status reads never
+wake Docker. The last-30-job view is explicitly incomplete.
 `queued` and `running` remain pending; `failed`, `interrupted`, `unknown` or
 `recovery_required` never become a pass. Do not resubmit after a lost response or
 wait deadline. Inspect the original receipt and resolve any recovery requirement.
 A passed build still needs application and browser verification before delivery.
+Killing an Apps monitor cannot cancel a deployment: its shared heavy permit
+remains held until the exact original operation is known to have settled.
+An inactive monitor can be reconciled by a status read or the next heavy
+admission, including after its owner is archived or disposed. Unknown outcomes
+remain blocked; lookup never submits a replacement deployment.
 
 The working directory and its real filesystem target must remain in the project.
-The runner exports the project's assigned ports, database and prepared tool paths
-through `development/project-run.cjs`, then invokes the actual filesystem-confined
-executor. Full-access session settings do not remove this project boundary.
-Read-only sessions remain read-only, receive no extra writable roots and do not
-create project cache directories while preparing the environment. Platform
-temporary-directory exceptions still belong to the installed sandbox provider.
+Native obtains a fresh server-owned project/policy snapshot and asks Apps to run
+the command in the managed guest container. The project is mounted at
+`/workspace`; assigned ports and `DATABASE_URL` are fixed by the server.
+Read-only policy applies to both the owner and actual child agent. Full-access
+settings do not remove the project boundary. `verify_project` uses the same
+runner and the fixed immutable guest quality CLI. Missing images, toolchain or
+verified VM isolation refuse execution; there is no host-shell fallback.
+
+Native persists a private cancellation receipt before runtime admission. A lost
+reply is cleaned up with that original capability; a stopped acknowledgement
+must match the session, generation and known operation. A Native restart
+reconciles persisted orphans before new work. File and parent-directory fsyncs
+precede durable acknowledgement. Heavy admission and runtime ownership are not
+released merely because an HTTP request or SDK observer has ended.
 
 Known literal verification commands can drop display-only `tail`, `head` or
 quoted literal `grep -E`/`grep -vE` display filters without file operands or
@@ -85,13 +103,14 @@ check, one general reminder asks for a small tested behavior before expanding.
 
 Verification covers the actual pinned Native tool registry and bash output schema,
 first-step admission, independent policy denials, cancellation through quiescence,
-legacy behavior and disposal. A separate Linux check uses the actual Native bash,
-subprocess and kernel confinement providers to verify outside-project denial,
-first-use read-only behavior and a project service's start/stop lifecycle.
+legacy denial and disposal. Separate synthetic Linux checks exercise runtime
+receipts, process locking and file durability. Guest/VM, browser, network and
+resource-limit acceptance remains separate from SDK fixture success.
 
-Install with the normal signed source update. An already running Harness needs one
-controlled Harness-only restart while its conversations are idle; model and Apps
-services do not need a restart. Workbench state reports `managedShellVersion: 1`,
+Install with the normal signed source update and the matching reviewed Apps/VM
+configuration. Provisioning images, transport and toolchain requires separate
+capacity checks and actual acceptance. Source installation alone does not make
+the runtime ready. Workbench state reports `managedShellVersion: 1`,
 `projectBackgroundVersion: 1` and `repairPolicyVersion: 3` or later after this version is
 loaded. Policy version 4 adds [automatic stage verification](autonomous-stages.md)
 with a separate finite task allowance. A signed commit or a passing local test does not prove that a particular

@@ -5,38 +5,41 @@ button beside a workspace opens its general settings. Choose EN/CZ in the panel.
 
 ## Independent work
 
-A new conversation is an independent task boundary. Automatic mode creates a
-native Git worktree from an exact available local commit, or a fresh directory
-for a non-Git source. Uncommitted source edits are deliberately preserved in the
-source checkout. Every managed project receives four reserved ports and a
+A new conversation is an independent task boundary. Automatic mode creates an
+independent shallow Git repository from an exact available local commit, with
+no borrowed object store, or a new empty repository for a non-Git source.
+Uncommitted source edits remain in the source checkout. Every managed project receives four reserved ports and a
 private `.harness/data/app.sqlite` database path. Applications must use the
 assigned environment variables; the runtime cannot rewrite hardcoded database
 URLs or ports inside arbitrary application code.
 
-Existing conversations keep their current directory. Explicit **Continue in
-the same project** is available, with a writer lease that rejects concurrent
-writers to the same directory or its descendants. Leases include process
-identity to avoid treating a reused PID as an active owner. Native background
-jobs and child sessions protect the lease until they are finished.
+Existing conversations keep their current directory and data. Legacy or
+explicitly continued directories do not qualify for isolated model commands,
+file tools or the embedded editor. They must not silently use a host fallback.
+Writer leases include process identity; active jobs and child sessions protect
+ownership until their actual work has settled.
 
-Managed shell work uses `project_exec` with a narrow native filesystem policy.
-Git worktrees receive write access only to their commit metadata directories;
-the source checkout, shared hooks and shared Git config are not granted.
-`.harness/` is ignored by Git in newly isolated projects. This is protection
-against accidental interference, not a multi-tenant security product.
+Managed `bash`, `project_exec`, file tools and verification use the same
+authenticated Apps guest runtime. Each executor receives only its own project
+mount and explicitly prepared immutable tools; Native/Apps credentials remain
+outside it. Network access, process privileges and cgroup limits belong to the
+verified runtime profile. `.harness/` is ignored by Git in new projects.
 
-Native Harness, the Apps control service and project command execution still
-share the `harness` OS account. Write confinement and separate project folders
-do not provide complete read or process-signal isolation from credentials and
-services owned by that same account. Use owner-trusted projects. Separating
-executor identities and placing credential access behind an authenticated,
-project-scoped broker is a proposed change requiring owner approval; it is not
-installed. Moving values into Infisical alone does not remove this boundary:
-the running services still need bootstrap identities and runtime credentials.
+This describes the candidate source contract, not evidence of installation.
+Until the required images, capacity, VM proof and transport are provisioned and
+accepted, commands and the editor report unavailable. The historical shared-UID
+host executor is not a fallback for this contract.
 
 ## Files and conversations
 
-The file panel lists folders, creates files/folders, edits UTF-8 text, renames,
+The primary sidebar opens real Code OSS through code-server for the selected
+independent project, including its files and Git changes. A persistent separate
+origin and a generation-bound grant isolate it from Native administration.
+Saved model writes appear through the project filesystem; 9p-backed projects
+require code-server polling. Draft/conflict/reconnect behavior needs acceptance
+against the actual deployed editor, not merely an iframe placeholder.
+
+The retained secondary file API lists folders, creates files/folders, edits UTF-8 text, renames,
 deletes, uploads and downloads. Saves, rename and deletion use observed file
 versions: a stale editor cannot silently overwrite a changed file. Symlinks,
 path escapes, `.git` and private `.harness` state are excluded. Files are read
@@ -68,9 +71,9 @@ parameter records, without prompts, answers or credentials.
 The local startup preflight opens real Chromium, checks the console, renders a
 WebGL pixel, saves a screenshot and checks .NET availability. Normal startup
 does not install or download anything. Browser rendering uses CPU software
-rendering and does not consume LLM GPU memory. `project_exec` exports prepared
-Playwright/.NET paths and private package caches, home/temp and database values.
-The optional .NET environment has an independently verified offline compile/run.
+rendering and does not consume LLM GPU memory. This host preflight is diagnostic only; it does not prove guest readiness.
+`project_exec` requires the verified immutable guest toolchain and fixed
+Playwright/.NET paths. Guest compile, browser and network acceptance is separate.
 
 Declare `.harness-quality.json` early. Use **verify_project** for build, test,
 browser and acceptance milestones. Browser plans require navigation, a positive
@@ -120,28 +123,12 @@ Harness labels retain their vendor language where no localization hook exists.
 
 Whole-stack installation simplification is a [design proposal](installation-design.md)
 only. No new rental or whole-stack one-click installer is introduced.
-# Live changes and shared tool diagnostics
+# Code editor and shared tool diagnostics
 
-The Native right sidebar includes **Changes** beside **Workspace files** and
-**Applications and Docker**. Its guide entry uses the same Native card as the
-other tools. The panels use Native fonts, colors and dark-mode tokens; secondary
-file actions remain available under **Workspace tools**.
-
-Changes are captured from files on disk, including saves made by shell commands.
-A new independent project compares against its empty project start; a Git
-worktree compares against its recorded base commit. Existing continued or legacy
-projects receive a bounded snapshot labelled **since tracking started**. Earlier
-unsaved history cannot be reconstructed. The owner-only existing Workbench API
-resolves the conversation's registered root; callers cannot supply another root.
-
-Only the visible Changes tab polls: every two seconds while the conversation is
-running and every fifteen seconds while idle. Hidden tabs stop polling and abort
-outstanding requests. One request includes the file list and selected diff;
-unchanged revisions preserve the selection. Tracking does not call the model or
-wake Docker. Dependency/build folders, conventional secret files and symlinks
-are excluded. Default limits are 1,000 files, 8 MiB source data, 256 KiB per text
-diff and 5,000 displayed diff lines. Partial captures and binary/large files are
-explicitly labelled. Tracking snapshots reserve 2 GiB free disk space.
+The primary sidebar uses Code OSS through code-server for editing and Git
+changes. Retained secondary change/checkpoint APIs capture saved files only;
+they cannot reconstruct historical unsaved buffers. Captures are bounded and
+exclude dependency/build folders, conventional secret files and links.
 
 All final SDK tool results, including future skill tools and admission failures,
 enter the same per-project diagnostic queue. It does not mutate tool outcomes,
