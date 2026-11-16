@@ -5,6 +5,9 @@ const {atomicJson}=require('../mobile/private-json.cjs');
 const {PILOT_WORKER_PROFILE,validatePilot,workerProfile}=require('./apps-worker-profile.cjs');
 const {fixedguestOverlayProbe,parseOverlayProbe}=require('./apps-overlay-probe.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+function requireControl(vm){
+ if(vm.cfg?.enabled===false||vm.cfg?.vm?.enabled===false||vm.quarantined)throw Object.assign(Error('Docker worker is not enabled; an existing guest remains quarantined for explicit reconciliation'),{code:'APPS_WORKER_DISABLED',status:409});
+}
 function controlFirewall(){return `
 iptables -w -N HARNESS_CONTROL_V1 2>/dev/null || iptables -w -S HARNESS_CONTROL_V1 >/dev/null
 firewall_rule() { iptables -w -C "$@" 2>/dev/null || iptables -w -A "$@"; }
@@ -76,18 +79,24 @@ class DockerVM {
   validatePilot(this.manifest);
   this.saved=fs.existsSync(this.stateFile)?JSON.parse(fs.readFileSync(this.stateFile)):{initialized:false,resumeIds:[],containers:[]};
   this.phase='asleep'; this.error=null; this.serial=null; this.pending=null; this.lastUsed=Date.now(); this.stopping=false; this.buffer='';
-  if(this.pid()) this.phase='recovering';
+  const live=this.pid(),disabled=cfg.enabled!==true||cfg.vm.enabled!==true;
+  // Detecting a PID is observation only. Disabled startup never turns it into
+  // an automatic ensure()/resume operation, even if configuration later changes.
+  this.quarantined=!!live&&disabled;
+  this.phase=disabled?(live?'quarantined':'disabled'):(live?'recovering':'asleep');
  }
  save(){atomicJson(this.stateFile,this.saved);}
  pid(){try{const pid=Number(fs.readFileSync(path.join(this.root,'qemu.pid'),'utf8')); const args=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0');return args.includes('stratadashseek-docker') && args.includes('file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback')?pid:null;}catch{return null;}}
  status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,diskCheckedAt:this.diskCheckedAt??null,profile:workerProfile(this.manifest,{driver:this.observedStorageDriver,at:this.storageObservedAt,ready:this.phase==='ready'}),initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
  touch(){this.lastUsed=Date.now();}
  async ensure(){
+  requireControl(this);
   this.touch();const waitUntil=Date.now()+90000;while(this.stopping&&Date.now()<waitUntil)await pause(250);if(this.stopping)throw Error('Docker is still saving its state; retry shortly');
   if(this.pending)return this.pending;
   this.pending=this.start().finally(()=>{this.pending=null;});return this.pending;
  }
  async connectSerial(){
+  requireControl(this);
   if(this.serial&&!this.serial.destroyed)return;
   const socket=net.createConnection(path.join(this.root,'serial.sock'));socket.setEncoding('utf8');
   await new Promise((resolve,reject)=>{socket.once('connect',resolve);socket.once('error',reject);});
@@ -106,6 +115,7 @@ class DockerVM {
   socket.write('\n');
  }
  async start(){
+  requireControl(this);
   if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1){await this.engine.available();return;}
   this.phase='starting';this.error=null;this.scriptSent=false;this.nonce=crypto.randomBytes(8).toString('hex');
   if(this.serial&&!this.serial.destroyed)this.serial.write('\n');
@@ -143,11 +153,13 @@ class DockerVM {
   }catch(e){this.phase='error';this.error=e.message;throw e;}
  }
  async diskFree(){
+  requireControl(this);
   if(!this.serial||this.serial.destroyed)await this.connectSerial();const nonce=crypto.randomBytes(8).toString('hex');
   this.serial.write("printf 'HARNESS_FREE_"+nonce+"=%s\\n' \"$(df -Pk /var/lib/harness | tail -n 1 | awk '{print $4}')\"; printf 'HARNESS_INODES_"+nonce+"=%s\\n' \"$(df -Pi /var/lib/harness | tail -n 1 | awk '{print $4}')\"\n");
   const deadline=Date.now()+5000;while(Date.now()<deadline){const m=this.buffer.match(new RegExp('HARNESS_FREE_'+nonce+'=(\\d+)')),i=this.buffer.match(new RegExp('HARNESS_INODES_'+nonce+'=(\\d+)'));if(m&&i){this.freeBytes=Number(m[1])*1024;this.freeInodes=Number(i[1]);this.diskCheckedAt=Date.now();return this.freeBytes;}await pause(100);}throw Error('Worker disk space and inodes could not be verified');
  }
  async probeOverlay(){
+  requireControl(this);
   if(this.phase!=='ready'||this.saved.controlIsolationVersion!==1||!this.pid()||!this.serial||this.serial.destroyed)throw Error('Overlay probe requires an already ready verified managed worker');
   if(this.overlayProbePending)throw Error('An overlay probe is already running');
   const nonce=crypto.randomBytes(8).toString('hex'),dir='/tmp/harness-overlay-'+nonce,script=Buffer.from(fixedguestOverlayProbe({volumeId32hex:this.manifest.volumeId,nonce16hex:nonce})).toString('base64');
@@ -159,8 +171,9 @@ class DockerVM {
    const deadline=Date.now()+70000;while(Date.now()<deadline){const done=this.buffer.match(new RegExp('(?:^|\\n)HARNESS_OVERLAY_DONE_'+nonce+'=(\\d+)(?:\\r?\\n|$)'));if(done){const result=parseOverlayProbe(this.buffer,nonce),rc=Number(done[1]);if(rc===124||rc===125)throw Error('Overlay probe wrapper cleanup or preparation failed');if(result.supported&&rc!==0)throw Error('Overlay probe success conflicts with its exit status');const report={...result,checkedAt:Date.now()};this.saved.overlayProbe={...report,volumeId:this.manifest.volumeId,alpineSHA256:this.manifest.alpineSHA256};this.save();return report;}await pause(100);}throw Error('Bounded overlay probe did not return a complete result');
   }finally{this.overlayProbePending=null;}
  }
- async remember(){if(this.phase!=='ready')return;const rows=(await this.engine.list()).filter(c=>c.Labels?.[LABEL+'.role']!=='test');this.saved.containers=rows;this.saved.resumeIds=rows.filter(c=>c.State==='running').map(c=>c.Id);this.save();}
+ async remember(){requireControl(this);if(this.phase!=='ready')return;const rows=(await this.engine.list()).filter(c=>c.Labels?.[LABEL+'.role']!=='test');this.saved.containers=rows;this.saved.resumeIds=rows.filter(c=>c.State==='running').map(c=>c.Id);this.save();}
  async stop(){
+  requireControl(this);
   if(this.pending)throw Error('Docker worker is starting');if(this.stopping)throw Error('Docker worker is already stopping');
   if(!this.pid()){this.phase='asleep';return;}
   this.stopping=true;

@@ -26,14 +26,16 @@ class AppsManager {
  save(){this.store.jobs=retainJobs(this.store.jobs,this.store.projects);atomic(this.storeFile,this.store);}
  heartbeat(){const w=this.worker?.status();atomic(this.cfg.activityFile||path.join(this.cfg.stateDir,'activity.json'),{at:Date.now(),active:this.busy||this.previewRequests||this.holdUntil>Date.now()?1:0,lastActivity:this.lastActivity,holdUntil:this.holdUntil,previewRequests:this.previewRequests,servicePid:process.pid,worker:w||null,draining:!!this.sleepToken()});}
  setBusy(value){this.busy=value;this.lastActivity=Date.now();this.heartbeat();}
- requireEnabled(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(!this.cfg.enabled)throw Object.assign(Error('Docker worker is not enabled'),{status:409});}
+ requireEnabled(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(!this.cfg.enabled)throw Object.assign(Error('Docker worker is not enabled'),{status:409,code:'APPS_WORKER_DISABLED'});}
  sleepToken(){if(this.drain&&this.drain.until<=Date.now())this.drain=null;return this.drain?.token;}
  acceptActivity(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(this.sleepToken()){this.drain=null;this.heartbeat();throw Object.assign(Error('Server sleep was cancelled; retry this action shortly'),{status:409});}this.lastActivity=Date.now();this.worker?.touch();this.heartbeat();}
- async ready(){assertStartOutcomesKnown(this);assertDeploymentIdle(this);if(this.worker)await this.worker.ensure();else await this.engine.available();await reconcilePendingCreations(this);await reconcileLegacyCreations(this);}
+ async ready(){this.requireEnabled();assertStartOutcomesKnown(this);assertDeploymentIdle(this);if(this.worker)await this.worker.ensure();else await this.engine.available();await reconcilePendingCreations(this);await reconcileLegacyCreations(this);}
  previewPortFor(project){const reserved=new Set(Object.values(this.store.projects).filter(p=>p.id!==project.id).map(p=>p.previewPort??p.hostPort));const previous=project.previewPort??project.hostPort;if(previous&&!reserved.has(previous))return previous;for(let port=this.cfg.firstPort;port<this.cfg.firstPort+this.cfg.portCount;port++)if(!reserved.has(port))return port;throw Error('Application preview port pool is full');}
  canSleep(){return!this.busy&&!this.previewRequests&&this.holdUntil<=Date.now()&&!this.worker?.pending&&!this.worker?.stopping;}
  hold(minutes){this.requireEnabled();if(!Number.isInteger(minutes)||minutes<0||minutes>60)throw Error('Hold must be 0–60 minutes');this.acceptActivity();this.holdUntil=minutes?Date.now()+minutes*60000:0;this.store.holdUntil=this.holdUntil;this.save();this.heartbeat();return{holdUntil:this.holdUntil};}
  async prepareSleep(){
+  // A disabled controller must never adopt or power off an existing guest.
+  this.requireEnabled();
   if(!this.canSleep())throw Object.assign(Error('Application work or an awake lease is active'),{status:409});
   const token=crypto.randomBytes(16).toString('hex');this.drain={token,until:Date.now()+120000};this.heartbeat();
   try{if(this.worker)await this.worker.stop();if(this.sleepToken()!==token||!this.canSleep())throw Error('New activity cancelled sleep');return{ready:true,token};}catch(e){this.drain=null;throw e;}
@@ -52,7 +54,7 @@ class AppsManager {
   queueMicrotask(async()=>{job.status='running';this.save();try{if(action==='wake')await this.ready();else await this.worker.stop();job.status='passed';this.log(job,action==='wake'?'Docker worker is ready.\n':'Docker worker saved and asleep.\n');}catch(e){job.status='failed';job.error=e.message;this.log(job,e.message+'\n');}finally{this.redactions?.delete(job.id);job.endedAt=Date.now();this.setBusy(null);this.save();}});return job;
  }
  async tick(){
-  this.heartbeat();if(this.ticking||!this.worker||!this.canSleep()||this.sleepToken())return;
+  this.heartbeat();if(!this.cfg.enabled||this.serviceClosing||this.ticking||!this.worker||!this.canSleep()||this.sleepToken())return;
   if(this.worker.phase==='recovering'||this.worker.phase==='ready'&&Date.now()-this.worker.lastUsed>(this.cfg.vm.idleSeconds||120)*1000){
    this.ticking=true;try{assertStartOutcomesKnown(this);assertDeploymentIdle(this,{allowCurrent:false});if(this.worker.phase==='recovering')await this.worker.ensure();else await this.worker.stop();}catch(e){this.worker.error=e.message;}finally{this.ticking=false;this.heartbeat();}
   }
