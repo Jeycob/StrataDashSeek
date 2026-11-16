@@ -4,6 +4,11 @@ const fail = code => Object.assign(Error(code), { code, status: 409 });
 const PROJECTS = '/srv/homeai/projects', TRANSPORT = '/srv/homeai/transport', TOOLCHAIN = '/srv/homeai/toolchain';
 const HEX32 = /^[a-f0-9]{32}$/, HEX16 = /^[a-f0-9]{16}$/;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+function kernelFingerprint(vm) {
+  const fd=fs.openSync(path.join(vm.root,'vmlinuz-virt'),fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+  try { const info=fs.fstatSync(fd);if(!info.isFile()||info.nlink!==1||info.size<1||info.size>64*1024*1024)throw fail('PROJECT_RUNTIME_KERNEL_UNVERIFIED');const bytes=Buffer.alloc(info.size+1),count=fs.readSync(fd,bytes,0,bytes.length,0);if(count!==info.size)throw fail('PROJECT_RUNTIME_KERNEL_UNVERIFIED');return crypto.createHash('sha256').update(bytes.subarray(0,count)).digest('hex'); }
+  finally { fs.closeSync(fd); }
+}
 function openDirectory(directory, uid, gid) {
   if (!path.isAbsolute(directory || '') || directory === path.parse(directory).root || fs.realpathSync(directory) !== directory) throw fail('PROJECT_RUNTIME_EXPORT_PATH_INVALID');
   const fd = fs.openSync(directory, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
@@ -118,7 +123,9 @@ async function proveExports(vm) {
       try { const after = fs.fstatSync(fd); if (!after.isFile() || after.nlink !== 1 || after.dev !== before.dev || after.ino !== before.ino || after.size > 64 || fs.readFileSync(fd,'utf8') !== expected + nonce) throw fail('PROJECT_RUNTIME_SHARE_WITNESS_FAILED'); }
       finally { fs.closeSync(fd); }
     }
-    vm.projectRuntimeIsolation = { version: 1, verified: true, bootPid: pid, projectsRoot: e.projects.path, guestProjectsRoot: PROJECTS, hostDev: e.projects.dev, hostIno: e.projects.ino, uid: e.uid, gid: e.gid, transportRoot: e.transport.path, guestTransportRoot: TRANSPORT, transportDev: e.transport.dev, transportIno: e.transport.ino, transportReadOnly: true, ...(e.toolchain ? {toolchain:{version:1,verified:true,bootPid:pid,root:e.toolchain.path,guestRoot:TOOLCHAIN,manifestSha256:e.toolchain.manifestSha256,hostDev:e.toolchain.dev,hostIno:e.toolchain.ino,readOnly:true}} : {}) };
+    const sourceCommit=path.basename(fs.realpathSync(path.join(__dirname,'..'))),kernelSha256=vm.projectBootKernelSha256??null;
+    if(kernelSha256!==null&&kernelFingerprint(vm)!==kernelSha256)throw fail('PROJECT_RUNTIME_KERNEL_CHANGED');
+    vm.projectRuntimeIsolation = { version: 1, verified: true, bootPid: pid, projectsRoot: e.projects.path, guestProjectsRoot: PROJECTS, hostDev: e.projects.dev, hostIno: e.projects.ino, uid: e.uid, gid: e.gid, transportRoot: e.transport.path, guestTransportRoot: TRANSPORT, transportDev: e.transport.dev, transportIno: e.transport.ino, transportReadOnly: true, kernelSha256, runtimeSourceCommit:/^[a-f0-9]{40}$/.test(sourceCommit)?sourceCommit:null, ...(e.toolchain ? {toolchain:{version:1,verified:true,bootPid:pid,root:e.toolchain.path,guestRoot:TOOLCHAIN,manifestSha256:e.toolchain.manifestSha256,hostDev:e.toolchain.dev,hostIno:e.toolchain.ino,readOnly:true}} : {}) };
   } finally {
     for (const [file, before] of created) { const current = fs.lstatSync(file); if (current.dev !== before.dev || current.ino !== before.ino || current.isSymbolicLink()) throw fail('PROJECT_RUNTIME_SHARE_CLEANUP_REFUSED'); fs.unlinkSync(file); }
   }
@@ -155,6 +162,31 @@ async function prepare(vm, input) {
   await guestScript(vm,script); verifyProcessExports(vm);
   return { version: 1, mtls: true, scopeId: input.scopeId, generation: input.generation, serverName: material.serverName };
 }
+function egressPreparationScript({scopeId,generation,uid,gid}) {
+  if(!HEX32.test(scopeId||'')||!HEX32.test(generation||'')||!Number.isInteger(uid)||uid<1000||uid>65534||!Number.isInteger(gid)||gid<1000||gid>65534)throw fail('PROJECT_RUNTIME_PREPARATION_INVALID');
+  return `set -eu
+mkdir -p /run/homeai-egress
+test -d /run/homeai-egress && test ! -L /run/homeai-egress
+test "$(readlink -f /run/homeai-egress)" = '/run/homeai-egress'
+chmod 0700 /run/homeai-egress
+if test -e /run/homeai-egress/${scopeId}; then test -d /run/homeai-egress/${scopeId} && test ! -L /run/homeai-egress/${scopeId}; else mkdir /run/homeai-egress/${scopeId}; fi
+test "$(readlink -f /run/homeai-egress/${scopeId})" = '/run/homeai-egress/${scopeId}'
+mkdir /run/homeai-egress/${scopeId}/${generation}
+chown ${uid}:${gid} /run/homeai-egress/${scopeId}/${generation}
+chmod 0700 /run/homeai-egress/${scopeId}/${generation}
+`;
+}
+async function prepareEgress(vm,input) {
+  verifyProcessExports(vm);
+  if(!vm.projectRuntimeIsolation?.toolchain?.verified||vm.projectRuntimeIsolation.bootPid!==vm.pid()||input.uid!==vm.projectExports.uid||input.gid!==vm.projectExports.gid)throw fail('PROJECT_RUNTIME_EXPORT_UNVERIFIED');
+  await guestScript(vm,egressPreparationScript(input));verifyProcessExports(vm);
+  return{version:1,profile:'public-https-unix-v1',scopeId:input.scopeId,generation:input.generation};
+}
+async function egressHealth(vm,{scopeId,generation}) {
+  if(!HEX32.test(scopeId||'')||!HEX32.test(generation||''))throw fail('PROJECT_RUNTIME_PREPARATION_INVALID');verifyProcessExports(vm);
+  const socket='/run/homeai-egress/'+scopeId+'/'+generation+'/proxy.sock';
+  try{await guestScript(vm,`set -eu\ntest -S '${socket}' && test ! -L '${socket}'\ntest "$(stat -c %u:%g:%a '${socket}')" = '${vm.projectExports.uid}:${vm.projectExports.gid}:600'\n`,2000);return true;}catch{return false;}
+}
 async function health(vm, { scopeId, generation, guestPort, serverName, timeoutMs = 2000 }) {
   if (!HEX32.test(scopeId || '') || !HEX32.test(generation || '') || serverName !== scopeId+'.'+generation+'.editor.homeai.invalid' || !Number.isInteger(guestPort) || guestPort < 19180 || guestPort > 19243) throw fail('PROJECT_RUNTIME_TRANSPORT_UNVERIFIED');
   verifyProcessExports(vm); const identity = await transportStore(vm).clientIdentity(scopeId,generation);
@@ -164,4 +196,4 @@ async function health(vm, { scopeId, generation, guestPort, serverName, timeoutM
     const timer=setTimeout(()=>finish(false),Math.max(100,Math.min(2000,timeoutMs)));timer.unref();request.on('error',()=>finish(false));request.end();
   });
 }
-module.exports = { openExports, closeExports, qemuArguments, forwards, verifyProcessExports, bootScript, toolchainScript, guestScript, proveExports, preparationScript, prepare, health };
+module.exports = { openExports, closeExports, qemuArguments, forwards, verifyProcessExports, kernelFingerprint, bootScript, toolchainScript, guestScript, proveExports, preparationScript, prepare, egressPreparationScript, prepareEgress, egressHealth, health };

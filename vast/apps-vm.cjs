@@ -155,7 +155,7 @@ class DockerVM {
     '-chardev','socket,id=console,path='+this.root+'/serial.sock,server=on,wait=off','-serial','chardev:console','-qmp','unix:'+this.root+'/qmp.sock,server=on,wait=off','-pidfile',this.root+'/qemu.pid',
     '-kernel',this.root+'/vmlinuz-virt','-initrd',this.root+'/initramfs-virt','-cdrom',this.root+'/alpine.iso','-drive','file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback',
     '-append','console=ttyS0 alpine_dev=cdrom:iso9660 modules=loop,squashfs,sd-mod,usb-storage,virtio_blk quiet cgroup_no_v1=all swapaccount=1','-netdev','user,id=net0,'+forwards.join(','),'-device','virtio-net-pci,netdev=net0'];
-   this.projectRuntimeIsolation=null;this.projectExports=projectVM.openExports(this.cfg);
+   this.projectRuntimeIsolation=null;this.projectBootKernelSha256=this.cfg.projectRuntime?.enabled?projectVM.kernelFingerprint(this):null;this.projectExports=projectVM.openExports(this.cfg);
    if(this.projectExports)args.push(...projectVM.qemuArguments(Boolean(this.projectExports.toolchain)));
    const log=fs.openSync(path.join(this.root,'qemu.log'),'a',0o600);
    try{this.child=cp.spawn('nice',['-n','19','qemu-system-x86_64',...args],{cwd:this.root,stdio:['ignore',log,log,...(this.projectExports?[this.projectExports.projects.fd,this.projectExports.transport.fd,...(this.projectExports.toolchain?[this.projectExports.toolchain.fd]:[])]:[])]});}finally{fs.closeSync(log);projectVM.closeExports(this.projectExports);}
@@ -203,9 +203,11 @@ class DockerVM {
    const deadline=Date.now()+70000;while(Date.now()<deadline){const done=this.buffer.match(new RegExp('(?:^|\\n)HARNESS_OVERLAY_DONE_'+nonce+'=(\\d+)(?:\\r?\\n|$)'));if(done){const result=parseOverlayProbe(this.buffer,nonce),rc=Number(done[1]);if(rc===124||rc===125)throw Error('Overlay probe wrapper cleanup or preparation failed');if(result.supported&&rc!==0)throw Error('Overlay probe success conflicts with its exit status');const report={...result,checkedAt:Date.now()};this.saved.overlayProbe={...report,volumeId:this.manifest.volumeId,alpineSHA256:this.manifest.alpineSHA256};this.save();return report;}await pause(100);}throw Error('Bounded overlay probe did not return a complete result');
   }finally{this.overlayProbePending=null;}
  }
- async remember(){requireControl(this);if(this.phase!=='ready')return;const rows=(await this.engine.list()).filter(c=>c.Labels?.[LABEL+'.role']!=='test');this.saved.containers=rows;this.saved.resumeIds=rows.filter(c=>c.State==='running'&&!/^project-(?:editor|relay|executor)$/.test(c.Labels?.[LABEL+'.role']||'')).map(c=>c.Id);this.save();}
+ async remember(){requireControl(this);if(this.phase!=='ready')return;const rows=(await this.engine.list()).filter(c=>c.Labels?.[LABEL+'.role']!=='test');this.saved.containers=rows;this.saved.resumeIds=rows.filter(c=>c.State==='running'&&!/^project-(?:editor|relay|executor|egress)$/.test(c.Labels?.[LABEL+'.role']||'')).map(c=>c.Id);this.save();}
  async prepareProjectRuntime(input){requireControl(this);return projectVM.prepare(this,input);}
  async projectRuntimeHealth(input){requireControl(this);return projectVM.health(this,input);}
+ async prepareProjectEgress(input){requireControl(this);return projectVM.prepareEgress(this,input);}
+ async projectEgressHealth(input){requireControl(this);return projectVM.egressHealth(this,input);}
  async stop(){
   requireControl(this);
   if(this.pending)throw Error('Docker worker is starting');if(this.stopping)throw Error('Docker worker is already stopping');

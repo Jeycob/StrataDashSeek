@@ -4,6 +4,7 @@ const { createRuntimePlan } = require('./apps-project-runtime-policy.cjs');
 const { createManagedContainer } = require('./apps-container-create.cjs');
 const { startManagedContainer } = require('./apps-managed-resources.cjs');
 const { supportedInfo, inspection } = require('./resource-fixture.cjs');
+const {enableEgressFixture}=require('./project-egress-fixture.cjs');
 const image = 'sha256:' + 'a'.repeat(64), id = 'b'.repeat(64), generation = 'c'.repeat(32), authorityToken = 'd'.repeat(32);
 function fixture(kind = 'executor') {
   const base = path.resolve('/synthetic-projects'), root = path.join(base, 'session-one'), metadata = new Map([[base, { ino: 1 }], [root, { ino: 2 }], [path.join(root, '.git'), { ino: 3 }]]);
@@ -84,4 +85,13 @@ test('configured shared toolchain requires a current boot witness and binds only
   assert.equal(p.body.HostConfig.Mounts.length,8);assert.equal(mounts.length,5);assert(mounts.every(m=>m.ReadOnly&&m.Target==='/opt/'+m.Source.split('/').at(-1)));
   assert.equal(f.job.creations[0].resourcePolicy.policy.projectRuntime.toolchainManifestSha256,digest);assert(p.body.Env.includes('PLAYWRIGHT_BROWSERS_PATH=/opt/playwright/browsers'));
   f.metadata.set(toolRoot,{ino:7,uid:0,gid:0,mode:0o777});f.calls.length=0;await assert.rejects(startManagedContainer(f.m,id),{code:'PROJECT_RUNTIME_TOOLCHAIN_CHANGED'});assert(!f.calls.some(([method])=>method==='POST'));
+});
+
+test('only a private executor grant derives the accepted egress proxy; project stays network-none',async()=>{
+  const f=fixture(),evidence=enableEgressFixture(f),executor=f.plan(),proxy=createRuntimePlan(f.m,f.input,{filesystem:f.filesystem,component:'egress'});
+  assert.equal(executor.body.HostConfig.NetworkMode,'none');assert.deepEqual(executor.body.Entrypoint,['/opt/code-server/lib/node','/opt/homeai/egress-launch.cjs']);
+  assert.equal(proxy.body.HostConfig.NetworkMode,'host');assert.deepEqual(proxy.body.Entrypoint,['/opt/code-server/lib/node','/opt/homeai/connect-proxy.cjs']);assert.deepEqual(proxy.body.Cmd,[]);assert(!proxy.body.HostConfig.Mounts.some(m=>m.Target==='/workspace'||m.Target==='/run/homeai-transport'));
+  const socket=executor.body.HostConfig.Mounts.find(m=>m.Target==='/run/homeai-egress');assert(socket.ReadOnly);assert.equal(proxy.body.HostConfig.Mounts.find(m=>m.Target===socket.Target).Source,socket.Source);assert.equal(proxy.body.HostConfig.Mounts.find(m=>m.Target===socket.Target).ReadOnly,false);
+  await f.create(proxy);await startManagedContainer(f.m,id);evidence.info.uid=1001;f.calls.length=0;await assert.rejects(startManagedContainer(f.m,id),{code:'PROJECT_RUNTIME_EGRESS_ACCEPTANCE_REQUIRED'});assert(!f.calls.some(([method])=>method==='POST'));
+  assert.throws(()=>createRuntimePlan(f.m,{...f.input,kind:'egress'},{filesystem:f.filesystem}),{code:'PROJECT_RUNTIME_REQUEST_INVALID'});
 });

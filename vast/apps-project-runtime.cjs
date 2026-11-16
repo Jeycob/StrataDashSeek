@@ -79,15 +79,27 @@ class ProjectRuntime {
         plan = this.check(input, signal, deadline);
         if (transport?.version !== 1 || transport.mtls !== true || transport.scopeId !== plan.scopeId || transport.generation !== input.generation || transport.serverName !== serverName(plan.scopeId, input.generation)) throw failure('PROJECT_RUNTIME_TRANSPORT_UNVERIFIED');
       }
-      const kinds = input.kind === 'editor' ? ['editor', 'relay'] : ['executor'];
+      if (plan.egress) {
+        if(typeof m.worker.prepareProjectEgress!=='function'||typeof m.worker.projectEgressHealth!=='function')throw failure('PROJECT_RUNTIME_EGRESS_UNAVAILABLE');
+        const prepared=await m.worker.prepareProjectEgress({scopeId:plan.scopeId,generation:input.generation,uid:m.cfg.projectRuntime.uid,gid:m.cfg.projectRuntime.gid});
+        plan=this.check(input,signal,deadline);
+        if(prepared?.version!==1||prepared.profile!=='public-https-unix-v1'||prepared.scopeId!==plan.scopeId||prepared.generation!==input.generation)throw failure('PROJECT_RUNTIME_EGRESS_UNVERIFIED');
+      }
+      const kinds = input.kind === 'editor' ? ['editor', 'relay'] : plan.egress ? ['egress','executor'] : ['executor'];
       for (const kind of kinds) {
         this.check(input, signal, deadline);
-        const current = this.plan(m, input, { guestPort: runtime.guestPort, ...(kind === 'relay' ? { component: 'relay' } : {}) });
+        const current = this.plan(m, input, { guestPort: runtime.guestPort, ...(['relay','egress'].includes(kind) ? { component: kind } : {}) });
         const created = await this.create(m, job, current.body, { runtimeGrant: current.grant, slot: kind, createTimeoutMs: Math.max(1, Math.min(15000, deadline - Date.now())), reconcileMs: 1000 });
         runtime.containerIds[kind] = created.Id; this.save();
         this.check(input, signal, deadline);
         await this.start(m, created.Id, { timeout: Math.max(1, Math.min(15000, deadline - Date.now())) });
         this.check(input, signal, deadline);
+        if(kind==='egress') {
+          let healthy=false;
+          while(Date.now()<deadline){this.check(input,signal,deadline);healthy=await m.worker.projectEgressHealth({scopeId:runtime.scopeId,generation:runtime.generation});this.check(input,signal,deadline);if(healthy===true)break;await this.pause(250);}
+          if(!healthy)throw failure('PROJECT_RUNTIME_EGRESS_UNVERIFIED');
+          const proxy=await this.owned(job,job.creations.find(record=>record.slot==='egress'));this.check(input,signal,deadline);if(!proxy.State.Running)throw failure('PROJECT_RUNTIME_EARLY_EXIT');
+        }
       }
       if (input.kind === 'editor') {
         let healthy = false;
@@ -200,12 +212,17 @@ class ProjectRuntime {
         while (job.projectRuntime.state === 'running') {
           const record = job.creations.find(r => r.slot === 'executor'), c = await this.owned(job, record);
           if (job.projectRuntime.state !== 'running') return;
+          const proxyRecord=job.creations.find(r=>r.slot==='egress');
+          if(c.State.Running&&proxyRecord){const proxy=await this.owned(job,proxyRecord);if(job.projectRuntime.state!=='running')return;if(!proxy.State.Running)throw failure('PROJECT_RUNTIME_EGRESS_EARLY_EXIT');}
           const output = await this.manager.engine.runtimeLogs(c.Id, job.projectId);
           if (job.projectRuntime.state !== 'running') return;
           this.manager.replaceJobLog(job, output);
           if (!c.State.Running) {
             if (!Number.isInteger(c.State.ExitCode) || c.State.ExitCode < 0 || c.State.ExitCode > 255 || c.State.Restarting || c.State.Paused || c.State.Dead) throw failure('PROJECT_RUNTIME_EXIT_UNVERIFIED');
-            job.exitCode = c.State.ExitCode; job.status = c.State.ExitCode === 0 ? 'passed' : 'failed'; job.endedAt = Date.now(); job.projectRuntime.state = 'stopped'; this.save(); return;
+            // Exit of the command is not quiescence while its network
+            // capability remains running. Stop and inspect every paired slot.
+            if(!await this.stopOwned(job))return;
+            job.exitCode = c.State.ExitCode; job.status = c.State.ExitCode === 0 ? 'passed' : 'failed'; job.endedAt = Date.now(); this.save(); return;
           }
           if (Date.now() >= job.projectRuntime.expiresAt) { job.error = 'PROJECT_RUNTIME_LIFETIME_EXPIRED'; if (await this.stopOwned(job)) { job.status = 'failed'; job.endedAt = Date.now(); this.save(); } return; }
           await this.pause(1000);

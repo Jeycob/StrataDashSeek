@@ -26,7 +26,7 @@ function requested(body,imageUser,projectRuntime){
  need(equal(h.CapDrop,['ALL'])&&equal(h.SecurityOpt,['no-new-privileges:true']),'POLICY_INVALID','capabilities-security');
  need(h.RestartPolicy?.Name==='no'&&!(h.RestartPolicy.MaximumRetryCount>0),'POLICY_INVALID','restart-policy');
  need(h.ReadonlyRootfs===undefined||typeof h.ReadonlyRootfs==='boolean','POLICY_INVALID','readonly-root');
- const network=h.NetworkMode||'default';need(['default','bridge','none'].includes(network)||/^sdsh-[a-f0-9]{16}-[a-f0-9]{16}$/.test(network)||/^container:[a-f0-9]{64}$/.test(network)||projectRuntime?.kind==='relay'&&network==='host','POLICY_INVALID','network-mode');
+ const network=h.NetworkMode||'default';need(['default','bridge','none'].includes(network)||/^sdsh-[a-f0-9]{16}-[a-f0-9]{16}$/.test(network)||/^container:[a-f0-9]{64}$/.test(network)||['relay','egress'].includes(projectRuntime?.kind)&&network==='host','POLICY_INVALID','network-mode');
  const capAdd=h.CapAdd||[];need(Array.isArray(capAdd)&&(capAdd.length===0||body.Labels?.[LABEL+'.role']==='data-helper'&&body.User==='0:0'&&equal([...capAdd].sort(),['CHOWN','DAC_READ_SEARCH'])),'POLICY_INVALID','added-capabilities');
  const user=body.User||imageUser||'';need(typeof user==='string'&&user.length<=128&&/^[a-zA-Z0-9_.:-]*$/.test(user),'POLICY_INVALID','user');
  const tmpfs=h.Tmpfs||{};need(typeof tmpfs==='object'&&!Array.isArray(tmpfs)&&Object.keys(tmpfs).length<=4&&Object.entries(tmpfs).every(([k,v])=>(['/tmp','/scratch'].includes(k)||projectRuntime?.kind==='executor'&&k==='/home/coder')&&typeof v==='string'&&v.length<=256&&/^[a-zA-Z0-9_=,:.-]+$/.test(v)),'POLICY_INVALID','tmpfs');

@@ -5,6 +5,7 @@ const { createRuntimePlan } = require('./apps-project-runtime-policy.cjs');
 const { retainJobs } = require('./apps-container-create.cjs');
 const { jobStatus } = require('./apps-job-status.cjs');
 const { supportedInfo, inspection } = require('./resource-fixture.cjs');
+const {enableEgressFixture}=require('./project-egress-fixture.cjs');
 const image = 'sha256:' + 'a'.repeat(64), generation = 'c'.repeat(32), token = 'd'.repeat(32);
 function fixture(kind = 'editor') {
   const base = path.resolve('/synthetic-projects'), root = path.join(base, 'session-one'), containers = new Map(), calls = [];
@@ -36,7 +37,7 @@ function fixture(kind = 'editor') {
   }, async runtimeLogs() { return {stdout:'bounded synthetic output\n',stderr:''}; } };
   const runtime = new ProjectRuntime(m, { plan: (manager, input, options) => createRuntimePlan(manager, input, { ...options, filesystem }) });
   const input = { op: context.op, kind, sessionId: context.sessionId, generation, token, stopToken: 's'.repeat(43), ...(kind === 'executor' ? { command: 'printf test' } : {}) };
-  return { m, runtime, input, context, authority, calls, containers };
+  return { m, runtime, input, context, authority, calls, containers, filesystem };
 }
 test('editor is READY only after both journaled containers and authenticated health; only hashed stop authority persists', async () => {
   const f = fixture(), result = await f.runtime.handle(f.input);
@@ -140,4 +141,22 @@ test('tombstone capacity and durable-save failure never return a stopped acknowl
   f.m.store.projectRuntimeIntents=Object.fromEntries(Array.from({length:4096},(_,i)=>[String(i),{}]));
   await assert.rejects(f.runtime.stop(stop),{code:'PROJECT_RUNTIME_INTENT_REGISTRY_FULL'});assert.equal(Object.keys(f.m.store.projectRuntimeIntents).length,4096);
   f.m.store.projectRuntimeIntents={};f.m.save=()=>{throw Error('SYNTHETIC_DURABILITY_FAILURE');};await assert.rejects(f.runtime.stop(stop),/DURABILITY_FAILURE/);
+});
+
+test('executor exit is not terminal until its paired network capability is stopped and inspected',async()=>{
+  const f=fixture('executor');enableEgressFixture(f);let entered,releaseStop;const stopping=new Promise(r=>entered=r);
+  f.m.onStart=c=>{if(c.Config.Labels['io.stratadashseek.apps.role']==='project-executor'){c.State.Running=false;c.State.ExitCode=17;}};
+  f.m.onStop=c=>{assert.equal(c.Config.Labels['io.stratadashseek.apps.role'],'project-egress');entered();return new Promise(r=>releaseStop=r);};
+  const result=await f.runtime.handle(f.input);await stopping;const job=f.m.store.jobs[0];assert.equal(jobStatus(f.m,job.id).job.terminal,false);assert(active(f.m));assert.equal(job.creations.length,2);
+  releaseStop();await f.runtime.monitors.get(result.jobId);assert.equal(jobStatus(f.m,job.id).job.exitCode,17);assert.equal(jobStatus(f.m,job.id).job.terminal,true);assert([...f.containers.values()].every(c=>!c.State.Running));assert(!active(f.m));
+});
+
+test('a lost proxy stop acknowledgement keeps executor outcome unresolved',async()=>{
+  const f=fixture('executor');enableEgressFixture(f);f.m.onStart=c=>{if(c.Config.Labels['io.stratadashseek.apps.role']==='project-executor'){c.State.Running=false;c.State.ExitCode=0;}};f.m.onStop=()=>{throw Error('SYNTHETIC_LOST_PROXY_STOP');};
+  const result=await f.runtime.handle(f.input);await f.runtime.monitors.get(result.jobId);assert.equal(f.m.store.jobs[0].projectRuntime.state,'reconciliation_required');assert.equal(f.m.store.jobs[0].exitCode,undefined);assert(active(f.m));
+});
+
+test('revoked acceptance after proxy start cannot admit the executor and stops the partial pair',async()=>{
+  const f=fixture('executor'),evidence=enableEgressFixture(f);f.m.onStart=()=>{evidence.info.mode=0o666;};
+  await assert.rejects(f.runtime.handle(f.input),{code:'PROJECT_RUNTIME_EGRESS_ACCEPTANCE_REQUIRED'});assert.equal(f.containers.size,1);assert([...f.containers.values()].every(c=>!c.State.Running));assert(!active(f.m));
 });
