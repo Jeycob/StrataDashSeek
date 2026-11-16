@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import {createRequire} from 'node:module';
 import {sameRequestOrigin,boundedJSON} from './http.mjs';
 import {installDockerResourceRoutes} from './docker-resources.mjs';
+import {runtimeContext} from './runtime-authority.mjs';
 const {atomicJson}=createRequire(import.meta.url)('../mobile/private-json.cjs');
 const fail=code=>Object.assign(Error(code),{code,status:409});
 const pending=op=>op&&['running','reconciliation_required'].includes(op.state);
@@ -35,12 +36,14 @@ export function installDockerCleanup(ctx,manager,appsConfig,callApps){
  const view=value=>({...value,operation:value.operation?{...Object.fromEntries(['id','state','startedAt','finishedAt','results','trigger','errorCode'].map(k=>[k,value.operation[k]])),planId:value.operation.planId??null,planHash:value.operation.planHash??null,selection:value.operation.selection??null}:null});
  // Consistent lock order: workbench queue BEFORE registry queue. Trash itself
  // takes these in that order; the opposite order would deadlock on detach.
- async function gated(action,reserve=[]){return manager.inOrder(()=>barrier.run(async()=>{
+ async function gated(action,reserve=[],deriveRuntime){return manager.inOrder(()=>barrier.run(async()=>{
   if(closed)throw fail('CLEANUP_UNAVAILABLE');const token=crypto.randomBytes(16).toString('hex'),snapshot=await captureAuthority(ctx,manager);
   snapshot.activeIds=[...new Set([...snapshot.activeIds,...ctx.agents.list().filter(a=>a.status==='running').map(a=>a.id)])].sort();
-  atomicJson(authorityFile,{version:1,token,pid:process.pid,expiresAt:Date.now()+300000,...snapshot,reservedIds:reserve});
+  const context=deriveRuntime?await deriveRuntime():null;
+  atomicJson(authorityFile,{version:1,token,pid:process.pid,expiresAt:Date.now()+300000,...snapshot,reservedIds:reserve,...(context?{runtimeContext:context}:{})});
   try{return await action(token);}finally{try{const current=await json(authorityFile);if(current.token===token)await fs.unlink(authorityFile);}catch(e){if(e.code!=='ENOENT')throw e;}}
  }));}
+ manager.withProjectRuntimeAuthority=(input,action)=>gated(action,[],()=>runtimeContext(ctx,manager,input));
  async function runAuto(trigger){if(closed||running)return running;running=(async()=>{
   const preferences=await rpc({op:'preferences'});if(!preferences.enabled||preferences.availability!=='ready')return;
   await gated(async token=>{const current=await readOperation();if(pending(current))return rpc({op:'reconcile',token,operationId:current.id});const preview=await rpc({op:'preview',token,automatic:true});if(preview.availability!=='ready'||!preview.plan?.selection.length)return preview;const grant=await json(authorityFile),fresh=await captureAuthority(ctx,manager);fresh.activeIds=[...new Set([...fresh.activeIds,...ctx.agents.list().filter(a=>a.status==='running').map(a=>a.id)])].sort();atomicJson(authorityFile,{...grant,...fresh,reservedIds:preview.plan.rows.filter(r=>preview.plan.selection.some(x=>x.kind===r.kind&&x.id===r.id)).flatMap(r=>r.sessionIds)});return rpc({op:'apply',token,trigger,planId:preview.plan.id,planHash:preview.plan.hash,selections:preview.plan.selection});});
@@ -69,5 +72,5 @@ export function installDockerCleanup(ctx,manager,appsConfig,callApps){
  }}));
  // Existing housekeeping cadence; recovers missed events after either restart.
  timer=setInterval(()=>{void runAuto('periodic');},60000);timer.unref?.();setImmediate(()=>{void runAuto('periodic');});
- ctx.effect(()=>async()=>{closed=true;clearInterval(timer);await running;barrier.dispose();});return{runAuto};
+ ctx.effect(()=>async()=>{closed=true;delete manager.withProjectRuntimeAuthority;clearInterval(timer);await running;barrier.dispose();});return{runAuto};
 }

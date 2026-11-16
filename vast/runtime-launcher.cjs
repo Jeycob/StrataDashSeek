@@ -55,6 +55,7 @@ class RuntimeLauncher{
   // Runs on every cold/recovery start, under FD9, before any Native/plugin
   // writer is spawned. An unfinished purge must reconcile or keep Native shut.
   await require('./offline-purge-maintenance.cjs').beforeNativeStart({root:this.root,uid:this.uid,broker:this.broker,assertNoAgentProcesses,inheritedLease});
+  await require('./cold-backup.cjs').beforeNativeStart({root:this.root,uid:this.uid,broker:this.broker,assertNoAgentProcesses,inheritedLease});
   this.gatedLaunch={epoch:this.broker.state.epoch,sourceCommit:commit};
   let attempt=runtime.readPrivate(this.root,'runtime-launch-attempt.json');if(attempt?.sourceCommit!==commit)attempt={version:1,sourceCommit:commit,startedAt:Date.now(),phase:'starting'};runtime.writePrivate(this.root,'runtime-launch-attempt.json',attempt);this.launchAttempt=attempt;
   const out=runtime.openLog(this.root,'supervisor'),child=cp.spawn(process.execPath,[path.join(this.root,'releases',commit,'vast/supervisor.cjs')],{cwd:path.join(this.root,'workspaces'),env:{...process.env,HARNESS_RUNTIME_LAUNCHER:'1'},stdio:['ignore',out,out,'ipc','ignore','ignore','ignore','ignore','ignore',9]});fs.closeSync(out);this.supervisor=child;
