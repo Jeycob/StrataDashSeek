@@ -8,7 +8,8 @@ async function fixture(t){
   calls.push({args,execution});assert.equal(args.workdir,'.');assert.equal(args.timeoutMs,30000);assert(args.command.length<65536);assert(args.command.startsWith('/opt/code-server/lib/node -e '));
   // Local synthetic runtime seam only: replace fixed Node path and fixed root
   // inside the quoted helper. Production provides neither override.
-  const command=args.command.replace('/opt/code-server/lib/node',"'"+process.execPath+"'").replace("root = '\\''/workspace'\\''",'root = '+JSON.stringify(root));
+  let command=args.command.replace('/opt/code-server/lib/node',"'"+process.execPath+"'").replace("root = '\\''/workspace'\\''",'root = '+JSON.stringify(root));
+  if(process.env.HOMEAI_TEST_RG)command=command.replace("'\\''/usr/bin/rg'\\''",JSON.stringify(process.env.HOMEAI_TEST_RG));
   return new Promise((resolve,reject)=>{
    const child=spawn('/bin/sh',['-c',command],{stdio:['ignore','pipe','pipe']});let stdout='',stderr='';
    child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('exit',(code,signal)=>resolve({result:{exitCode:code,signal,timedOut:false,aborted:false,stdout:{text:stdout,truncated:false},stderr:{text:stderr,truncated:false}}}));
@@ -30,7 +31,17 @@ test('prepared guest commands preserve UTF8 read windows, writes, exact edits an
 test('outside absolute paths and traversal fail before dispatch; missing operations have no handler',{skip:process.platform==='win32'},async t=>{
  const f=await fixture(t);
  for(const file_path of ['/etc/passwd','/trusted/projects/other/a','/workspace/../secret','../other','a/../../x'])await assert.rejects(f.call('read',{file_path}));
- assert.equal(f.calls.length,0);for(const name of ['glob','grep','apply_patch','read_image','str_replace_editor'])assert.equal(f.handlers[name],undefined);
+ assert.equal(f.calls.length,0);for(const name of ['apply_patch','read_image','str_replace_editor'])assert.equal(f.handlers[name],undefined);
+});
+test('actual guest ripgrep preserves regex/glob syntax, ignores VCS for glob and bounds inline results',{skip:process.platform==='win32'},async t=>{
+ const f=await fixture(t);await fs.mkdir(path.join(f.root,'src'));await fs.mkdir(path.join(f.root,'.git'));
+ await fs.writeFile(path.join(f.root,'src/a.js'),'Alpha42\nBeta99\n');await fs.writeFile(path.join(f.root,'src/b.ts'),'Alpha88\n');await fs.writeFile(path.join(f.root,'.git/private'),'Alpha66');
+ const files=await f.call('glob',{pattern:'**/*.{js,ts}',path:'/workspace'});assert(files.text.includes('src/a.js'));assert(files.text.includes('src/b.ts'));assert(!files.text.includes('.git/private'));
+ const matches=await f.call('grep',{pattern:'Alpha[0-9]{2}',include:'*.js',path:'/trusted/projects/one'});assert(matches.text.includes('Alpha42'));assert(!matches.text.includes('Alpha88'));
+ const none=await f.call('grep',{pattern:'NO_MATCH'});assert(none.text.includes('(no matches)'));
+ await fs.writeFile(path.join(f.root,'src/many.txt'),('matched\n').repeat(250));const capped=await f.call('grep',{pattern:'matched'});assert.equal(capped.truncated,true);
+ await assert.rejects(f.call('grep',{pattern:'['}));
+ await fs.symlink('src',path.join(f.root,'linked'));await assert.rejects(f.call('glob',{pattern:'*',path:'linked'}));
 });
 test('guest worker rejects symlinks, hardlinks, FIFO, binary and ambiguous edits',{skip:process.platform==='win32'},async t=>{
  const f=await fixture(t);

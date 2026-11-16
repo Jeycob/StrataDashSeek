@@ -13,7 +13,7 @@ ARG EDITOR_GID=1001
 # No sudo, fixuid, Docker CLI/socket, SSH keys, host toolchain or credentials.
 # apt package versions and final image digest must be recorded by the builder.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git libstdc++6 libatomic1 \
+    && apt-get install -y --no-install-recommends ca-certificates git ripgrep libstdc++6 libatomic1 \
     && rm -rf /var/lib/apt/lists/* \
     && test "$EDITOR_UID" -ge 1000 && test "$EDITOR_GID" -ge 1000 \
     && groupadd -g "$EDITOR_GID" coder \
