@@ -11,6 +11,7 @@ const BOOT_ROOT='/data/harness/docker-worker',ISO_SHA256='157d353f8e54252cad2d98
 const PREFIX='/dev/shm/homeai-project-share-probe-';
 function validate(nonce,securityModel){if(!/^[a-f0-9]{16}$/.test(nonce))throw Error('NONCE_INVALID');if(!['none','mapped-xattr'].includes(securityModel))throw Error('SECURITY_MODEL_NOT_REVIEWED');}
 function fixtureRoot(nonce){validate(nonce,'none');return PREFIX+nonce;}
+function childEvidence(output){return /SHARE_CHILD_POSITIVE=passed/.test(output)&&[0,1,2,3].every(i=>new RegExp('SHARE_CHILD_NEGATIVE_'+i+'=1(?:\\r?\\n|$)').test(output))&&/SHARE_BIND_CHILD_SCOPE=passed/.test(output)&&!/can't create \/dev\/null/.test(output);}
 function checkedCleanup(target){
  if(!new RegExp('^'+PREFIX+'[a-f0-9]{16}$').test(target))throw Error('UNSAFE_CLEANUP_PATH');
  const info=fs.lstatSync(target);if(!info.isDirectory()||info.isSymbolicLink()||fs.realpathSync(target)!==target)throw Error('UNSAFE_CLEANUP_TARGET');
@@ -65,15 +66,22 @@ if test -s /tmp/share-events; then echo SHARE_HOST_INOTIFY=observed; else echo S
 if test -n "$watch"; then kill "$watch" 2>/dev/null || true; wait "$watch" 2>/dev/null || true; fi
 # Independent mount/chroot proof, deliberately not represented as Docker proof.
 prison=/tmp/share-prison-${nonce}
-mkdir -p "$prison/bin" "$prison/lib" "$prison/workspace"
+mkdir -p "$prison/bin" "$prison/lib" "$prison/workspace" "$prison/dev"
+printf '' > "$prison/dev/null"
 cp /bin/busybox "$prison/bin/"
 for lib in /lib/ld-musl-*.so.1; do test ! -f "$lib" || cp "$lib" "$prison/lib/"; done
 cat > "$prison/check.sh" <<'CHILD_PROBE'
 set -eu
 test "$(/bin/busybox cat /workspace/live.txt)" = HOST_SECOND_${nonce}
+echo SHARE_CHILD_POSITIVE=passed
+attempt=0
 for f in /workspace/../project-b/other.txt /mnt/project-share-${nonce}/project-b/other.txt /workspace/escape-absolute /workspace/escape-relative; do
-  if /bin/busybox cat "$f" 2>/dev/null | /bin/busybox grep -Eq "SIBLING_${nonce}|HOST_CANARY_${nonce}"; then exit 41; fi
+  if /bin/busybox cat "$f" > /negative-output 2> /negative-error; then echo SHARE_CHILD_UNEXPECTED_READ; exit 41; else status=$?; fi
+  test "$status" -eq 1
+  echo SHARE_CHILD_NEGATIVE_$attempt=$status
+  attempt=$((attempt+1))
 done
+test "$attempt" -eq 4
 CHILD_PROBE
 unshare -m -p -f sh -c '
   set -eu
@@ -125,8 +133,8 @@ async function runProbe({securityModel='none',helpers}={}){
   const canaryUnchanged=fs.readFileSync(fixture.root+'/outside-canary','utf8')==='HOST_CANARY_'+nonce;
   const created=fixture.exported+'/project-a/guest-created.txt',link=fixture.exported+'/project-a/guest-link';
   const metadata=fs.existsSync(created)?{uid:fs.statSync(created).uid,gid:fs.statSync(created).gid,mode:fs.statSync(created).mode&0o777,hostNativeSymlink:fs.existsSync(link)&&fs.lstatSync(link).isSymbolicLink()}:null;
-  return{version:1,startedAt,durationMs:Date.now()-started,reason:canaryUnchanged?reason:'HOST_CANARY_CHANGED',securityModel,peakRssBytes,guestMemoryMiB:384,tcgCacheMiB:32,hostRssLimitMiB:640,vcpus:1,hostWritableDisks:0,networkAdapters:0,syntheticTmpfsExports:1,guestWriteObserved,sameInode,hostWriteSent,hostWriteVisible:/SHARE_HOST_WRITE_VISIBLE=passed/.test(output),canaryUnchanged,metadata,watcherAvailable:/SHARE_WATCHER=started/.test(output),hostInotify:/SHARE_HOST_INOTIFY=observed/.test(output),childScope:/SHARE_BIND_CHILD_SCOPE=passed/.test(output),isoSHA256:ISO_SHA256,output,limits:'9p capability and synthetic mount/chroot scope only; no Docker, production isolation, actual editor watcher, credentials, signal or container-network acceptance.'};
+  return{version:1,startedAt,durationMs:Date.now()-started,reason:canaryUnchanged?reason:'HOST_CANARY_CHANGED',securityModel,peakRssBytes,guestMemoryMiB:384,tcgCacheMiB:32,hostRssLimitMiB:640,vcpus:1,hostWritableDisks:0,networkAdapters:0,syntheticTmpfsExports:1,guestWriteObserved,sameInode,hostWriteSent,hostWriteVisible:/SHARE_HOST_WRITE_VISIBLE=passed/.test(output),canaryUnchanged,metadata,watcherAvailable:/SHARE_WATCHER=started/.test(output),hostInotify:/SHARE_HOST_INOTIFY=observed/.test(output),childScope:childEvidence(output),isoSHA256:ISO_SHA256,output,limits:'9p capability and synthetic mount/chroot scope only; no Docker, production isolation, actual editor watcher, credentials, signal or container-network acceptance.'};
  }finally{for(const fd of fds)fs.closeSync(fd);if(fixture)checkedCleanup(fixture.root);}
 }
-module.exports={qemuArgs,guestScript,fixtureRoot,checkedCleanup,runProbe};
+module.exports={qemuArgs,guestScript,fixtureRoot,checkedCleanup,childEvidence,runProbe};
 if(require.main===module){if(process.argv[2]!=='run-disposable'){console.error('Operator only: project-share-probe.cjs run-disposable [none|mapped-xattr]; fresh quiescence required.');process.exitCode=2;}else runProbe({securityModel:process.argv[3]??'none'}).then(result=>{console.log(JSON.stringify(result));if(result.reason!=='SHARE_OBSERVED')process.exitCode=1;},error=>{console.error(error.message);process.exitCode=1;});}
