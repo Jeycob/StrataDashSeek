@@ -52,9 +52,22 @@ test('actual bind or namespace differences cannot pass the managed start inspect
 });
 test('trusted relay alone can use guest host networking with only its immutable fixed socket directory', async () => {
   const f = fixture('relay'), p = await f.create();
-  assert.equal(p.body.HostConfig.NetworkMode, 'host'); assert.equal(p.body.HostConfig.Mounts.length, 1);
+  assert.equal(p.body.HostConfig.NetworkMode, 'host'); assert.equal(p.body.HostConfig.Mounts.length, 2);
   assert.equal(p.body.HostConfig.Mounts[0].Target, '/run/homeai-editor'); assert.equal(p.body.HostConfig.Mounts[0].ReadOnly, true);
   assert.deepEqual(p.body.Cmd, ['--port', '18400']); await startManagedContainer(f.m, id);
+});
+
+test('one editor authority privately derives its relay with transport keys mounted only into relay', () => {
+  const f = fixture('editor'), editor = f.plan();
+  const relay = createRuntimePlan(f.m, f.input, { filesystem: f.filesystem, guestPort: 19180, component: 'relay' });
+  assert.equal(relay.scopeId, editor.scopeId);
+  assert.equal(relay.body.HostConfig.NetworkMode, 'host');
+  assert(relay.body.HostConfig.Mounts.some(m => m.Target === '/run/homeai-transport' && m.ReadOnly));
+  assert(!editor.body.HostConfig.Mounts.some(m => m.Target === '/run/homeai-transport'));
+  assert(editor.body.Cmd.includes('0600'));
+  assert.throws(() => createRuntimePlan(f.m, { ...f.input, component: 'relay' }, { filesystem: f.filesystem }), { code: 'PROJECT_RUNTIME_REQUEST_INVALID' });
+  const x = fixture();
+  assert.throws(() => createRuntimePlan(x.m, x.input, { filesystem: x.filesystem, component: 'relay' }), { code: 'PROJECT_RUNTIME_REQUEST_INVALID' });
 });
 test('a reconstructed manager cannot automatically resume a runtime using a historical grant', async () => {
   const f = fixture(); await f.create(); const replacement = { ...f.m, store: structuredClone(f.m.store) }; f.calls.length = 0;

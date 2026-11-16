@@ -31,9 +31,13 @@ function createAppsService(cfg={},injected){
   if(req.method==='GET'&&u.pathname==='/release')return json(res,200,{release:await manager.releaseDetail(u.searchParams.get('id'),u.searchParams.get('releaseId'))});
   if(req.method==='GET'&&u.pathname==='/export-download'){const e=manager.exportFile(u.searchParams.get('id')),s=fs.statSync(e.file),release=manager.beginTransfer();res.once('close',release);res.setTimeout(120000,()=>res.destroy());res.writeHead(200,{'Content-Type':'application/gzip','Content-Length':s.size,'Content-Disposition':'attachment; filename="'+e.filename+'"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});const input=fs.createReadStream(e.file);input.on('error',()=>res.destroy());res.on('close',()=>input.destroy());return input.pipe(res);}
   if(req.method!=='POST')return json(res,404,{error:'Not found'});
-  let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>16384)throw Object.assign(Error('Request too large'),{status:413});}let data;try{data=JSON.parse(raw)}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}
+  let raw='';for await(const c of req){raw+=c;if(Buffer.byteLength(raw)>(u.pathname==='/project-runtime'?512*1024:16384))throw Object.assign(Error('Request too large'),{status:413});}let data;try{data=JSON.parse(raw)}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}
   if(!data||typeof data!=='object'||Array.isArray(data))throw Object.assign(Error('Expected an operation object'),{status:400});
   await guardAppsTarget(manager,u.pathname,data);
+  if(u.pathname==='/project-runtime'){
+   const controller=new AbortController(),abort=()=>{if(!res.writableFinished)controller.abort();};req.once('aborted',abort);res.once('close',abort);
+   try{if(req.aborted||res.destroyed)controller.abort();return json(res,200,await manager.projectRuntime(data,{signal:controller.signal}));}finally{req.removeListener('aborted',abort);res.removeListener('close',abort);}
+  }
   if(u.pathname==='/archived-cleanup')return json(res,200,await manager.archivedCleanup.handle(data));
   if(u.pathname==='/resources')return json(res,200,await manager.archivedCleanup.resources(data));
   if(u.pathname==='/register')return json(res,200,await manager.register(data.path,data._contextProjectId));
@@ -51,7 +55,7 @@ function createAppsService(cfg={},injected){
   if(u.pathname==='/project-action')return json(res,202,manager.enqueue(data.id,data.action,{releaseId:data.releaseId,targetId:data.targetId}));
   if(u.pathname==='/container-action')return json(res,200,await manager.containerAction(data.id,data.action));
   return json(res,404,{error:'Not found'});
- }catch(e){const resourceDiagnostic=diagnosticFor(e);if(!res.headersSent)json(res,e.status||400,{error:e.message,...(/^(?:CLEANUP|RESOURCE)_[A-Z_]+$/.test(e.code||'')?{code:e.code}:{}),...(resourceDiagnostic?{code:e.code,resourceDiagnostic}:{})});else res.destroy();}});
+ }catch(e){const resourceDiagnostic=diagnosticFor(e);if(!res.headersSent)json(res,e.status||400,{error:e.message,...(/^(?:CLEANUP|RESOURCE|PROJECT_RUNTIME)_[A-Z_]+$/.test(e.code||'')?{code:e.code}:{}),...(/^[a-f0-9]{32}$/.test(e.operationId||'')?{operationId:e.operationId}:{}),...(/^[a-f0-9]{16}$/.test(e.jobId||'')?{jobId:e.jobId}:{}),...(resourceDiagnostic?{code:e.code,resourceDiagnostic}:{})});else res.destroy();}});
  server.on('close',()=>{clearInterval(clock);for(const p of previews)p.close();});return{server,manager,previews};
 }
 module.exports={createAppsService};
