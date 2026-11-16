@@ -35,7 +35,7 @@ export async function modelCatalog(ctx){
 }
 
 export function createModelSelection(ctx,manager){
- const ownSelections=new Set();
+ const ownSelections=new Set(),restoreErrors=new Map();
  async function agentFor(sessionId){
   await manager.projectFor(sessionId); // Existing server-owned session validation.
   let agent=ctx.agents.get(sessionId);
@@ -47,10 +47,13 @@ export function createModelSelection(ctx,manager){
  async function inspect(sessionId,{catalog=true}={}){
   const {header,live}=await manager.projectFor(sessionId),session=live??{id:sessionId,header},agent=ctx.agents.get(sessionId);
   const preference=manager.data.modelPreferences?.[sessionId];
-  const selected=agent?.model.current?.()??preference?.selection??workspaceRoute(session);
+  let defaults=workspaceRoute(session),workspaceDefaultError=null;
+  try{defaults=await registeredSelection(ctx,defaults,{defaultEffort:true});}catch(error){workspaceDefaultError=error.code??'MODEL_UNAVAILABLE';}
+  const selectionError=restoreErrors.get(sessionId)??null;
+  const selected=selectionError?(preference?.mode==='session'?preference.selection:defaults):(agent?.model.current?.()??preference?.selection??defaults);
   const last=live?.requestHeader?.()?.config;
-  const defaults=workspaceRoute(session),source=preference?.mode??(selected.provider===defaults.provider&&selected.model===defaults.model?'workspace':'session');
-  return{version:1,sessionId,source,selection:route(selected),workspaceDefault:defaults,lastUsed:last?route(last):null,...(catalog?await modelCatalog(ctx):{})};
+  const source=preference?.mode??(selected.provider===defaults.provider&&selected.model===defaults.model?'workspace':'session');
+  return{version:1,sessionId,source,selection:route(selected),selectionError,workspaceDefault:defaults,workspaceDefaultError,lastUsed:last?route(last):null,...(catalog?await modelCatalog(ctx):{})};
  }
  async function select(sessionId,input){
   const agent=await agentFor(sessionId);
@@ -62,24 +65,27 @@ export function createModelSelection(ctx,manager){
    // This appends the SDK's durable session selection, without changing the
    // account-wide default or any other session. A running request keeps its
    // already fixed model; the next step observes this selection.
-   ownSelections.add(sessionId);try{agent.model.select(selection);}finally{ownSelections.delete(sessionId);}
+   ownSelections.add(sessionId);try{agent.model.select(selection);restoreErrors.delete(sessionId);}finally{ownSelections.delete(sessionId);}
    return inspect(sessionId,{catalog:false});
   });
  }
  async function restore(agent){
   if(agent.session.header.origin==='subagent')return;
   const preference=manager.data.modelPreferences?.[agent.session.id];
-  if(preference){const selected=await registeredSelection(ctx,preference.mode==='session'?preference.selection:workspaceRoute(agent.session),{defaultEffort:preference.mode!=='session'});ownSelections.add(agent.session.id);try{agent.model.select(selected);}finally{ownSelections.delete(agent.session.id);}}
+  if(preference){try{const selected=await registeredSelection(ctx,preference.mode==='session'?preference.selection:workspaceRoute(agent.session),{defaultEffort:preference.mode!=='session'});ownSelections.add(agent.session.id);try{agent.model.select(selected);restoreErrors.delete(agent.session.id);}finally{ownSelections.delete(agent.session.id);}}
+   catch{restoreErrors.set(agent.session.id,'MODEL_UNAVAILABLE');}}
  }
  function observe(session,event){
   // Native /model remains a supported entry point. Its newer durable choice
   // must not be overwritten by an older workbench preference after reload.
-  if(event.type!=='model/selection'||ownSelections.has(session.id)||!manager.data.modelPreferences?.[session.id])return;
+  if(event.type!=='model/selection'||ownSelections.has(session.id))return;
+  restoreErrors.delete(session.id);if(!manager.data.modelPreferences?.[session.id])return;
   delete manager.data.modelPreferences[session.id];
   void manager.save().catch(()=>ctx.logger?.warn('Model preference reconciliation was not persisted.'));
  }
- async function restoreAfterDefaults(agent,source,applyDefaults){await applyDefaults(agent,source);await restore(agent);}
- return{inspect,select,restore,restoreAfterDefaults,observe};
+ async function restoreAfterDefaults(agent,source,applyDefaults){try{await applyDefaults(agent,source);}catch(error){if(!['MODEL_UNAVAILABLE','EFFORT_UNAVAILABLE'].includes(error.code))throw error;restoreErrors.set(agent.session.id,error.code);}await restore(agent);}
+ function assertRunnable(agent){const owner=manager.ownerAgent?.(agent)??agent;if(restoreErrors.has(owner.session.id))throw unavailable();}
+ return{inspect,select,restore,restoreAfterDefaults,observe,assertRunnable};
 }
 
 /** Called by the existing workspace settings path before committing overrides. */
@@ -90,6 +96,7 @@ export async function validateWorkspaceModel(ctx,input){
 export function installModelSelection(ctx,manager,{lifecycle=true}={}){
  const models=createModelSelection(ctx,manager);
  if(lifecycle)ctx.on('agent/created',({agent})=>models.restore(agent),{global:true});
+ ctx.on('agent/pre-step',async({agent},next)=>{models.assertRunnable(agent);return next();},{prepend:true,global:true});
  ctx.on('session/event',(session,event)=>models.observe(session,event));
  const reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
  ctx.effect(()=>ctx.connection.fetch.register({path:'/api/workbench/models',methods:['GET','POST'],requestBody:'buffered',async fetch(request){
