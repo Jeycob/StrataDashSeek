@@ -7,30 +7,37 @@ function sdk(){return modules??=(async()=>{
  return{...cordis,SystemPrompt:prompt.default,Tools:tools.default,...pipeline,...scope,LocalJobs:jobs.default,applyJobTools:jobTools.apply,...adapter};
 })();}
 async function eventually(check){for(let i=0;i<200;i++){if(check())return;await new Promise(r=>setTimeout(r,5));}assert.fail('bounded wait');}
-async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=false}={}){
+async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=false,enqueueUncertain=false,recoverEnqueue=false}={}){
  const S=await sdk(),ctx=new S.Context();new S.SystemPrompt(ctx,{});new S.Tools(ctx);
- const agents=new Map(),scopes=[],calls=[],epochs=[];let inEpoch=false,polls=0;
+ const agents=new Map(),scopes=[],calls=[],epochs=[],receipts=new Map();let inEpoch=false,polls=0,retained=0;
  const workspaceRoot=path.resolve('synthetic-apps-workspaces'),root=path.join(workspaceRoot,'owner'),projectId=crypto.createHash('sha256').update(root).digest('hex').slice(0,16),appsId='a'.repeat(16);
  ctx.provide('agents',{get:id=>agents.get(id),list:()=>[...agents.values()]});ctx.provide('sandboxPolicy',{resolve:({session})=>({mode:session.mode??'workspace-write'})});
  const manager={data:{sessions:{},trash:{}},ownerAgent:a=>a?.owner??a,async withProjectRuntimeAuthority(input,action){epochs.push(input);if(authorityFailure)throw Error('AUTHORITY_PRIVATE_PATH');assert(!inEpoch);inEpoch=true;try{return await action('PRIVATE_TOKEN');}finally{inEpoch=false;}}};
  if(jobs){new S.LocalJobs(ctx,{maxConcurrentJobsPerOwner:4,retainBytes:65536,settledRetainBytes:16000,pumpPollMs:2});S.applyJobTools(ctx,{completionDelivery:'quiet',waitTimeoutMs:100,maxWaitTimeoutMs:1000,inlineOutputBytes:4096});}
  const callApps=async(route,data,config)=>{
-  assert(inEpoch,'every HTTP request is inside fresh authority epoch');assert.equal(config.timeoutMs,8000);assert(config.signal);calls.push({route,data});
+  const routePath=new URL(route,'http://local').pathname;
+  assert(inEpoch||['/job-status','/project-request'].includes(routePath),'only captured exact status continuation may run outside fresh authority epoch');assert.equal(config.timeoutMs,8000);assert(config.signal);calls.push({route,data});
   assert(!JSON.stringify({route,data}).includes('PRIVATE_TOKEN'));
   if(route==='/register')return{id:projectId,name:'own',PRIVATE_SECRET:'drop'};
-  if(route==='/project-action')return{id:appsId,projectId,status:'queued',environment:{SECRET:'drop'}};
+  if(route==='/project-action'){assert.match(data.requestId,/^[a-f0-9]{32}$/);assert(receipts.has(data.requestId),'receipt durable before POST');if(enqueueUncertain)throw Error('synthetic uncertain response');return{id:appsId,projectId,status:'queued',environment:{SECRET:'drop'}};}
   const u=new URL(route,'http://local');assert.equal(u.searchParams.get('_contextProjectId'),projectId);
-  if(u.pathname==='/state')return{enabled:true,available:true,busy:false,vault:{SECRET:'drop'},projects:[{id:projectId,name:'own',applicationUrl:'https://preview.example/?appPort=18080',environment:{SECRET:'drop'}},{id:'b'.repeat(16),name:'FOREIGN_PROJECT_SECRET'}],jobs:[{id:appsId,projectId,action:'verify',status:'passed'},{id:'c'.repeat(16),projectId:'b'.repeat(16),action:'verify',status:'passed',error:'FOREIGN_JOB_SECRET'}]};
-  if(u.pathname==='/job-status'){assert.equal(u.searchParams.get('id'),appsId);polls++;const status=hold||polls<2?'running':passed?'passed':'failed';return{version:1,job:{id:appsId,action:'verify',status,terminal:!['running'].includes(status),passed:status==='passed',PRIVATE_SECRET:'drop'}};}
+  if(u.pathname==='/state')return{enabled:true,available:true,busy:hold?appsId:null,vault:{SECRET:'drop'},projects:[{id:projectId,name:'own',applicationUrl:'https://preview.example/?appPort=18080',environment:{SECRET:'drop'}},{id:'b'.repeat(16),name:'FOREIGN_PROJECT_SECRET'}],jobs:enqueueUncertain?[]:[{id:appsId,projectId,action:'verify',status:'passed'},{id:'c'.repeat(16),projectId:'b'.repeat(16),action:'verify',status:'passed',error:'FOREIGN_JOB_SECRET'}]};
+  if(u.pathname==='/job-status'){assert.equal(u.searchParams.get('id'),appsId);polls++;const status=hold||polls<2?'running':passed?'passed':'failed';return{version:1,job:{id:appsId,action:'verify',status,terminal:!['running'].includes(status),passed:status==='passed',workSettled:['passed','failed'].includes(status),PRIVATE_SECRET:'drop'}};}
+  if(u.pathname==='/project-request')return{version:1,requestId:u.searchParams.get('requestId'),state:recoverEnqueue?'recorded':'unknown',...(recoverEnqueue?{job:{id:appsId,action:'verify',status:'running'}}:{})};
   if(u.pathname==='/job-log'){assert.equal(u.searchParams.get('id'),appsId);return{text:'synthetic build error\n'.repeat(2000)};}
   assert.fail('unexpected route '+route);
  };
- const module=S.createProjectAppsTools(ctx,manager,{callApps,appsConfig:{workspaceRoot,keyFile:'PRIVATE_KEY_PATH'},pollMs:10,monitorMs:1000});
+ let retainHeavyToolLease=()=>{retained++;let done=false;return()=>{if(!done){done=true;retained--;}};};
+ if(process.env.HOMEAI_HEAVY_LEASE_MODULE){
+  const lease=await import(pathToFileURL(process.env.HOMEAI_HEAVY_LEASE_MODULE));retainHeavyToolLease=lease.retainHeavyToolLease;
+  ctx.on('tools/execute',async(exec,next)=>{if(exec.name!=='project_apps'||exec.arguments.operation!=='verify_deploy')return next();retained++;const release=lease.bindHeavyToolLease(exec,{release(){retained--;}});try{return await next();}finally{release();}},{global:true});
+ }
+ const module=S.createProjectAppsTools(ctx,manager,{callApps,appsConfig:{workspaceRoot,keyFile:'PRIVATE_KEY_PATH'},receiptStore:{async save(row){receipts.set(row.requestId,{...row});},async remove(id){receipts.delete(id);}},retainHeavyToolLease,pollMs:10,monitorMs:1000});
  const pipeline=new S.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>S.executeToolBatch(input,pipeline,()=>1)});
  function agent(id,{owner,mode}={}){const a={id,owner,status:'idle',inbox:{nextStep:[],remove(){}},session:{id,mode,header:{createdAt:2000},append(){}},inject(){},followup(){}};const scope=S.createScope(ctx,a);a.ctx=scope.ctx;scopes.push(scope);agents.set(id,a);if(!owner)manager.data.sessions[id]={root};return a;}
  async function call(agent,args={operation:'status'},name='project_apps',signal=new AbortController().signal){const toolSet=await ctx.tools.resolve({agent,modelSelection:{provider:'fixture',model:'fixture'},signal:new AbortController().signal});try{const result=await ctx.tools.execute({agent,signal,toolSet,calls:[{id:'apps-call',name,arguments:JSON.stringify(args)}]});return result.results[0].result;}finally{toolSet.dispose();}}
- t.after(async()=>{await module.dispose();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();});
- return{...S,ctx,manager,module,agent,call,calls,epochs,projectId,appsId,root};
+ t.after(async()=>{hold=false;await module.dispose();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();});
+ return{...S,ctx,manager,module,agent,call,calls,epochs,projectId,appsId,root,receipts,setHold:value=>{hold=value;},revoke:()=>{authorityFailure=true;},retained:()=>retained};
 }
 test('actual SDK status filters global Apps state and strips credentials, unrelated metadata and raw objects',async t=>{
  const f=await fixture(t),a=f.agent('owner');const result=await f.call(a);assert.equal(result.isError,false,JSON.stringify(result));assert.equal(result.value.projectId,f.projectId);assert.equal(result.value.project.applicationUrl,'https://preview.example/?appPort=18080');assert.equal(result.value.jobs.length,1);assert(!/SECRET|PRIVATE|environment|vault|FOREIGN/.test(JSON.stringify(result)));
@@ -49,15 +56,34 @@ test('verify_deploy uses real owned SDK job lifecycle and existing register/veri
  const result=await f.call(child,{operation:'verify_deploy'});assert.equal(result.isError,false,JSON.stringify(result));assert.equal(result.value.monitorOnly,true);
  const id=result.value.sdkJobId;assert.equal(f.ctx.jobs.get(id,child.id).owner,child.id);assert.throws(()=>f.ctx.jobs.get(id,other.id),{code:'JOB_FOREIGN_SESSION'});
  await eventually(()=>f.ctx.jobs.get(id,child.id).status==='completed');
+ assert.equal(f.retained(),0);
+ assert.equal(f.receipts.size,0);
  const output=await f.call(child,{job_id:id},'job_output');assert.equal(output.isError,false,JSON.stringify(output));assert.match(JSON.stringify(output),/https:\/\/preview.example/);assert(!/PRIVATE|FOREIGN/.test(JSON.stringify(output)));
  assert.deepEqual(f.calls.slice(0,2).map(c=>c.route),['/register','/project-action']);assert.equal(f.calls[1].data.action,'verify');assert.equal(f.calls[1].data.id,f.projectId);
 });
-test('SDK monitor kill never issues deployment stop/power actions and Apps status remains recoverable',async t=>{
+test('SDK kill retains heavy admission until exact Apps terminal evidence without deployment stop/power actions',async t=>{
  const f=await fixture(t,{hold:true}),a=f.agent('owner');const result=await f.call(a,{operation:'verify_deploy'}),id=result.value.sdkJobId;
  await eventually(()=>f.calls.some(c=>c.route.startsWith('/job-status')));
- const killed=await f.call(a,{job_id:id},'job_kill');assert.equal(killed.isError,false,JSON.stringify(killed));await eventually(()=>f.ctx.jobs.get(id,a.id).status==='killed');
+ const killed=await f.call(a,{job_id:id},'job_kill');assert.equal(killed.isError,false,JSON.stringify(killed));assert.equal(f.ctx.jobs.get(id,a.id).status,'stopping');assert.equal(f.retained(),1);
+ const busy=await f.call(a,{operation:'status'});assert.equal(busy.value.busy,true);assert.equal(busy.value.jobsComplete,false);
+ f.setHold(false);await eventually(()=>f.ctx.jobs.get(id,a.id).status==='killed');assert.equal(f.retained(),0);
  assert(f.calls.every(c=>!c.route.includes('stop')&&!c.route.includes('worker-action')));
  const state=await f.call(a,{operation:'status'});assert.equal(state.isError,false);assert.equal(state.value.jobs[0].id,f.appsId);
+});
+test('uncertain enqueue retains lease despite empty incomplete last30 job view',async t=>{
+ const f=await fixture(t,{enqueueUncertain:true}),a=f.agent('owner'),result=await f.call(a,{operation:'verify_deploy'}),id=result.value.sdkJobId;
+ await eventually(()=>f.ctx.jobs.get(id,a.id).status==='failed');assert.equal(f.retained(),1);
+ const snapshot=await f.call(a,{operation:'status'});assert.deepEqual(snapshot.value.jobs,[]);assert.equal(snapshot.value.jobsComplete,false);assert.equal(snapshot.value.admissionsRequiringReconciliation[0].leaseRetained,true);assert.equal(snapshot.value.admissionsRequiringReconciliation[0].reconciliationRequired,true);
+ assert.equal(f.receipts.size,1);
+});
+test('lost enqueue acknowledgement recovers exact existing request without a second POST',async t=>{
+ const f=await fixture(t,{enqueueUncertain:true,recoverEnqueue:true}),a=f.agent('owner'),result=await f.call(a,{operation:'verify_deploy'}),id=result.value.sdkJobId;
+ await eventually(()=>f.ctx.jobs.get(id,a.id).status==='completed');assert.equal(f.retained(),0);assert.equal(f.receipts.size,0);assert.equal(f.calls.filter(c=>c.route==='/project-action').length,1);assert(f.calls.some(c=>c.route.startsWith('/project-request')));
+});
+test('revoked authority cannot enqueue but exact original status continuation retains and settles lease',async t=>{
+ const f=await fixture(t,{hold:true}),a=f.agent('owner'),result=await f.call(a,{operation:'verify_deploy'}),id=result.value.sdkJobId;
+ await eventually(()=>f.calls.some(c=>c.route.startsWith('/job-status')));f.revoke();assert.equal(f.retained(),1);
+ const denied=await f.call(a,{operation:'register'});assert.equal(denied.isError,true);f.setHold(false);await eventually(()=>f.ctx.jobs.get(id,a.id).status==='completed');assert.equal(f.retained(),0);assert.equal(f.receipts.size,0);assert.equal(f.calls.filter(c=>c.route==='/project-action').length,1);
 });
 test('missing SDK registry and pre-dispatch abort do not enqueue Apps work',async t=>{
  const f=await fixture(t,{jobs:false}),a=f.agent('owner');const unavailable=await f.call(a,{operation:'verify_deploy'});assert.equal(unavailable.isError,true);assert.equal(f.calls.length,0);
