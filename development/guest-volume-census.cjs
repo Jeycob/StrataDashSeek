@@ -90,7 +90,7 @@ docker -H unix:///tmp/homeai-empty.sock info --format 'CENSUS_CAPABILITIES memor
 echo CENSUS_NO_RECLAIMABILITY_OR_ENFORCEMENT_PROOF=1
 `;
 }
-async function runCensus({ helpers = defaultHelpers } = {}) {
+async function runCensus({ helpers = defaultHelpers, guestCommands = guestScript } = {}) {
   if (process.platform !== 'linux' || process.getuid() === 0) throw Error('UNPRIVILEGED_LINUX_OPERATOR_REQUIRED');
   const memory = admission({ meminfo: fs.readFileSync('/proc/meminfo', 'utf8'), cgroup: fs.readFileSync('/proc/self/cgroup', 'utf8'), mountinfo: fs.readFileSync('/proc/self/mountinfo', 'utf8'), read: p => fs.readFileSync(p, 'utf8') });
   const descriptors = [];
@@ -114,7 +114,7 @@ async function runCensus({ helpers = defaultHelpers } = {}) {
       const clean = output.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
       if (!loggingIn && /login:\s*$/.test(clean)) { loggingIn = true; child.stdin.write('root\n'); }
       if (!sent && /(?:localhost:~|\/\s*)#\s*$/.test(clean)) {
-        sent = true; const encoded = Buffer.from(guestScript(nonce)).toString('base64').match(/.{1,160}/g).join('\n');
+        sent = true; const encoded = Buffer.from(guestCommands(nonce)).toString('base64').match(/.{1,160}/g).join('\n');
         child.stdin.write("stty -echo\nbase64 -d > /tmp/census.sh <<'CENSUS_SCRIPT'\n" + encoded + "\nCENSUS_SCRIPT\nsh /tmp/census.sh; printf '\\nCENSUS_DONE_" + nonce + "=%s\\n' \"$?\"\n");
       }
       const done = clean.match(new RegExp('(?:^|\\n)CENSUS_DONE_' + nonce + '=(\\d+)(?:\\r?\\n|$)')); if (done) stop(Number(done[1]) === 0 ? 'READONLY_CENSUS_OBSERVED' : 'GUEST_CENSUS_FAILED');
