@@ -12,7 +12,11 @@ export async function processIdentity(pid = process.pid) {
   if (process.platform === 'linux') {
     try {
       const text = await fs.readFile(`/proc/${pid}/stat`, 'utf8');
-      return text.slice(text.lastIndexOf(') ') + 2).split(' ')[19] + ':' + (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+      const fields = text.slice(text.lastIndexOf(') ') + 2).split(' ');
+      // Exited processes retain /proc identity until their parent reaps them,
+      // but their file descriptors and kernel flocks have already closed.
+      if (fields[0] === 'Z' || fields[0] === 'X') return null;
+      return fields[19] + ':' + (await fs.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
     } catch (e) { if (e.code === 'ENOENT' || e.code === 'ESRCH') return null; return undefined; }
   }
   if (pid === process.pid) return ownPortableIdentity;
