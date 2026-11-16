@@ -2,8 +2,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY_VERSION, validationKind, relativeFile, within, operationFingerprint } from './policy.mjs';
 import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash } from './storage.mjs';
 import { LiveChanges } from './changes.mjs';
@@ -12,11 +10,11 @@ import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, norm
 import { guideFirstCheck, warnStageBudget } from './verification-guidance.mjs';
 import { verificationStatusMayBeMasked } from './shell-status.mjs';
 import { beginUserRequest } from './turn-budget.mjs';
+import { createIndependentProject } from './project-repository.mjs';
 import { prepareAutomaticRequest, automaticReview, admitAutomaticStep } from './automatic-review.mjs';
 import { registeredSelection, validateWorkspaceModel } from './model-selection.mjs';
 import privateSource from './source-private.cjs';
 const { isPrivateSourcePath } = privateSource;
-const run = promisify(execFile);
 const notice = text => ({ id: crypto.randomUUID(), role: 'user', source: { kind: 'workspace-runtime' }, content: [{ type: 'text', text }] });
 
 export class WorkspaceManager {
@@ -89,50 +87,24 @@ export class WorkspaceManager {
         this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save(); return record;
       }
       const settings = this.settings(agent.session), workspace = this.workspaceFor(agent.session);
-      let repository, baseCommit;
-      if (settings.projectMode !== 'fresh' && settings.projectMode !== 'continue') {
-        try {
-          const options = { cwd: current, timeout: 10000, maxBuffer: 4 * 1024 * 1024, env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' } };
-          repository = (await run('git', ['-c', 'core.fsmonitor=false', '-c', 'protocol.allow=never', 'rev-parse', '--show-toplevel'], options)).stdout.trim();
-          baseCommit = (await run('git', ['-c', 'protocol.allow=never', 'rev-parse', '--verify', (settings.baseCommit ?? 'HEAD') + '^{commit}'], options)).stdout.trim();
-          await run('git', ['-c', 'protocol.allow=never', 'rev-list', '--objects', '--missing=error', baseCommit, '--'], options);
-        } catch (error) { if (settings.projectMode === 'worktree') throw new WorkbenchError('COMMIT_REQUIRED', 'Existing projects require an available local Git commit before creating a worktree.'); }
-      }
-      if (repository && !baseCommit) throw new WorkbenchError('COMMIT_REQUIRED', 'Commit the existing repository before creating an isolated checkout.');
-      let root, branch, nativeWorktree = false;
-      if (repository && baseCommit) {
-        const result = await this.ctx.worktrees.create(agent, { from: baseCommit }, signal);
-        root = result.path; branch = result.branch; baseCommit = result.baseCommit; nativeWorktree = true;
-      } else if (settings.projectMode === 'continue') root = await fs.realpath(current);
+      let root, branch, baseCommit, sourceCommit, independentRepository = false;
+      const nativeWorktree = false;
+      if (settings.projectMode === 'continue') root = await fs.realpath(current);
       else {
-        root = path.join(this.projectsRoot, agent.id.replace(/[^a-zA-Z0-9_-]/gu, '_'));
-        await fs.mkdir(root, { mode: 0o700 });
+        ({ root, branch, baseCommit, sourceCommit, independentRepository } = await createIndependentProject({ projectsRoot: this.projectsRoot, sessionId: agent.id, sourceRoot: current, mode: settings.projectMode, baseCommit: settings.baseCommit, signal }));
         this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, root));
         await this.ctx.workingDirectory.set(agent, root, signal);
       }
       const ports = await this.allocatePorts(), databasePath = path.join(root, '.harness', 'data', 'app.sqlite');
-      let gitWritableRoots;
-      if (nativeWorktree) {
-        const gitOptions = { cwd: root, timeout: 10000, env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' } };
-        const gitDir = await fs.realpath((await run('git', ['rev-parse', '--absolute-git-dir'], gitOptions)).stdout.trim());
-        const common = await fs.realpath(path.resolve(root, (await run('git', ['rev-parse', '--git-common-dir'], gitOptions)).stdout.trim()));
-        // Commit metadata only; never grant the source checkout, hooks or config.
-        gitWritableRoots = [gitDir];
-        for (const part of ['objects', 'refs', 'logs']) { const candidate = path.join(common, part); try { gitWritableRoots.push(await fs.realpath(candidate)); } catch {} }
-      }
       await fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
-      if (settings.projectMode !== 'continue') {
-        const ignore = path.join(root, '.gitignore'), before = await fs.readFile(ignore, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
-        if (!before.split(/\r?\n/u).includes('.harness/')) await fs.writeFile(ignore, before + (before.endsWith('\n') || !before ? '' : '\n') + '\n# Private Harness runtime state\n.harness/\n');
-      }
-      record = { root, sourceRoot: current, workspaceId: workspace?.id, ports, databasePath, baseCommit, branch, nativeWorktree, gitWritableRoots, at: Date.now(), settings };
+      record = { root, sourceRoot: current, workspaceId: workspace?.id, ports, databasePath, baseCommit, sourceCommit, branch, independentRepository, nativeWorktree, at: Date.now(), settings };
       this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save();
       await atomicJSON(path.join(root, '.harness', 'project.json'), { sessionId: agent.id, ports, databasePath, baseCommit, root });
       // Change tracking is optional: a full source baseline must never prevent
       // the user's project from starting when disk reserve is unavailable.
       try { await this.changes.initialize(agent.id, record, { projectCreated: true, signal }); }
       catch (error) { this.ctx.logger?.warn('Change baseline unavailable: ' + (error.code ?? 'CHANGES_UNAVAILABLE')); }
-      this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec use the same confined foreground project executor and export PORT, API_PORT, DATABASE_URL and the prepared tool paths. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs; quality contract documentation: /data/harness/app/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Verification never renews the total task allowance. Repeated identical errors without progress or an exhausted allowance stop safely with retained files.`));
+      this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${sourceCommit ? `Source commit: ${sourceCommit}; independent shallow Git baseline, with no borrowed object store. Source checkout and uncommitted files were not copied or changed.` : independentRepository ? 'This independent task has a new empty Git repository and an initial commit.' : 'This conversation continues in its selected existing directory.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec use the same confined foreground project executor and export PORT, API_PORT, DATABASE_URL and the prepared tool paths. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs; quality contract documentation: /data/harness/app/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Verification never renews the total task allowance. Repeated identical errors without progress or an exhausted allowance stop safely with retained files.`));
       return record;
     });
   }
