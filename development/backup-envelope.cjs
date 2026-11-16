@@ -38,6 +38,7 @@ async function encryptSnapshot({ source, sourceComplete, destination, recipientP
     // link refuses an existing destination on POSIX and Windows. A partial
     // transfer can never replace an older verified archive.
     await fsp.link(temporary, destination); published = true; await fsp.unlink(temporary);
+    if (process.platform !== 'win32') { const directory = await fsp.open(parent, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY); try { await directory.sync(); } finally { await directory.close(); } }
     return { version: 2, encrypted: true, algorithm: 'RSA-OAEP-SHA256+AES-256-GCM', createdAt: JSON.parse(header).createdAt, recipient: fingerprint(key), archiveBytes, bytes: prefix.length + archiveBytes + 16, sha256: hash.digest('hex'), capture };
   } catch (error) { output?.destroy(); if (output && !output.closed) await new Promise(resolve => output.once('close', resolve)); if (owned && !published) await fsp.unlink(temporary).catch(e => { if (e.code !== 'ENOENT') throw e; }); throw error; }
   finally { clear(); }
