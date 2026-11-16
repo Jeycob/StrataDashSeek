@@ -30,12 +30,14 @@ async function readStable(root, relative, limit) {
   const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
   try {
     const opened = await handle.stat();
-    if (!opened.isFile() || opened.dev !== info.dev || opened.ino !== info.ino || opened.size > limit) throw new WorkbenchError('DIFF_CHANGING_FILE', 'The file is being replaced.');
+    if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== info.dev || opened.ino !== info.ino || opened.size > limit) throw new WorkbenchError('DIFF_CHANGING_FILE', 'The file is being replaced.');
     if (process.platform === 'linux') {
       const actual = await fs.realpath('/proc/self/fd/' + handle.fd);
       if (!within(await fs.realpath(root), actual)) throw new WorkbenchError('OUTSIDE_PROJECT', 'File descriptor is outside the project.', 403);
     }
-    const data = await handle.readFile(), after = await handle.stat(), current = await fs.lstat(await canonicalInside(root, relative));
+    const buffer = Buffer.alloc(opened.size + 1); let size = 0;
+    while (size < buffer.length) { const read = await handle.read(buffer, size, buffer.length - size, size); if (!read.bytesRead) break; size += read.bytesRead; }
+    const data = buffer.subarray(0, size), after = await handle.stat(), current = await fs.lstat(await canonicalInside(root, relative));
     if (data.length > limit || opened.size !== after.size || opened.mtimeMs !== after.mtimeMs || after.ino !== current.ino || after.dev !== current.dev || current.size !== after.size || current.mtimeMs !== after.mtimeMs) throw new WorkbenchError('DIFF_CHANGING_FILE', 'The file changed during comparison.');
     return data;
   } finally { await handle.close(); }
