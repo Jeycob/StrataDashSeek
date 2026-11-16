@@ -23,9 +23,12 @@ and do not launch any writer until the capture settles. The witness hash binds
 that exact launch epoch and lease, not a caller-supplied arbitrary boolean.
 The module cannot manufacture this proof and has no supervisor control API.
 
-Place the encrypted output in an explicitly budgeted, root-private tmpfs
-directory. Local disk and RAM reserves must be admitted by the launcher before
-invoking the primitive; tmpfs capacity alone is not available physical memory.
+The cold hook uses the persistent, root-private directory
+`root-secrets/runtime/backup-outbox`, with an explicit maximum of 256 MiB and a
+2 GiB free-disk reserve. The operational configuration may select a smaller cap.
+It refuses existing orphan files and retains an unacknowledged snapshot rather
+than accumulating or deleting archives. A cold capture never relies on tmpfs
+surviving an instance stop.
 The capture creates no plaintext archive and never replaces an existing backup.
 Only after stream completion, successful producer exit, unchanged fence and
 fsync does it publish the completed file. The returned receipt contains its
@@ -60,6 +63,35 @@ producers, changed fences, capacity/size/deadline failures, preexisting archives
 and hostile authenticated tar entries are negative cases. This does not prove
 production backup coverage, the launcher fence, transfer acknowledgement,
 retention, key custody or a working periodic schedule.
+
+The implementation in `vast/cold-backup.cjs` runs after offline maintenance and
+before Native starts. The existing FD9 lease and closed admission epoch remain
+held throughout the producer lifetime. All untrusted writers must run under the
+service UID whose absence is checked; another trusted root writer must not run
+concurrently. Failure to observe that fence is fatal to startup. Ordinary backup
+availability failures write `backup-status.json` and allow Native to start.
+An unacknowledged archive or partial publication remains available for explicit
+reconciliation. The hook is inactive until a root-owned `backup-config.json`
+and `backup-recipient.pem` are enrolled in the private runtime state directory.
+
+`development/backup-capture.py` streams only its fixed mappings and records
+coverage inside the archive. Docker's raw disk and volumes are currently outside
+that coverage, as are derived dependency directories and control security state.
+This is a selected-data backup, not a claim that every application volume is
+protected. The metadata-only `backup-census.py` does not establish a writer fence
+or predict actual compressed size.
+
+On the recovery computer, run `node development/backup-pull.cjs CONFIG.json`.
+The private local configuration supplies the existing SSH host/port, pinned
+known-hosts file, identity file, local private-key path and archive directory.
+The client refuses unpinned hosts, checks exact ciphertext bytes and SHA-256,
+authenticates the full GCM envelope, compares capture and recipient metadata,
+and syncs the local file before acknowledging transfer. POSIX also syncs the
+archive directory; standard Node does not offer equivalent directory sync on
+Windows. A failed acknowledgement leaves the verified local archive for retry.
+Wrong keys or incomplete transfers never clear the remote pending receipt.
+Operational keys and archives belong outside the source checkout, under private
+filesystem permissions; neither key is a release artifact.
 
 A daily pull may collect a new cold-start snapshot. If the runtime remained warm
 and no fresh snapshot exists, report `deferred/stale` and the last verified age;

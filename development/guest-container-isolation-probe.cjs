@@ -4,14 +4,24 @@
 const diagnostic = require('./guest-cache-diagnostic.cjs');
 function guestScript(nonce, base = diagnostic.guestScript) {
   if (!/^[a-f0-9]{16}$/.test(nonce)) throw Error('NONCE_INVALID');
-  const prior = base(nonce), marker = 'echo CENSUS_NO_OLD_STORE_RECLAIMABILITY_OR_CONTAINER_ENFORCEMENT_PROOF=1';
+  // Package setup + cgroup topology only: avoid two redundant daemon cycles
+  // before this bounded combined proof. VFS/overlay2 readiness was recorded.
+  const prior = base(nonce, undefined, {skipDaemonProbe:true}), marker = 'echo CENSUS_NO_OLD_STORE_RECLAIMABILITY_OR_CONTAINER_ENFORCEMENT_PROOF=1';
   if (prior.split(marker).length !== 2) throw Error('CENSUS_TEMPLATE_CHANGED');
   return prior.slice(0, prior.indexOf(marker)) + `
 echo ISOLATION_SCOPE=fresh_guest_RAM_synthetic_no_production_project
 mkdir /tmp/isolation-docker /tmp/isolation-rootfs /tmp/isolation-a /tmp/isolation-b
-dockerd --data-root=/tmp/isolation-docker --exec-root=/tmp/isolation-exec --pidfile=/tmp/isolation.pid --host=unix:///tmp/isolation.sock --storage-driver=vfs --bridge=none --iptables=false --ip-forward=false --ip-masq=false > /tmp/isolation-daemon.log 2>&1 &
+daemon_group=/sys/fs/cgroup/homeai-probe-daemons/isolation
+mkdir "$daemon_group"
+test -f "$daemon_group/memory.swap.max"
+sh -c 'group=$1; shift; printf "%s\\n" "$$" > "$group/cgroup.procs"; exec "$@"' probe "$daemon_group" dockerd --data-root=/tmp/isolation-docker --exec-root=/tmp/isolation-exec --pidfile=/tmp/isolation.pid --host=unix:///tmp/isolation.sock --storage-driver=vfs --cgroup-parent=/homeai-probe-containers --bridge=none --iptables=false --ip-forward=false --ip-masq=false > /tmp/isolation-daemon.log 2>&1 &
 daemon=$!; attempt=0
+trap 'kill "$daemon" 2>/dev/null || true; wait "$daemon" 2>/dev/null || true' EXIT
 until docker -H unix:///tmp/isolation.sock info --format '{{.CgroupVersion}}' > /tmp/isolation-ready 2>/dev/null; do attempt=$((attempt+1)); test "$attempt" -lt 20; kill -0 "$daemon"; sleep 1; done
+test "$(cat /proc/$daemon/cgroup)" = '0::/homeai-probe-daemons/isolation'
+test -f "$daemon_group/memory.swap.max"
+echo ISOLATION_DAEMON_CGROUP=/homeai-probe-daemons/isolation
+echo ISOLATION_DAEMON_SWAP_CONTROL=present
 docker -H unix:///tmp/isolation.sock info --format '{{.MemoryLimit}} {{.SwapLimit}} {{.CPUCfsPeriod}} {{.CPUCfsQuota}} {{.PidsLimit}} {{.CgroupVersion}}' > /tmp/isolation-caps
 test "$(cat /tmp/isolation-caps)" = 'true true true true true 2'
 echo ISOLATION_REQUIRED_DAEMON_CAPABILITIES=passed
@@ -43,6 +53,9 @@ test "$($bb cat /sys/fs/cgroup/memory.max)" = 67108864
 test "$($bb cat /sys/fs/cgroup/memory.swap.max)" = 0
 test "$($bb cat /sys/fs/cgroup/pids.max)" = 32
 test "$($bb cat /sys/fs/cgroup/cpu.max)" = '50000 100000'
+test "$($bb cat /proc/self/cgroup)" = '0::/'
+test "$($bb cat /sys/fs/cgroup/cgroup.type)" = domain
+test "$($bb cat /sys/fs/cgroup/cgroup.procs | $bb grep -cx "$$")" = 1
 echo ISOLATION_UID_CAPS_NNP_CGROUP_READBACK=passed
 test "$($bb cat /workspace/own)" = OWN_INITIAL
 printf OWN_WRITTEN > /workspace/own

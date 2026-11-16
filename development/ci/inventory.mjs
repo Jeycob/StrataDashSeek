@@ -11,7 +11,7 @@ const helpers = new Map([
 const hostFixtures = new Map([
   ['workspace/code-server.browser.test.cjs', 'Actual code-server acceptance against an explicitly prepared local WSL fixture and HOMEAI_EDITOR_URL; independently observed Chrome/WebKit evidence remains separate from portable Native panel fixtures.'],
   ['development/guest-capability-probe.cjs', 'Operator-only disposable QEMU guest using pinned installed boot artifacts after fresh host quiescence; no production host or installed ISO in CI. Plan tests run separately.'],
-  ...['guest-volume-census','guest-cache-diagnostic','guest-container-isolation-probe','project-share-probe'].map(name=>['development/'+name+'.cjs','Operator-only bounded disposable guest acceptance using existing pinned boot artifacts; original data is read-only or only synthetic tmpfs is writable. Separate plan tests remain required in CI.']),
+  ...['guest-volume-census','guest-cache-diagnostic','guest-container-isolation-probe','project-share-probe','project-container-share-probe'].map(name=>['development/'+name+'.cjs','Operator-only bounded disposable guest acceptance using existing pinned boot artifacts; original data is read-only or only synthetic tmpfs is writable. Separate plan tests remain required in CI.']),
   ['deployments/apps-live-lifecycle-check.cjs', 'Explicit live demo lifecycle check reads the installed private worker key; operator-run acceptance only.'],
   ['deployments/apps-real-worker-check.cjs', 'Acceptance against an explicitly prepared dedicated Docker worker; no such host or credentials in CI.'],
   ['deployments/docker-worker-provision-check.cjs', 'Operator check of the installed Docker VM/engine; not a disposable unit fixture.'],
@@ -19,7 +19,7 @@ const hostFixtures = new Map([
   ['workspace/reasoning-smoke.cjs', 'Legacy fixture requires installed host profiles; current-source unit/SDK checks are separate.']
 ]);
 const linuxChecks = new Set(['deployments/worker-network-linux-check.cjs','vast/runtime-paths-linux-check.cjs', 'vast/startup-update-linux-check.cjs', 'workspace/process-lock-linux-check.mjs', 'workspace/checkpoint-restore-linux-check.mjs', 'mobile/runtime-readiness-native-check.cjs', 'vast/apps-context-linux-check.cjs','vast/runtime-lease-linux-check.cjs','vast/startup-hook-linux-check.cjs']);
-const rootTests = new Set(['mobile/runtime-readiness.test.cjs', 'vast/apps-data-linux-check.cjs']);
+const rootTests = new Set(['mobile/runtime-readiness.test.cjs', 'vast/apps-data-linux-check.cjs','workspace/editor-transport.test.cjs']);
 export function candidate(name) {
   if (hostFixtures.has(name.replaceAll('\\', '/'))) return true;
   const base = path.posix.basename(name);

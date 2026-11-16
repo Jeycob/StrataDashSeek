@@ -2,7 +2,18 @@
 // Source-only operator extension of the same <=180s RO-disk census runner.
 // No network, old data-root daemon, persistent writes, container or image runs.
 const census = require('./guest-volume-census.cjs');
-function guestScript(nonce, base = census.guestScript) {
+function cgroupSetup() { return `
+# Root is exempt from cgroup v2's no-internal-process constraint. Daemons
+# occupy leaves; container delegation uses a DIFFERENT empty parent.
+for controller in cpu memory pids; do grep -qw "$controller" /sys/fs/cgroup/cgroup.controllers; done
+printf '+cpu +memory +pids' > /sys/fs/cgroup/cgroup.subtree_control
+mkdir /sys/fs/cgroup/homeai-probe-daemons /sys/fs/cgroup/homeai-probe-containers
+printf '+cpu +memory +pids' > /sys/fs/cgroup/homeai-probe-daemons/cgroup.subtree_control
+printf '+cpu +memory +pids' > /sys/fs/cgroup/homeai-probe-containers/cgroup.subtree_control
+test -z "$(cat /sys/fs/cgroup/homeai-probe-containers/cgroup.procs)"
+`;
+}
+function guestScript(nonce, base = census.guestScript, {skipDaemonProbe = false} = {}) {
   const original = base(nonce), marker = '# Cached signed packages only. APK must fail if the cache is incomplete.';
   if (original.split(marker).length !== 2) throw Error('CENSUS_TEMPLATE_CHANGED');
   return original.slice(0, original.indexOf(marker)) + `
@@ -69,15 +80,20 @@ fi
 printf '\\nrc_cgroup_mode="unified"\\n' >> /etc/rc.conf
 rc-service cgroups start > /tmp/census-cgroup.log 2>&1
 test -f /sys/fs/cgroup/cgroup.controllers
+${cgroupSetup()}
 if modprobe overlay > /tmp/census-overlay-module.log 2>&1 && grep -qw overlay /proc/filesystems; then echo CENSUS_OVERLAY_MODULE=available;
 else echo CENSUS_OVERLAY_MODULE=unavailable; fi
+${skipDaemonProbe ? '' : `
 daemon=''
 trap 'if test -n "$daemon"; then kill "$daemon" 2>/dev/null || true; wait "$daemon" 2>/dev/null || true; fi' EXIT
 for driver in vfs overlay2; do
   root=/tmp/homeai-empty-$driver
   socket=/tmp/homeai-$driver.sock
   mkdir "$root"
-  dockerd --data-root="$root" --exec-root=/tmp/homeai-exec-$driver --pidfile=/tmp/homeai-$driver.pid --host=unix://$socket --storage-driver="$driver" --bridge=none --iptables=false --ip-forward=false --ip-masq=false > /tmp/census-daemon.log 2>&1 &
+  daemon_group=/sys/fs/cgroup/homeai-probe-daemons/$driver
+  mkdir "$daemon_group"
+  test -f "$daemon_group/memory.swap.max"
+  sh -c 'group=$1; shift; printf "%s\\n" "$$" > "$group/cgroup.procs"; exec "$@"' probe "$daemon_group" dockerd --data-root="$root" --exec-root=/tmp/homeai-exec-$driver --pidfile=/tmp/homeai-$driver.pid --host=unix://$socket --storage-driver="$driver" --cgroup-parent=/homeai-probe-containers --bridge=none --iptables=false --ip-forward=false --ip-masq=false > /tmp/census-daemon.log 2>&1 &
   daemon=$!; ready=0; attempt=0
   while test "$attempt" -lt 20; do
     if docker -H unix://$socket info --format '{{.CgroupVersion}}' > /tmp/census-ready 2>/dev/null; then ready=1; break; fi
@@ -86,10 +102,14 @@ for driver in vfs overlay2; do
   done
   printf 'CENSUS_NEW_EMPTY_DAEMON driver=%s ready=%s\\n' "$driver" "$ready"
   if test "$ready" = 1; then
+    test "$(cat /proc/$daemon/cgroup)" = "0::/homeai-probe-daemons/$driver"
+    test -f "$daemon_group/memory.swap.max"
+    printf 'CENSUS_DAEMON_CGROUP=%s SWAP_CONTROL=present\\n' "/homeai-probe-daemons/$driver"
     test "$(cat /tmp/census-ready)" = 2
     test -z "$(docker -H unix://$socket ps -aq)"
     test -z "$(docker -H unix://$socket image ls -aq)"
     docker -H unix://$socket info --format 'CENSUS_CAPABILITIES memory={{.MemoryLimit}} swap={{.SwapLimit}} cpuCfsPeriod={{.CPUCfsPeriod}} cpuCfsQuota={{.CPUCfsQuota}} pids={{.PidsLimit}} cgroupVersion={{.CgroupVersion}} cgroupDriver={{.CgroupDriver}} storageDriver={{.Driver}}'
+    test "$(docker -H unix://$socket info --format '{{.SwapLimit}}')" = true
   else
     if grep -Eqi 'failed to mount overlay|overlay.*not supported|driver not supported|no such device' /tmp/census-daemon.log; then echo CENSUS_DAEMON_REASON=STORAGE_UNSUPPORTED;
     else echo CENSUS_DAEMON_REASON=OTHER_REDACTED; fi
@@ -101,7 +121,8 @@ for driver in vfs overlay2; do
   daemon=''
   if test "$driver" = vfs && test "$ready" != 1; then exit 1; fi
 done
+`}
 echo CENSUS_NO_OLD_STORE_RECLAIMABILITY_OR_CONTAINER_ENFORCEMENT_PROOF=1
 `;
 }
-module.exports = { guestScript };
+module.exports = { guestScript, cgroupSetup };

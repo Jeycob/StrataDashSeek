@@ -39,7 +39,7 @@ for file in /workspace/host-absolute /workspace/host-relative /workspace/sibling
  if $bb cat "$file" > /tmp/combined-read 2>/tmp/combined-error; then echo COMBINED_PRIVATE_READ_ALLOWED; exit 61; else status=$?; fi
  test "$status" -eq 1
  echo COMBINED_READ_NEGATIVE_$index=$status
- if printf forbidden > "$file" 2>/tmp/combined-error; then echo COMBINED_PRIVATE_WRITE_ALLOWED; exit 62; else status=$?; fi
+ if { printf forbidden > "$file"; } 2>/tmp/combined-error; then echo COMBINED_PRIVATE_WRITE_ALLOWED; exit 62; else status=$?; fi
  test "$status" -eq 1
  echo COMBINED_WRITE_NEGATIVE_$index=$status
  index=$((index+1))
@@ -68,7 +68,7 @@ timeout 10 docker -H unix:///tmp/isolation.sock run --name homeai-transport-scop
   echo COMBINED_TRANSPORT_NEGATIVE_$index=$status
   index=$((index+1))
  done
- if printf forbidden > /run/homeai-transport/canary 2>/tmp/err; then exit 64; else status=$?; fi
+ if { printf forbidden > /run/homeai-transport/canary; } 2>/tmp/err; then exit 64; else status=$?; fi
  test "$status" -eq 1
  echo COMBINED_TRANSPORT_READONLY=passed
  '

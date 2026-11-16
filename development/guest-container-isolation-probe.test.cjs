@@ -9,6 +9,11 @@ test('actual proof is restricted to new RAM daemon and two synthetic constrained
   assert.doesNotMatch(runs.join('\n'), /old-volume|--privileged|--network=host|--pid=host|--cap-add|--device/);
   assert.match(script, /--data-root=\/tmp\/isolation-docker/);
   assert.match(script, /test "\$\(cat \/tmp\/isolation-caps\)" = 'true true true true true 2'/);
+  assert.equal(script.split('\n').filter(line=>line.includes(' dockerd ')).length,1,'combined proof must not spend its bounded window on redundant daemon cycles');
+  assert.match(script,/test "\$\(cat \/proc\/\$daemon\/cgroup\)" = '0::\/homeai-probe-daemons\/isolation'/);
+  assert.match(script,/--cgroup-parent=\/homeai-probe-containers/);
+  assert.match(script,/test "\$\(\$bb cat \/proc\/self\/cgroup\)" = '0::\/'/);
+  assert.match(script,/\$bb grep -cx "\$\$"/);
 });
 test('proof has positive witnesses, exact owned canaries and explicit unsupported scope', () => {
   const script = guestScript('b'.repeat(16));
