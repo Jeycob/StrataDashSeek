@@ -35,7 +35,7 @@ function fixture(kind = 'editor') {
     throw Error('UNEXPECTED_REQUEST');
   }, async runtimeLogs() { return {stdout:'bounded synthetic output\n',stderr:''}; } };
   const runtime = new ProjectRuntime(m, { plan: (manager, input, options) => createRuntimePlan(manager, input, { ...options, filesystem }) });
-  const input = { op: context.op, kind, sessionId: context.sessionId, generation, token, ...(kind === 'executor' ? { command: 'printf test' } : {}) };
+  const input = { op: context.op, kind, sessionId: context.sessionId, generation, token, stopToken: 's'.repeat(43), ...(kind === 'executor' ? { command: 'printf test' } : {}) };
   return { m, runtime, input, context, authority, calls, containers };
 }
 test('editor is READY only after both journaled containers and authenticated health; only hashed stop authority persists', async () => {
@@ -101,4 +101,43 @@ test('renewal needs fresh matching Native authority and cannot turn a read-only 
   job.projectRuntime.hardDeadline=Date.now()+1500;const capped=await f.runtime.touch(touch);assert.equal(capped.expiresAt,job.projectRuntime.hardDeadline);
   f.context.readOnly=true;await assert.rejects(f.runtime.touch(touch),{code:'PROJECT_RUNTIME_AUTHORITY_REQUIRED'});
   await f.runtime.stop({op:'stop',sessionId:result.sessionId,generation,stopToken:result.stopToken});
+});
+
+test('stop-before-admission persists a tombstone across restart and prevents every delayed create',async()=>{
+  const f=fixture(),stop={op:'stop',sessionId:f.input.sessionId,generation,stopToken:f.input.stopToken};let saved;
+  f.m.save=()=>{saved=structuredClone(f.m.store);};const reply=await f.runtime.stop(stop);assert.equal(reply.state,'stopped');assert(saved.projectRuntimeIntents);assert(!JSON.stringify(saved).includes(f.input.stopToken));
+  f.m.store=saved;const restarted=new ProjectRuntime(f.m,{plan:f.runtime.plan});
+  await assert.rejects(restarted.handle(f.input),{code:'PROJECT_RUNTIME_GENERATION_ALREADY_RECORDED'});assert.equal(f.containers.size,0);
+  assert.deepEqual(await restarted.stop(stop),reply);
+  await assert.rejects(restarted.stop({...stop,stopToken:'x'.repeat(43)}),{code:'PROJECT_RUNTIME_STOP_AUTHORITY_REQUIRED'});
+});
+
+test('admission intent is durable before VM readiness and cancellation cannot acknowledge in-flight work',async()=>{
+  const f=fixture('executor');let releaseReady,entered;const waiting=new Promise(r=>entered=r);
+  f.m.ready=()=>{assert.equal(f.m.store.jobs.length,1);assert.equal(Object.keys(f.m.store.projectRuntimeIntents).length,1);entered();return new Promise(r=>releaseReady=r);};
+  const pending=f.runtime.handle(f.input);pending.catch(()=>{});await waiting;
+  const stop={op:'stop',sessionId:f.input.sessionId,generation,stopToken:f.input.stopToken};
+  await assert.rejects(f.runtime.stop(stop),{code:'PROJECT_RUNTIME_BUSY'});assert(active(f.m));releaseReady();
+  await assert.rejects(pending,{code:'PROJECT_RUNTIME_ADMISSION_CANCELLED'});assert.equal(f.containers.size,0);assert.equal((await f.runtime.stop(stop)).state,'stopped');assert(!active(f.m));
+});
+
+test('cancellation during a pending create retains busy until the exact partial container is inspected',async()=>{
+  const f=fixture('executor');let releaseCreate,entered;const waiting=new Promise(r=>entered=r);
+  f.m.onCreate=()=>{entered();return new Promise(r=>releaseCreate=r);};const pending=f.runtime.handle(f.input);pending.catch(()=>{});await waiting;
+  const stop={op:'stop',sessionId:f.input.sessionId,generation,stopToken:f.input.stopToken};await assert.rejects(f.runtime.stop(stop),{code:'PROJECT_RUNTIME_BUSY'});
+  releaseCreate();await assert.rejects(pending,{code:'PROJECT_RUNTIME_ADMISSION_CANCELLED'});assert(!f.calls.some(([,route])=>route.endsWith('/start')));assert.equal((await f.runtime.stop(stop)).state,'stopped');
+});
+
+test('a trimmed stopped job retains its generation fence and missing-cap admissions are refused',async()=>{
+  const f=fixture('executor');f.m.onStart=c=>{c.State.Running=false;c.State.ExitCode=0;};const result=await f.runtime.handle(f.input);await f.runtime.monitors.get(result.jobId);
+  f.m.store.jobs=[];await assert.rejects(f.runtime.handle(f.input),{code:'PROJECT_RUNTIME_GENERATION_ALREADY_RECORDED'});
+  assert.equal((await f.runtime.stop({op:'stop',sessionId:f.input.sessionId,generation,stopToken:f.input.stopToken})).state,'stopped');
+  await assert.rejects(f.runtime.handle({...f.input,stopToken:undefined}),{code:'PROJECT_RUNTIME_REQUEST_INVALID'});
+});
+
+test('tombstone capacity and durable-save failure never return a stopped acknowledgement',async()=>{
+  const f=fixture(),stop={op:'stop',sessionId:f.input.sessionId,generation,stopToken:f.input.stopToken};
+  f.m.store.projectRuntimeIntents=Object.fromEntries(Array.from({length:4096},(_,i)=>[String(i),{}]));
+  await assert.rejects(f.runtime.stop(stop),{code:'PROJECT_RUNTIME_INTENT_REGISTRY_FULL'});assert.equal(Object.keys(f.m.store.projectRuntimeIntents).length,4096);
+  f.m.store.projectRuntimeIntents={};f.m.save=()=>{throw Error('SYNTHETIC_DURABILITY_FAILURE');};await assert.rejects(f.runtime.stop(stop),/DURABILITY_FAILURE/);
 });

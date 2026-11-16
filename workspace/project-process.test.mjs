@@ -97,7 +97,7 @@ async function fixture(t, { controller = true, admission = false } = {}) {
 test('real SDK owns a guest-backed background handle and collects its observed remote exit', async t => {
   const f=await fixture(t),owner=f.agent('guest-owner');owner.inbox.remove=()=>false;f.manager.data.sessions[owner.id].independentRepository=true;
   let admission,terminal=false;const requests=[];f.manager.withProjectRuntimeAuthority=async(input,action)=>{assert.equal(input.accessSessionId,owner.id);return action('f'.repeat(32));};
-  const callApps=async(route,data)=>{requests.push([route,data]);if(data?.op==='execute')return admission={version:1,state:'running',sessionId:owner.id,generation:data.generation,jobId:'a'.repeat(16),operationId:'b'.repeat(32),stopToken:'c'.repeat(43)};if(data?.op==='stop'){terminal=true;return{version:1,state:'stopped',sessionId:owner.id,generation:admission.generation,operationId:admission.operationId};}if(route.startsWith('/job-log'))return{text:'guest job output\n'};return{version:1,job:{id:admission.jobId,action:'project-executor',status:terminal?'failed':'running',terminal,...(terminal?{exitCode:23}:{})}};};
+  const callApps=async(route,data)=>{requests.push([route,data]);if(data?.op==='execute')return admission={version:1,state:'running',sessionId:owner.id,generation:data.generation,jobId:'a'.repeat(16),operationId:'b'.repeat(32),stopToken:data.stopToken};if(data?.op==='stop'){terminal=true;return{version:1,state:'stopped',sessionId:owner.id,generation:admission.generation,operationId:admission.operationId};}if(route.startsWith('/job-log'))return{text:'guest job output\n'};return{version:1,job:{id:admission.jobId,action:'project-executor',status:terminal?'failed':'running',terminal,...(terminal?{exitCode:23}:{})}};};
   const guest=createGuestProjectCommandRunner(f.ctx,f.manager,{appsConfig:{projectRuntime:{enabled:true}},callApps,pollMs:1,wait:()=>new Promise(r=>setTimeout(r,1))});
   f.managed.dispose();const managed=createManagedShell(f.ctx,f.manager,guest);managed.install(owner);
   t.after(async()=>{terminal=true;await guest.dispose();managed.dispose();});
@@ -116,7 +116,7 @@ for (const [event, target] of [['policy','owner'],['policy','child'],['archive',
   f.manager.withProjectRuntimeAuthority=async(input,action)=>{assert.equal(input.accessSessionId,child.id);return action('f'.repeat(32));};
   const callApps=async(route,data)=>{
     requests.push([route,data]);
-    if(data?.op==='execute')return admission={version:1,state:'running',sessionId:owner.id,generation:data.generation,jobId:'a'.repeat(16),operationId:'b'.repeat(32),stopToken:'c'.repeat(43)};
+    if(data?.op==='execute')return admission={version:1,state:'running',sessionId:owner.id,generation:data.generation,jobId:'a'.repeat(16),operationId:'b'.repeat(32),stopToken:data.stopToken};
     if(data?.op==='stop'){await new Promise(r=>releaseStop=r);return{version:1,state:'stopped',sessionId:owner.id,generation:admission.generation,operationId:admission.operationId};}
     if(route.startsWith('/job-log'))return{text:'guest still running\n'};
     return{version:1,job:{id:admission.jobId,action:'project-executor',status:'running',terminal:false}};

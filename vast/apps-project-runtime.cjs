@@ -1,6 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
-const { createRuntimePlan } = require('./apps-project-runtime-policy.cjs');
+const { createRuntimePlan, runtimeRequest } = require('./apps-project-runtime-policy.cjs');
 const { createManagedContainer, matches } = require('./apps-container-create.cjs');
 const { startManagedContainer } = require('./apps-managed-resources.cjs');
 const HEX32 = /^[a-f0-9]{32}$/, TOKEN = /^[A-Za-z0-9_-]{43}$/;
@@ -23,7 +23,7 @@ class ProjectRuntime {
     this.create = dependencies.create || createManagedContainer;
     this.start = dependencies.start || startManagedContainer;
     this.pause = dependencies.pause || pause;
-    this.monitors = new Map(); this.stops = new Map();
+    this.monitors = new Map(); this.stops = new Map(); this.admissions = new Set();
   }
   save() { this.manager.save(); this.manager.heartbeat(); }
   port(scopeId) {
@@ -34,9 +34,15 @@ class ProjectRuntime {
     throw failure('PROJECT_RUNTIME_PORT_POOL_FULL');
   }
   check(input, signal, deadline) {
-    if (signal?.aborted || this.manager.serviceClosing || Date.now() >= deadline) throw failure('PROJECT_RUNTIME_ADMISSION_CANCELLED');
+    if (signal?.aborted || this.manager.serviceClosing || Date.now() >= deadline || this.intents()[hash(input.sessionId+'\0'+input.generation)]?.state === 'cancelled') throw failure('PROJECT_RUNTIME_ADMISSION_CANCELLED');
     // Re-read both protected Native authority and current source/VM identities.
     return this.plan(this.manager, input);
+  }
+  intents() { return this.manager.store.projectRuntimeIntents ??= {}; }
+  newIntent(input, operationId, state) {
+    const intents = this.intents(), key = hash(input.sessionId+'\0'+input.generation);
+    if (intents[key] || Object.keys(intents).length >= 4096) throw failure('PROJECT_RUNTIME_INTENT_REGISTRY_FULL');
+    return intents[key] = { version: 1, operationId, sessionId: input.sessionId, generation: input.generation, stopTokenHash: hash(input.stopToken), state };
   }
   async handle(input, { signal } = {}) {
     if (input?.op === 'stop') return this.stop(input);
@@ -45,6 +51,8 @@ class ProjectRuntime {
     m.requireEnabled();
     if (!m.cfg.projectRuntime?.enabled) throw failure('PROJECT_RUNTIME_ISOLATION_UNAVAILABLE');
     if (!input || !['editor', 'executor'].includes(input.kind)) throw failure('PROJECT_RUNTIME_REQUEST_INVALID');
+    const { context } = runtimeRequest(m, input);
+    if (this.intents()[hash(input.sessionId+'\0'+input.generation)]) throw failure('PROJECT_RUNTIME_GENERATION_ALREADY_RECORDED');
     if (m.busy || active(m)) {
       // Other READY editors and running executors may coexist. Admission and
       // unresolved outcomes remain serialized with the existing Apps journal.
@@ -55,16 +63,15 @@ class ProjectRuntime {
     m.acceptActivity();
     const admissionId = crypto.randomBytes(16).toString('hex'), deadline = Date.now() + 90000;
     m.setBusy(admissionId);
-    let job, stopToken;
+    let job; const stopToken = input.stopToken;
     try {
       if (signal?.aborted) throw failure('PROJECT_RUNTIME_ADMISSION_CANCELLED');
+      const intent = this.newIntent(input, admissionId, 'recorded');
+      const runtime = { version: 1, operationId: admissionId, sessionId: input.sessionId, generation: input.generation, scopeId: hash(input.sessionId+'\0'+context.projectRoot).slice(0,32), projectRoot: context.projectRoot, readOnly: context.readOnly, kind: input.kind, state: 'admitting', stopTokenHash: intent.stopTokenHash, bootPid: null, containerIds: {} };
+      job = { id: crypto.randomBytes(8).toString('hex'), projectId: hash(context.projectRoot).slice(0,16), action: 'project-' + input.kind, status: 'running', startedAt: Date.now(), projectRuntime: runtime, creations: [] };
+      m.store.jobs.push(job); this.admissions.add(job.id); this.save();
       await m.ready();
-      let plan = this.check(input, signal, deadline);
-      const authority = m.archivedCleanup.authority(input.token), context = authority.runtimeContext;
-      stopToken = crypto.randomBytes(32).toString('base64url');
-      const runtime = { version: 1, operationId: admissionId, sessionId: input.sessionId, generation: input.generation, scopeId: plan.scopeId, projectRoot: context.projectRoot, readOnly: context.readOnly, kind: input.kind, state: 'admitting', stopTokenHash: hash(stopToken), bootPid: m.worker.pid(), containerIds: {} };
-      job = { id: crypto.randomBytes(8).toString('hex'), projectId: plan.projectId, action: 'project-' + input.kind, status: 'running', startedAt: Date.now(), projectRuntime: runtime, creations: [] };
-      m.store.jobs.push(job); this.save();
+      let plan = this.check(input, signal, deadline); runtime.bootPid = m.worker.pid(); this.save();
       if (input.kind === 'editor') {
         runtime.guestPort = this.port(plan.scopeId);
         if (typeof m.worker.prepareProjectRuntime !== 'function' || typeof m.worker.projectRuntimeHealth !== 'function') throw failure('PROJECT_RUNTIME_TRANSPORT_UNAVAILABLE');
@@ -107,7 +114,7 @@ class ProjectRuntime {
         job.status = 'failed'; job.endedAt = Date.now(); this.save();
       }
       throw error;
-    } finally { if (m.busy === admissionId) m.setBusy(null); }
+    } finally { if (job) this.admissions.delete(job.id); if (m.busy === admissionId) m.setBusy(null); }
   }
   async owned(job, record) {
     const c = await this.manager.engine.json('GET', '/containers/' + (record.containerId || record.name) + '/json', { timeout: 3000 });
@@ -141,11 +148,18 @@ class ProjectRuntime {
     this.save(); return known;
   }
   async stop(input) {
-    if (!input || Object.keys(input).some(k => !['op', 'sessionId', 'generation', 'stopToken'].includes(k)) || !HEX32.test(input.generation || '') || !TOKEN.test(input.stopToken || '') || typeof input.sessionId !== 'string') throw failure('PROJECT_RUNTIME_STOP_AUTHORITY_REQUIRED');
+    if (!input || Object.keys(input).some(k => !['op', 'sessionId', 'generation', 'stopToken'].includes(k)) || !HEX32.test(input.generation || '') || !TOKEN.test(input.stopToken || '') || !/^[A-Za-z0-9_-]{1,128}$/.test(input.sessionId || '')) throw failure('PROJECT_RUNTIME_STOP_AUTHORITY_REQUIRED');
     const jobs = this.manager.store.jobs.filter(job => job.projectRuntime?.sessionId === input.sessionId && job.projectRuntime?.generation === input.generation);
-    if (jobs.length !== 1 || jobs[0].projectRuntime.stopTokenHash !== hash(input.stopToken)) throw failure('PROJECT_RUNTIME_STOP_AUTHORITY_REQUIRED');
+    const key = hash(input.sessionId+'\0'+input.generation), prior = this.intents()[key];
+    if (jobs.length > 1 || prior && prior.stopTokenHash !== hash(input.stopToken) || jobs[0] && jobs[0].projectRuntime.stopTokenHash !== hash(input.stopToken)) throw failure('PROJECT_RUNTIME_STOP_AUTHORITY_REQUIRED');
+    // The authenticated Native endpoint may cancel before a delayed admission
+    // arrives. A durable tombstone prevents every future use of this generation.
+    // Never infer quiescence from a missing job or return an ephemeral 404 ACK.
+    const intent = prior || this.newIntent(input, jobs[0]?.projectRuntime.operationId || crypto.randomBytes(16).toString('hex'), 'cancelled');
+    intent.state = 'cancelled'; this.save();
+    if (!jobs.length) return { version: 1, state: 'stopped', sessionId: input.sessionId, generation: input.generation, operationId: intent.operationId };
     const job = jobs[0], runtime = job.projectRuntime;
-    if (runtime.state === 'admitting') throw failure('PROJECT_RUNTIME_BUSY');
+    if (this.admissions.has(job.id) || runtime.state === 'admitting') throw failure('PROJECT_RUNTIME_BUSY');
     if (runtime.state !== 'stopped' && !await this.stopOwned(job)) throw failure('PROJECT_RUNTIME_RECONCILIATION_REQUIRED', { operationId: runtime.operationId, jobId: job.id });
     if (job.status === 'running') { job.status = 'interrupted'; job.endedAt = Date.now(); this.save(); }
     return { version: 1, state: 'stopped', sessionId: runtime.sessionId, generation: runtime.generation, operationId: runtime.operationId };
@@ -156,7 +170,7 @@ class ProjectRuntime {
     if (jobs.length !== 1 || jobs[0].projectRuntime.stopTokenHash !== hash(input.stopToken)) throw failure('PROJECT_RUNTIME_STOP_AUTHORITY_REQUIRED');
     const runtime = jobs[0].projectRuntime;
     if (runtime.kind !== 'editor' || runtime.state !== 'ready' || runtime.expiresAt <= Date.now() || runtime.hardDeadline <= Date.now()) throw failure('PROJECT_RUNTIME_EDITOR_EXPIRED');
-    const request = { op: 'ensure', kind: 'editor', sessionId: input.sessionId, generation: input.generation, token: input.token };
+    const request = { op: 'ensure', kind: 'editor', sessionId: input.sessionId, generation: input.generation, token: input.token, stopToken: input.stopToken };
     const deadline = Date.now() + 15000, plan = this.check(request, signal, deadline);
     const context = this.manager.archivedCleanup.authority(input.token).runtimeContext;
     if (plan.scopeId !== runtime.scopeId || context.projectRoot !== runtime.projectRoot || context.readOnly !== runtime.readOnly || this.manager.worker.pid() !== runtime.bootPid) throw failure('PROJECT_RUNTIME_AUTHORITY_REQUIRED');

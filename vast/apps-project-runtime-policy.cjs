@@ -17,11 +17,15 @@ function checkProof(manager, filesystem = fs) {
   if (!info.isDirectory() || info.isSymbolicLink() || proof.projectsRoot !== base || proof.hostDev !== info.dev || proof.hostIno !== info.ino || proof.uid !== cfg.uid || proof.gid !== cfg.gid) throw fail('PROJECT_RUNTIME_MAPPING_CHANGED');
   return { cfg, proof, base };
 }
-function createRuntimePlan(manager, input, { guestPort, filesystem = fs, component } = {}) {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['op', 'kind', 'sessionId', 'generation', 'token', 'command'].includes(key)) || !['ensure', 'execute'].includes(input.op) || !['editor', 'executor', 'relay'].includes(input.kind) || !token.test(input.generation || '') || typeof input.sessionId !== 'string') throw fail('PROJECT_RUNTIME_REQUEST_INVALID');
+function runtimeRequest(manager, input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['op', 'kind', 'sessionId', 'generation', 'token', 'command', 'stopToken'].includes(key)) || !['ensure', 'execute'].includes(input.op) || !['editor', 'executor', 'relay'].includes(input.kind) || !token.test(input.generation || '') || !/^[A-Za-z0-9_-]{1,128}$/.test(input.sessionId || '') || !/^[A-Za-z0-9_-]{43}$/.test(input.stopToken || '')) throw fail('PROJECT_RUNTIME_REQUEST_INVALID');
   if (input.kind === 'executor' ? input.op !== 'execute' || typeof input.command !== 'string' || !input.command.trim() || input.command.length > 65536 || input.command.includes('\0') : input.op !== 'ensure' || input.command !== undefined) throw fail('PROJECT_RUNTIME_REQUEST_INVALID');
   const authority = manager.archivedCleanup.authority(input.token), context = authority.runtimeContext;
-  if (!context || context.version !== 1 || ['op', 'kind', 'sessionId', 'generation'].some(key => context[key] !== input[key]) || typeof context.readOnly !== 'boolean' || authority.archivedIds.includes(input.sessionId) || !authority.sessions.some(s => s.id === input.sessionId && s.managed && s.root === context.projectRoot)) throw fail('PROJECT_RUNTIME_AUTHORITY_REQUIRED');
+  if (!context || context.version !== 1 || ['op', 'kind', 'sessionId', 'generation'].some(key => context[key] !== input[key]) || !path.isAbsolute(context.projectRoot || '') || typeof context.readOnly !== 'boolean' || authority.archivedIds.includes(input.sessionId) || !authority.sessions.some(s => s.id === input.sessionId && s.managed && s.root === context.projectRoot)) throw fail('PROJECT_RUNTIME_AUTHORITY_REQUIRED');
+  return { authority, context };
+}
+function createRuntimePlan(manager, input, { guestPort, filesystem = fs, component } = {}) {
+  const { authority, context } = runtimeRequest(manager, input);
   const { cfg, proof, base } = checkProof(manager, filesystem), root = filesystem.realpathSync(context.projectRoot), stat = filesystem.lstatSync(root);
   if (component !== undefined && !(component === 'relay' && input.kind === 'editor' && input.op === 'ensure')) throw fail('PROJECT_RUNTIME_REQUEST_INVALID');
   const kind = component || input.kind;
@@ -62,4 +66,4 @@ function checkStored(manager, stored) {
 }
 function registerRuntimePolicy(manager, policyHash, grant) { const stored = grants.get(grant); if (!stored || stored.manager !== manager) throw fail('PROJECT_RUNTIME_BIND_GRANT_REQUIRED'); let policies = activePolicies.get(manager); if (!policies) { policies = new Map(); activePolicies.set(manager, policies); } for (const [key, value] of policies) if (value.expiresAt <= Date.now()) policies.delete(key); if (policies.size >= 256) throw fail('PROJECT_RUNTIME_ADMISSION_LIMIT'); policies.set(policyHash, stored); }
 function validateRuntimeStart(manager, value) { const stored = activePolicies.get(manager)?.get(value.policyHash); if (!stored || stored.expiresAt <= Date.now() || JSON.stringify(stored.runtime) !== JSON.stringify(Object.fromEntries(Object.entries(value.policy.projectRuntime).filter(([key]) => !['binds','environmentHash'].includes(key))))) throw fail('PROJECT_RUNTIME_FRESH_AUTHORITY_REQUIRED'); checkStored(manager, stored); }
-module.exports = { createRuntimePlan, runtimePolicy, registerRuntimePolicy, validateRuntimeStart, pathHash: hash, launchHash, environmentHash };
+module.exports = { createRuntimePlan, runtimeRequest, runtimePolicy, registerRuntimePolicy, validateRuntimeStart, pathHash: hash, launchHash, environmentHash };

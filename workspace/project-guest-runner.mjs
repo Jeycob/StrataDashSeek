@@ -46,27 +46,30 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
     if (disposed) throw fail('PROJECT_RUNTIME_DISPOSED');
     spec.signal?.throwIfAborted();
     if (accessChanged(spec)) throw fail('PROJECT_RUNTIME_ACCESS_REVOKED');
-    const generation = crypto.randomBytes(16).toString('hex');
+    const generation = crypto.randomBytes(16).toString('hex'), stopToken = crypto.randomBytes(32).toString('base64url');
     let finishAdmission;
     const entry = { spec, controller: new AbortController(), revoked: false, done: new Promise(resolve => { finishAdmission = resolve; }) }; admitting.add(entry);
-    let admission;
+    let admission, admissionError, dispatched = false;
     try {
       admission = await manager.withProjectRuntimeAuthority({ sessionId: spec.sessionId, accessSessionId: spec.accessSessionId, op: 'execute', kind: 'executor', generation }, token => {
         if (accessChanged(spec) || entry.revoked) throw fail('PROJECT_RUNTIME_ACCESS_REVOKED');
-        return rpc('/project-runtime', { op: 'execute', kind: 'executor', sessionId: spec.sessionId, generation, token, command: spec.command }, { signal: AbortSignal.any([entry.controller.signal, ...(spec.signal ? [spec.signal] : [])]), timeoutMs: 125000 });
+        dispatched = true;
+        return rpc('/project-runtime', { op: 'execute', kind: 'executor', sessionId: spec.sessionId, generation, token, stopToken, command: spec.command }, { signal: AbortSignal.any([entry.controller.signal, ...(spec.signal ? [spec.signal] : [])]), timeoutMs: 125000 });
       });
-    } catch (error) { finishAdmission(); throw error; }
+    } catch (error) { if (!dispatched) { finishAdmission(); throw error; } admissionError = error; }
     finally { admitting.delete(entry); }
-    if (admission?.version !== 1 || admission.state !== 'running' || admission.sessionId !== spec.sessionId || admission.generation !== generation || !id16.test(admission.jobId || '') || !id32.test(admission.operationId || '') || !/^[A-Za-z0-9_-]{43}$/.test(admission.stopToken || '')) { finishAdmission(); throw fail('PROJECT_RUNTIME_ADMISSION_UNVERIFIED'); }
+    if (!admissionError && (admission?.version !== 1 || admission.state !== 'running' || admission.sessionId !== spec.sessionId || admission.generation !== generation || !id16.test(admission.jobId || '') || !id32.test(admission.operationId || '') || admission.stopToken !== stopToken)) admissionError = fail('PROJECT_RUNTIME_ADMISSION_UNVERIFIED');
+    if (admissionError) admission = null;
     const stdout = outputBuffer(), stderr = outputBuffer();
     const process = { scope: spec, status: 'running', exitCode: null, signal: null, sandbox: { mode: spec.readOnly ? 'read-only' : 'workspace-write', denied: false, enforcement: 'guest-container' }, observed: { stdout, stderr } };
-    let stopped = false, stopRequested = false, stopPending, resultResolve, resultReject, warned = false, timer;
+    let stopped = false, stopRequested = Boolean(admissionError), stopPending, resultResolve, resultReject, warned = false, timer;
     const result = new Promise((resolve, reject) => { resultResolve = resolve; resultReject = reject; }); result.catch(() => {});
+    if (admissionError) resultReject(fail('PROJECT_RUNTIME_ADMISSION_UNVERIFIED'));
     async function stop() {
       if (stopped) return; if (stopPending) return stopPending;
       stopPending = (async () => {
-        const reply = await rpc('/project-runtime', { op: 'stop', sessionId: spec.sessionId, generation, stopToken: admission.stopToken }, { timeoutMs: 30000 });
-        if (reply?.version !== 1 || reply.state !== 'stopped' || reply.sessionId !== spec.sessionId || reply.generation !== generation || reply.operationId !== admission.operationId) throw fail('PROJECT_RUNTIME_STOP_UNVERIFIED');
+        const reply = await rpc('/project-runtime', { op: 'stop', sessionId: spec.sessionId, generation, stopToken }, { timeoutMs: 30000 });
+        if (reply?.version !== 1 || reply.state !== 'stopped' || reply.sessionId !== spec.sessionId || reply.generation !== generation || !id32.test(reply.operationId || '') || admission && reply.operationId !== admission.operationId) throw fail('PROJECT_RUNTIME_STOP_UNVERIFIED');
         stopped = true; process.status = 'killed'; process.signal = 'SIGTERM';
       })();
       try { await stopPending; } finally { stopPending = undefined; }
