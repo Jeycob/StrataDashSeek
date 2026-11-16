@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { createProjectCommandRunner, registerProjectTool } from './project-tool.mjs';
 import { createManagedShell } from './managed-shell.mjs';
 import { createProjectProcessStarter } from './project-process.mjs';
+import { apply as applyEfficiency } from '../efficiency/plugin.mjs';
 
 let modules;
 function sdk() {
@@ -30,7 +31,7 @@ async function eventually(check) {
 }
 const args = Object.freeze({ command: 'node preview.mjs', description: 'Start the assigned project preview', run_in_background: true });
 
-async function fixture(t, { controller = true } = {}) {
+async function fixture(t, { controller = true, admission = false } = {}) {
   const S = await sdk(), directory = await fs.mkdtemp(path.join(os.tmpdir(), 'owned-project-jobs-'));
   const root = path.join(directory, 'project'); await fs.mkdir(root);
   const ctx = new S.Context(); new S.SystemPrompt(ctx, {}); new S.Tools(ctx);
@@ -62,6 +63,7 @@ async function fixture(t, { controller = true } = {}) {
   const processTimers = { setTimer(fn, ms) { const token = { fn, ms, unref() {} }; timers.add(token); return token; }, clearTimer(token) { timers.delete(token); } };
   const run = createProjectCommandRunner(ctx, manager, { processTimers });
   const managed = createManagedShell(ctx, manager, run); registerProjectTool(ctx, manager, run);
+  if (admission) await applyEfficiency(ctx, { stateDirectory: path.join(directory, 'efficiency'), engineMetrics: false });
   const pipeline = new S.ToolExecutionPipeline(ctx);
   ctx.tools.setExecutor({ describe: defs => ({ schemas: defs.map(({ name, description, parameters }) => ({ name, description, parameters })) }),
     execute: input => S.executeToolBatch(input, pipeline, () => 1) });
@@ -90,6 +92,37 @@ async function fixture(t, { controller = true } = {}) {
   });
   return { ...S, ctx, root, directory, manager, native, managed, run, agent, call, processes, calls, timers, events, notices };
 }
+
+test('two SDK projects share heavy admission for managed bash and project_exec through background process settlement', async t => {
+  const f = await fixture(t, { admission: true }), a = f.agent('heavy-a'), b = f.agent('heavy-b');
+  const command = { command: 'npm run build', description: 'Build synthetic project', run_in_background: true };
+  const first = await f.call(a, 'bash', command); assert.equal(first.isError, false, JSON.stringify(first)); await tick();
+  let acknowledged = false;
+  const second = f.call(b, 'project_exec', command).then(result => { acknowledged = true; return result; });
+  await tick(); assert.equal(acknowledged, false); assert.equal(f.processes.length, 1);
+  // Job inspection remains usable while another project is queued.
+  const output = await f.call(a, 'job_output', { job_id: first.value.jobId });
+  assert.equal(output.isError, false, JSON.stringify(output));
+  const process = f.processes[0]; process.holdShutdown = true;
+  const kill = await f.call(a, 'job_kill', { job_id: first.value.jobId, reason: 'synthetic build cancellation' });
+  assert.equal(kill.isError, false); await tick(); assert.equal(acknowledged, false); assert.equal(f.processes.length, 1);
+  // Sending a signal is not settlement; only actual process.done frees B.
+  process.releaseKill();
+  const next = await second; assert.equal(next.isError, false, JSON.stringify(next)); await tick(); assert.equal(f.processes.length, 2);
+  f.processes[1].finish(); await eventually(() => f.ctx.jobs.get(next.value.jobId, b.id).status === 'completed');
+});
+
+test('cancelled heavy waiter never spawns; lightweight SDK tools remain responsive', async t => {
+  const f = await fixture(t, { admission: true }), a = f.agent('owner-a'), b = f.agent('owner-b');
+  const first = await f.call(a, 'project_exec', { command: 'node compile.mjs', description: 'Compile project', run_in_background: true });
+  assert.equal(first.isError, false); await tick();
+  const controller = new AbortController();
+  const waiting = f.call(b, 'bash', { command: 'npm test', description: 'Test project', run_in_background: true }, controller.signal);
+  await tick(); controller.abort(); const aborted = await waiting; assert.equal(aborted.isError, true); assert.equal(f.processes.length, 1);
+  f.ctx.tools.register({ name: 'fixture_read', description: 'Read a small fixture', parameters: { type: 'object', properties: {} }, output: { schema: { type: 'object' }, render: () => [{ type: 'text', text: 'read' }] }, isConcurrencySafe: () => true, execute: async () => ({ read: true }) });
+  assert.equal((await f.call(b, 'fixture_read', {})).value.read, true);
+  f.processes[0].finish();
+});
 
 test('real SDK managed bash returns canonical background acknowledgement and native job tools collect logs and stop only its job', async t => {
   const f = await fixture(t), owner = f.agent('one');

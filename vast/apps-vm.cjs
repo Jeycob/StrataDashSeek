@@ -87,7 +87,7 @@ class DockerVM {
  }
  save(){atomicJson(this.stateFile,this.saved);}
  pid(){try{const pid=Number(fs.readFileSync(path.join(this.root,'qemu.pid'),'utf8')); const args=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0');return args.includes('stratadashseek-docker') && args.includes('file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback')?pid:null;}catch{return null;}}
- status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,diskCheckedAt:this.diskCheckedAt??null,profile:workerProfile(this.manifest,{driver:this.observedStorageDriver,at:this.storageObservedAt,ready:this.phase==='ready'}),initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
+ status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,totalBytes:this.totalBytes??null,usedBytes:this.usedBytes??null,totalInodes:this.totalInodes??null,storageCategories:this.storageCategories??null,storageCheckedAt:this.storageCheckedAt??null,diskCheckedAt:this.diskCheckedAt??null,profile:workerProfile(this.manifest,{driver:this.observedStorageDriver,at:this.storageObservedAt,ready:this.phase==='ready'}),initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
  touch(){this.lastUsed=Date.now();}
  async ensure(){
   requireControl(this);
@@ -155,8 +155,8 @@ class DockerVM {
  async diskFree(){
   requireControl(this);
   if(!this.serial||this.serial.destroyed)await this.connectSerial();const nonce=crypto.randomBytes(8).toString('hex');
-  this.serial.write("printf 'HARNESS_FREE_"+nonce+"=%s\\n' \"$(df -Pk /var/lib/harness | tail -n 1 | awk '{print $4}')\"; printf 'HARNESS_INODES_"+nonce+"=%s\\n' \"$(df -Pi /var/lib/harness | tail -n 1 | awk '{print $4}')\"\n");
-  const deadline=Date.now()+5000;while(Date.now()<deadline){const m=this.buffer.match(new RegExp('HARNESS_FREE_'+nonce+'=(\\d+)')),i=this.buffer.match(new RegExp('HARNESS_INODES_'+nonce+'=(\\d+)'));if(m&&i){this.freeBytes=Number(m[1])*1024;this.freeInodes=Number(i[1]);this.diskCheckedAt=Date.now();return this.freeBytes;}await pause(100);}throw Error('Worker disk space and inodes could not be verified');
+  this.serial.write("df -Pk /var/lib/harness | tail -n 1 | awk '{printf \"HARNESS_TOTAL_"+nonce+"=%s\\nHARNESS_USED_"+nonce+"=%s\\nHARNESS_FREE_"+nonce+"=%s\\n\", $2, $3, $4}'; df -Pi /var/lib/harness | tail -n 1 | awk '{printf \"HARNESS_ITOTAL_"+nonce+"=%s\\nHARNESS_INODES_"+nonce+"=%s\\n\", $2, $4}'\n");
+  const deadline=Date.now()+5000;while(Date.now()<deadline){const read=label=>{const found=this.buffer.match(new RegExp('HARNESS_'+label+'_'+nonce+'=(\\d+)'));return found?Number(found[1]):null;},available=read('FREE'),inodes=read('INODES');if(available!==null&&inodes!==null){this.freeBytes=available*1024;this.freeInodes=inodes;this.totalBytes=read('TOTAL')===null?null:read('TOTAL')*1024;this.usedBytes=read('USED')===null?null:read('USED')*1024;this.totalInodes=read('ITOTAL');this.diskCheckedAt=Date.now();return this.freeBytes;}await pause(100);}throw Error('Worker disk space and inodes could not be verified');
  }
  async probeOverlay(){
   requireControl(this);

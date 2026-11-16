@@ -24,7 +24,16 @@ export class FairGate {
   close(){this.closed=true;for(const t of this.waiting){t.signal?.removeEventListener('abort',t.abort);t.reject(Error('Scheduler unloaded'));}this.waiting=[];this.changed();}
 }
 
-export const heavyTool = exec => exec.name==='verify_project'||exec.name==='project_exec'&&/\b(?:npm|pnpm|yarn|dotnet|pytest|playwright|tsc|vite|cargo|make|cmake|gcc|clang|pip)\b/u.test(exec.arguments?.command??'');
+export function heavyTool(exec) {
+  if (exec.name === 'verify_project') return true;
+  if (!['project_exec', 'bash', 'terminal'].includes(exec.name)) return false;
+  if (exec.arguments?.run_in_background === true) return true;
+  const command = String(exec.arguments?.command ?? '').trim();
+  // Only simple inspection commands bypass admission. Unknown scripts, shell
+  // compounds and language runtimes can consume the same resources as a build.
+  if (!command || /[\n\r;&|<>`$()]/u.test(command)) return true;
+  return !/^(?:(?:pwd|ls|cat|head|tail|wc|stat|readlink|realpath|rg|grep|echo|printf)(?:\s|$)|git\s+(?:status|diff|log|show|ls-files)(?:\s|$))/u.test(command);
+}
 
 export function normalizeCompaction(options){
   if(options.purpose!=='compaction'||options.reasoningEffort==='off'&&(options.maxTokens??0)>=8192)return null;

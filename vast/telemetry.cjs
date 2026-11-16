@@ -3,6 +3,7 @@ const fs=require('node:fs'),os=require('node:os'),cp=require('node:child_process
 const exec=util.promisify(cp.execFile),R='/data/harness',runtime=require('./runtime-paths.cjs');
 const {readCpuStats,readMemoryStats,readIoStats,parseIoStat}=require('./cgroup.cjs'),readCgroup=p=>fs.readFileSync(p,'utf8');
 const {performance}=require('node:perf_hooks');
+const storageMonitor=require('./storage-telemetry.cjs').createStorageMonitor({readGuest:async()=>runtime.readAgent(R,'applications/activity.json')});
 const startedAt=Date.now();let previousCpu,previousDisk,previousAt=performance.now(),energyWh=0,history=[];
 function wattSecondsToWh(watts,seconds){return Number.isFinite(watts)&&watts>=0&&Number.isFinite(seconds)&&seconds>=0?watts*seconds/3600:0;}
 function number(v){const n=Number.parseFloat(v);return Number.isFinite(n)?n:null;}
@@ -25,6 +26,7 @@ async function tick(){
  let idle=null;try{idle=runtime.readPrivate(R,'idle-status.json');}catch{}
  let agentQueue=null;try{const q=runtime.readAgent(R,'turn-queue.json');if(!q.closed&&now-runtime.readAgent(R,'lifecycle.json').at<20000)agentQueue=queueSnapshot(q,now);}catch{}
  const data={at:now,source:'Vast instance',gpu,cpu:cpu(seconds),ram:memory(),disk:disk(seconds),model:{id:health?.model,loaded:health?.loaded,contextMax:health?.max_context,busy:status?.busy,queued:status?.queued,phase:status?.phase,promptTokens:status?.prompt_tokens,generatedTokens:status?.generated,maxOutputTokens:status?.max_tokens,elapsedSeconds:metrics?.live?.elapsed_s},agentQueue,last,requests,history,liveTokensPerSecond:metrics?.live?.tok_s_mean??metrics?.live?.tok_s??null,energyWhSinceMonitorStart:energyWh,monitorStartedAt:startedAt,idle};
+ data.storage=storageMonitor.snapshot();
  runtime.writePrivate(R,'telemetry.json',data);runtime.publish(R,'telemetry.json',data);
  setTimeout(tick,3000);
 }

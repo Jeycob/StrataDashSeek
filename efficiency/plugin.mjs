@@ -8,6 +8,7 @@ import {POLICY,WorkCard,archiveLog,summarizeLog,rewriteRisk,patchRemovals,prefix
 import {EventLedger,uniqueEngineRecord} from './ledger.mjs';
 import {FairGate,heavyTool,normalizeCompaction} from './gate.mjs';
 import {resourceSnapshot} from './resources.mjs';
+import {bindHeavyToolLease} from './heavy-tool-lease.mjs';
 
 export const name='qwen-efficiency';
 export const inject=['agents','tools','systemPrompt','shell','shellEnv','llm'];
@@ -24,6 +25,17 @@ export async function apply(ctx,config={}){
   const emit=(type,data)=>{try{return ledger.record(type,data);}catch{/* Metrics failure cannot change task outcome or release a gate. */}};
   const root=agent=>rootAgent(agent,ctx.agents),idOf=agent=>root(agent)?.session?.id;
   const card=id=>{if(!cards.has(id))cards.set(id,new WorkCard());return cards.get(id);};
+  const hydrated=new Map();
+  async function hydrate(id){
+    if(!hydrated.has(id))hydrated.set(id,(async()=>{
+      // Read canonical history once per loaded session, including requests that
+      // compaction removed from the current model surface. Never use summaries
+      // or a child agent's assignment as the owner's latest human request.
+      const query=ctx.sessionQuery??ctx.get?.('sessionQuery');
+      if(query){const saved=await query.readSession(id);card(id).observeMessages(saved.events.filter(e=>e.type==='user/message').map(e=>e.data));}
+    })().catch(error=>{hydrated.delete(id);throw error;}));
+    await hydrated.get(id);
+  }
   const review=id=>ctx.waterfall('workspace-runtime/review',{sessionId:id},()=>undefined);
   const projectFor=async id=>{if(!projectCache.has(id))projectCache.set(id,await review(id));return projectCache.get(id);};
   const activeFor=agent=>{const id=idOf(agent);return{id,runId:runs.get(id)??`${id}:unknown`};};
@@ -44,7 +56,8 @@ export async function apply(ctx,config={}){
   ctx.on('agent/pre-step',async(input,next)=>{
     const {id}=activeFor(input.agent);
     if(providers.has(input.modelSelection.provider)){
-      const task=input.messages?.filter(m=>m.source?.kind==='user').map(m=>textOf(m.content)).join('\n');if(task)card(id).setTask(task);
+      await hydrate(id);
+      if(input.agent.session.id===id)card(id).observeMessages(input.messages);
       await projectFor(id); // Root identity is stable; do not rescan all sources on every step.
     }
     return next();
@@ -95,9 +108,9 @@ export async function apply(ctx,config={}){
   ctx.tools.guard(exec=>rewriteDenials.get(exec.token));
 
   ctx.on('tools/execute',async(exec,next)=>{
-    if(!exec.agent)return next();const {id}=activeFor(exec.agent),queued=Date.now();let permit,started;
-    try{if(config.schedule!==false&&heavyTool(exec)){permit=await toolGate.acquire({rootId:id,signal:exec.signal});phase(id,'tool-queue',queued,Date.now());}started=Date.now();return await next();}
-    finally{phase(id,started===undefined?'tool-queue':'tools',started??queued,Date.now());permit?.release();}
+    if(!exec.agent)return next();const {id}=activeFor(exec.agent),queued=Date.now();let permit,started,release;
+    try{if(config.schedule!==false&&heavyTool(exec)){permit=await toolGate.acquire({rootId:id,sessionId:exec.agent.id,signal:exec.signal});phase(id,'tool-queue',queued,Date.now());started=Date.now();release=bindHeavyToolLease(exec,permit,()=>phase(id,'heavy-tools',started,Date.now()));}started??=Date.now();return await next();}
+    finally{phase(id,started===undefined?'tool-queue':'tools',started??queued,Date.now());if(release)release();else permit?.release();}
   },{global:true});
   ctx.on('tools/result',(exec,result)=>{
     rewriteDenials.delete(exec.token);

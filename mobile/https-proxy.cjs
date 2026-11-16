@@ -3,6 +3,7 @@
 const http = require('http');
 const net = require('net');
 const fs = require('fs');
+const {ownerRequestAllowed,ownerResponseHeaders}=require('./owner-origin.cjs');
 const cfg = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 if (!/^[a-z0-9.-]+\.ts\.net$/i.test(cfg.publicHost)) throw Error('Expected Tailscale DNS hostname');
 const targetPort = cfg.targetPort || 3080;
@@ -15,6 +16,7 @@ function headersFor(req) {
 }
 function fail(res) { if (!res.headersSent) res.writeHead(502, {'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-store'});res.end('Harness is starting. Please retry shortly.'); }
 const server = http.createServer(async(req, res) => {
+  if(!ownerRequestAllowed(req,'https://'+cfg.publicHost)){res.writeHead(403,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end('{"code":"ORIGIN_REFUSED"}');}
   const requestPath = req.url.split('?')[0];
   if (requestPath === '/phone') {
     res.writeHead(302, {Location:'/phone/','Cache-Control':'no-store'});
@@ -26,9 +28,7 @@ const server = http.createServer(async(req, res) => {
     if(req.destroyed||res.destroyed)return;
   }
   const upstream = http.request({hostname:'127.0.0.1',port:routedPort,path:req.url,method:req.method,headers:headersFor(req)}, reply => {
-    const h = Object.assign({},reply.headers);
-    if (h['set-cookie']) h['set-cookie'] = h['set-cookie'].map(c => /;\s*secure(?:;|$)/i.test(c) ? c : c+'; Secure');
-    h['referrer-policy']='no-referrer';
+    const h = ownerResponseHeaders(reply.headers);
     res.writeHead(reply.statusCode,h);
     reply.on('error',()=>res.destroy());
     reply.pipe(res);
@@ -39,6 +39,7 @@ const server = http.createServer(async(req, res) => {
   req.pipe(upstream);
 });
 server.on('upgrade',async(req,socket,head)=>{
+  if(!ownerRequestAllowed(req,'https://'+cfg.publicHost,{upgrade:true})){socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
   let grant;try{grant=await require('../vast/runtime-client.cjs').admit('socket_enqueue');}catch{socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nRetry-After: 2\r\n\r\n');return;}
   if(socket.destroyed)return;
   const upstream = net.connect(targetPort,'127.0.0.1',()=>{

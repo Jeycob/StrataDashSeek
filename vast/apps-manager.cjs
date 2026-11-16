@@ -58,6 +58,7 @@ class AppsManager {
   if(this.worker.phase==='recovering'||this.worker.phase==='ready'&&Date.now()-this.worker.lastUsed>(this.cfg.vm.idleSeconds||120)*1000){
    this.ticking=true;try{assertStartOutcomesKnown(this);assertDeploymentIdle(this,{allowCurrent:false});if(this.worker.phase==='recovering')await this.worker.ensure();else await this.worker.stop();}catch(e){this.worker.error=e.message;}finally{this.ticking=false;this.heartbeat();}
   }
+  else await require('./apps-storage-telemetry.cjs').refreshStorage(this);
  }
  async beginPreview(port){
   this.requireEnabled();this.acceptActivity();const p=Object.values(this.store.projects).find(p=>(p.previewPort??p.hostPort)===port&&p.containerId);if(!p)throw Object.assign(Error('No application is deployed on this port'),{status:404});

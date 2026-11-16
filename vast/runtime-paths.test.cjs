@@ -10,3 +10,9 @@ test('root control, public status and agent state have distinct paths and whitel
  const p=paths('/data/harness');assert.notEqual(p.agentState,p.publicState);assert.ok(p.privateState.startsWith(path.join(p.root,'root-secrets')+path.sep));assert.equal(p.serviceLogs,path.join(p.root,'logs'));
  assert.deepEqual(publicValue('startup-update.json',{phase:'ready',signatureVerified:true,privateKey:'hidden',cookie:'hidden'}),{phase:'ready',signatureVerified:true});
 });
+
+test('public storage preserves unknown and stale measurements but removes nested credentials',()=>{
+ const out=publicValue('telemetry.json',{storage:{version:1,stale:true,volumes:[{id:'docker-guest',scope:'docker-guest',availableBytes:null,inodesFree:null,stale:true,authorization:'Bearer SYNTHETIC_PRIVATE',categories:[{id:'images',bytes:400,shared:true}],secretPath:'SYNTHETIC_PRIVATE'}]}});
+ assert.equal(out.storage.volumes[0].availableBytes,null);assert.equal(out.storage.volumes[0].stale,true);
+ assert.deepEqual(out.storage.volumes[0].categories,[{id:'images',bytes:400,shared:true}]);assert.ok(!JSON.stringify(out).includes('SYNTHETIC_PRIVATE'));
+});
