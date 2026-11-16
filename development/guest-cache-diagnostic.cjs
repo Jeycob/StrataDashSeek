@@ -37,7 +37,26 @@ else
   done
   printf 'CENSUS_RAM_CACHE_FILES=%s BYTES=%s\\n' "$cache_count" "$cache_bytes"
   if timeout 45 apk --cache-dir /tmp/census-cache --no-network add docker > /tmp/census-apk.log 2>&1; then echo CENSUS_RAM_APK_STATUS=0;
-  else apk_status=$?; printf 'CENSUS_RAM_APK_STATUS=%s\\n' "$apk_status"; apk_reason; exit 1; fi
+  else
+    apk_status=$?; printf 'CENSUS_RAM_APK_STATUS=%s\\n' "$apk_status"; apk_reason
+    # A cache index is repository-URL keyed. Diagnose public package names,
+    # then explicitly select the already bounded signed package files.
+    awk 'length($1)<120 && $1 ~ /^[a-zA-Z0-9][a-zA-Z0-9+_.-]*$/ && /no such package|missing|conflict|breaks/ {print "CENSUS_APK_SELECTION_PACKAGE=" $1}' /tmp/census-apk.log
+    for package in /tmp/census-cache/*.apk; do
+      test -f "$package" && test ! -L "$package"
+      name=$(basename "$package")
+      case "$name" in *[!a-zA-Z0-9+_.-]*|'') echo CENSUS_CACHE_NAME_REFUSED; exit 1;; esac
+      test "\${#name}" -lt 160
+      printf 'CENSUS_CACHED_PACKAGE=%s\\n' "$name"
+    done
+    set -- /tmp/census-cache/*.apk
+    if timeout 45 apk --no-network --no-cache add "$@" > /tmp/census-apk.log 2>&1; then echo CENSUS_EXPLICIT_APK_STATUS=0;
+    else
+      apk_status=$?; printf 'CENSUS_EXPLICIT_APK_STATUS=%s\\n' "$apk_status"; apk_reason
+      awk 'length($1)<120 && $1 ~ /^[a-zA-Z0-9][a-zA-Z0-9+_.-]*$/ && /no such package|missing|conflict|breaks/ {print "CENSUS_APK_SELECTION_PACKAGE=" $1}' /tmp/census-apk.log
+      exit 1
+    fi
+  fi
 fi
 printf '\\nrc_cgroup_mode="unified"\\n' >> /etc/rc.conf
 rc-service cgroups start > /tmp/census-cgroup.log 2>&1
