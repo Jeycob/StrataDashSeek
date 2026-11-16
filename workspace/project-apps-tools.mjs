@@ -75,33 +75,40 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
  }
  async function reconcileStored(){
   if(typeof receiptStore?.list!=='function')throw fail('PROJECT_APPS_RECEIPTS_UNAVAILABLE');
-  const rows=await receiptStore.list(),controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),8000);timer.unref?.();let checked=0;
-  const liveIds=new Set([...pending.values()].filter(p=>p.lifetime.snapshot().leaseRetained).map(p=>p.requestId));
+  const controller=new AbortController(),budget={checked:0};
+  const timer=setTimeout(()=>controller.abort(),8000);timer.unref?.();
   try{
+   // Captured status reads remain valid even if the original owner is gone.
+   // Recover held leases before deciding which persisted rows are orphaned.
+   await reconcileInactive({signal:controller.signal,budget});
+   const rows=await receiptStore.list(),retainedIds=new Set([...pending.values()].filter(p=>p.lifetime.snapshot().leaseRetained).map(p=>p.requestId));
    for(const row of rows){
-    if(liveIds.has(row.requestId))continue;
-    if(checked>=32||controller.signal.aborted)break;checked++;
+    if(retainedIds.has(row.requestId))continue;
+    if(budget.checked>=32||controller.signal.aborted)break;budget.checked++;
     try{const job=await storedSettlement(row,controller.signal);if(job.workSettled&&job.terminal&&['passed','failed'].includes(job.status)&&!job.recoveryRequired)await receiptStore.remove(row.requestId);}catch{/* Persisted unknown/error never proves quiescence. */}
    }
   }finally{clearTimeout(timer);}
-  const remaining=await receiptStore.list(),currentLiveIds=new Set([...pending.values()].filter(p=>p.lifetime.snapshot().leaseRetained).map(p=>p.requestId));
+  const remaining=await receiptStore.list(),activeIds=new Set([...active].map(entry=>entry.id));
+  const currentLiveIds=new Set([...pending].filter(([id,p])=>activeIds.has(id)&&p.lifetime.snapshot().leaseRetained).map(([,p])=>p.requestId));
   const view=remaining.map(row=>({...row,liveOwned:currentLiveIds.has(row.requestId)}));
-  return{version:1,checked,pending:view,reconciliationRequired:view.some(row=>!row.liveOwned)};
+  return{version:1,checked:budget.checked,pending:view,reconciliationRequired:view.some(row=>!row.liveOwned)};
+ }
+ async function reconcileInactive({ownerId,signal,budget={checked:0}}){
+  const liveMonitors=new Set([...active].map(entry=>entry.id));
+  for(const[id,p]of pending){
+   if(ownerId!==undefined&&p.ownerId!==ownerId||liveMonitors.has(id))continue;
+   if(budget.checked>=32||signal.aborted)break;budget.checked++;
+   try{const current=await settlement(p,signal);if(current.terminal&&current.workSettled){p.lifetime.terminal(current);pending.delete(id);await receiptStore.remove(p.requestId);}}catch{/* Unknown/unavailable remains held; never retry enqueue. */}
+  }
  }
  async function reconcilePending(execution){
   const controller=new AbortController(),abort=()=>controller.abort();
   if(execution.signal.aborted)controller.abort();else execution.signal.addEventListener('abort',abort,{once:true});
-  const timer=setTimeout(abort,8000);timer.unref?.();let checked=0;
-  const liveMonitors=new Set([...active].map(entry=>entry.id)),ownerId=owner(execution).id;
+  const timer=setTimeout(abort,8000);timer.unref?.();const budget={checked:0},ownerId=owner(execution).id;
   try{
-   for(const[id,p]of pending){
-    if(p.ownerId!==ownerId||liveMonitors.has(id))continue;
-    if(checked>=32||controller.signal.aborted)break;checked++;
-    try{const current=await settlement(p,controller.signal);if(current.terminal&&current.workSettled){p.lifetime.terminal(current);pending.delete(id);await receiptStore.remove(p.requestId);}}catch{/* Unknown/unavailable remains held; status never retries enqueue. */}
-   }
+   await reconcileInactive({ownerId,signal:controller.signal,budget});
   }finally{clearTimeout(timer);execution.signal.removeEventListener('abort',abort);}
-  return{checked,pending:[...pending.values()].filter(p=>p.ownerId===ownerId).map(p=>({requestId:p.requestId,...p.lifetime.snapshot()}))};
+  return{checked:budget.checked,pending:[...pending.values()].filter(p=>p.ownerId===ownerId).map(p=>({requestId:p.requestId,...p.lifetime.snapshot()}))};
  }
  function jobs(){const value=typeof ctx.get==='function'?ctx.get('jobs'):ctx.jobs;if(!value||typeof value.start!=='function')throw fail('PROJECT_APPS_SDK_JOBS_UNAVAILABLE');return value;}
  async function deploy(execution){

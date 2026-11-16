@@ -7,9 +7,9 @@ function sdk(){return modules??=(async()=>{
  return{...cordis,SystemPrompt:prompt.default,Tools:tools.default,...pipeline,...scope,LocalJobs:jobs.default,applyJobTools:jobTools.apply,...adapter};
 })();}
 async function eventually(check){for(let i=0;i<200;i++){if(check())return;await new Promise(r=>setTimeout(r,5));}assert.fail('bounded wait');}
-async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=false,enqueueUncertain=false,recoverEnqueue=false,settlementFailureOnce=false}={}){
+async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=false,enqueueUncertain=false,recoverEnqueue=false,settlementFailureOnce=false,actualAdmission=false}={}){
  const S=await sdk(),ctx=new S.Context();new S.SystemPrompt(ctx,{});new S.Tools(ctx);
- const agents=new Map(),scopes=[],calls=[],epochs=[],receipts=new Map();let inEpoch=false,polls=0,retained=0;
+ const agents=new Map(),scopes=[],calls=[],epochs=[],receipts=new Map();let inEpoch=false,polls=0,retained=0,heavyBodies=0,gate,removeAdmission;
  const workspaceRoot=path.resolve('synthetic-apps-workspaces'),root=path.join(workspaceRoot,'owner'),projectId=crypto.createHash('sha256').update(root).digest('hex').slice(0,16),appsId='a'.repeat(16);
  ctx.provide('agents',{get:id=>agents.get(id),list:()=>[...agents.values()]});ctx.provide('sandboxPolicy',{resolve:({session})=>({mode:session.mode??'workspace-write'})});
  const manager={data:{sessions:{},trash:{}},ownerAgent:a=>a?.owner??a,async withProjectRuntimeAuthority(input,action){epochs.push(input);if(authorityFailure)throw Error('AUTHORITY_PRIVATE_PATH');assert(!inEpoch);inEpoch=true;try{return await action('PRIVATE_TOKEN');}finally{inEpoch=false;}}};
@@ -28,16 +28,20 @@ async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=fals
   assert.fail('unexpected route '+route);
  };
  let retainHeavyToolLease=()=>{retained++;let done=false;return()=>{if(!done){done=true;retained--;}};};
- if(process.env.HOMEAI_HEAVY_LEASE_MODULE){
-  const lease=await import(pathToFileURL(process.env.HOMEAI_HEAVY_LEASE_MODULE));retainHeavyToolLease=lease.retainHeavyToolLease;
-  ctx.on('tools/execute',async(exec,next)=>{if(exec.name!=='project_apps'||exec.arguments.operation!=='verify_deploy')return next();retained++;const release=lease.bindHeavyToolLease(exec,{release(){retained--;}});try{return await next();}finally{release();}},{global:true});
+ if(process.env.HOMEAI_HEAVY_LEASE_MODULE||actualAdmission){
+  const lease=await import(pathToFileURL(process.env.HOMEAI_HEAVY_LEASE_MODULE??path.join(__dirname,'../efficiency/heavy-tool-lease.mjs')));retainHeavyToolLease=lease.retainHeavyToolLease;
+  if(actualAdmission){
+   const {FairGate,heavyTool}=await import('../efficiency/gate.mjs'),{checkWorkspaceHeavyAdmission}=await import('../efficiency/heavy-admission.mjs');gate=new FairGate();
+   ctx.on('tools/execute',async(exec,next)=>{if(!heavyTool(exec))return next();await checkWorkspaceHeavyAdmission(ctx,exec);const permit=await gate.acquire({rootId:exec.agent.id,signal:exec.signal});let release;try{await checkWorkspaceHeavyAdmission(ctx,exec);retained++;release=lease.bindHeavyToolLease(exec,{release(){retained--;permit.release();}});return await next();}finally{if(release)release();else permit.release();}},{global:true});
+  }else ctx.on('tools/execute',async(exec,next)=>{if(exec.name!=='project_apps'||exec.arguments.operation!=='verify_deploy')return next();retained++;const release=lease.bindHeavyToolLease(exec,{release(){retained--;}});try{return await next();}finally{release();}},{global:true});
  }
  const module=S.createProjectAppsTools(ctx,manager,{callApps,appsConfig:{workspaceRoot,keyFile:'PRIVATE_KEY_PATH'},receiptStore:{async list(){return[...receipts.values()].map(r=>({...r}));},async save(row){receipts.set(row.requestId,{...row});},async remove(id){receipts.delete(id);}},retainHeavyToolLease,pollMs:10,monitorMs:1000});
+ if(actualAdmission){const {registerWorkspaceHeavyAdmission}=await import('../efficiency/heavy-admission.mjs');removeAdmission=registerWorkspaceHeavyAdmission(ctx,()=>module.beforeHeavy());ctx.tools.register({name:'project_exec',description:'Synthetic next-project heavy body',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']},output:{schema:{type:'object'},render:()=>[{type:'text',text:'synthetic complete'}]},execute(){heavyBodies++;return{exitCode:0};}});}
  const pipeline=new S.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>S.executeToolBatch(input,pipeline,()=>1)});
- function agent(id,{owner,mode}={}){const a={id,owner,status:'idle',inbox:{nextStep:[],remove(){}},session:{id,mode,header:{createdAt:2000},append(){}},inject(){},followup(){}};const scope=S.createScope(ctx,a);a.ctx=scope.ctx;scopes.push(scope);agents.set(id,a);if(!owner)manager.data.sessions[id]={root};return a;}
+ function agent(id,{owner,mode}={}){const a={id,owner,status:'idle',inbox:{nextStep:[],remove(){}},session:{id,mode,header:{createdAt:2000},append(){}},inject(){},followup(){}};const scope=S.createScope(ctx,a);a.ctx=scope.ctx;a.scope=scope;scopes.push(scope);agents.set(id,a);if(!owner)manager.data.sessions[id]={root};return a;}
  async function call(agent,args={operation:'status'},name='project_apps',signal=new AbortController().signal){const toolSet=await ctx.tools.resolve({agent,modelSelection:{provider:'fixture',model:'fixture'},signal:new AbortController().signal});try{const result=await ctx.tools.execute({agent,signal,toolSet,calls:[{id:'apps-call',name,arguments:JSON.stringify(args)}]});return result.results[0].result;}finally{toolSet.dispose();}}
- t.after(async()=>{hold=false;await module.dispose();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();});
- return{...S,ctx,manager,module,agent,call,calls,epochs,projectId,appsId,root,receipts,setHold:value=>{hold=value;},revoke:()=>{authorityFailure=true;},retained:()=>retained};
+ t.after(async()=>{hold=false;await module.dispose();removeAdmission?.();gate?.close();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();});
+ return{...S,ctx,manager,module,agent,call,calls,epochs,projectId,appsId,root,receipts,setHold:value=>{hold=value;},revoke:()=>{authorityFailure=true;},async archiveAndDispose(a){manager.data.trash[a.id]=true;agents.delete(a.id);await a.scope.dispose();},retained:()=>retained,heavyBodies:()=>heavyBodies};
 }
 test('actual SDK status filters global Apps state and strips credentials, unrelated metadata and raw objects',async t=>{
  const f=await fixture(t),a=f.agent('owner');const result=await f.call(a);assert.equal(result.isError,false,JSON.stringify(result));assert.equal(result.value.projectId,f.projectId);assert.equal(result.value.project.applicationUrl,'https://preview.example/?appPort=18080');assert.equal(result.value.jobs.length,1);assert(!/SECRET|PRIVATE|environment|vault|FOREIGN/.test(JSON.stringify(result)));
@@ -112,4 +116,20 @@ test('ordinary status reconciles a failed monitor and releases only known settle
  const f=await fixture(t,{settlementFailureOnce:true}),a=f.agent('owner'),result=await f.call(a,{operation:'verify_deploy'}),id=result.value.sdkJobId;
  await eventually(()=>f.ctx.jobs.get(id,a.id).status==='failed');assert.equal(f.retained(),1);assert.equal(f.receipts.size,1);
  const status=await f.call(a,{operation:'status'});assert.equal(status.isError,false,JSON.stringify(status));assert.equal(f.retained(),0);assert.equal(f.receipts.size,0);assert.equal(status.value.admissionsRequiringReconciliation.length,0);assert.equal(f.calls.filter(c=>c.route==='/project-action').length,1);
+});
+test('another owner heavy admission recovers archived/disposed failed monitor lease with captured status only',async t=>{
+ const f=await fixture(t,{settlementFailureOnce:true,actualAdmission:true}),old=f.agent('old-owner'),next=f.agent('next-owner');const result=await f.call(old,{operation:'verify_deploy'}),id=result.value.sdkJobId;
+ await eventually(()=>f.ctx.jobs.get(id,old.id).status==='failed');assert.equal(f.retained(),1);await f.archiveAndDispose(old);f.revoke();
+ const before=f.calls.length,epochs=f.epochs.length;const heavy=await f.call(next,{command:'npm test'},'project_exec');assert.equal(heavy.isError,false,JSON.stringify(heavy));assert.equal(f.heavyBodies(),1);assert.equal(f.retained(),0);assert.equal(f.receipts.size,0);assert.equal(f.epochs.length,epochs);assert(f.calls.slice(before).every(c=>c.route.startsWith('/job-status')&&!c.data));assert.equal(f.calls.filter(c=>c.route==='/project-action').length,1);
+});
+test('another owner heavy admission refuses unknown archived failed monitor while retaining original lease',async t=>{
+ const f=await fixture(t,{enqueueUncertain:true,actualAdmission:true}),old=f.agent('old-owner'),next=f.agent('next-owner');const result=await f.call(old,{operation:'verify_deploy'}),id=result.value.sdkJobId;
+ await eventually(()=>f.ctx.jobs.get(id,old.id).status==='failed');await f.archiveAndDispose(old);f.revoke();const before=f.calls.length;
+ const denied=await f.call(next,{command:'npm test'},'project_exec');assert.equal(denied.isError,true);assert.match(JSON.stringify(denied),/PROJECT_APPS_RECONCILIATION_REQUIRED/);assert.equal(f.retained(),1);assert.equal(f.heavyBodies(),0);assert.equal(f.receipts.size,1);assert(f.calls.slice(before).every(c=>c.route.startsWith('/project-request')&&!c.data));
+});
+test('another owner before-heavy skips active monitor and queues on original live lease until settlement',async t=>{
+ const f=await fixture(t,{hold:true,actualAdmission:true}),old=f.agent('old-owner'),next=f.agent('next-owner');const result=await f.call(old,{operation:'verify_deploy'}),id=result.value.sdkJobId;
+ await eventually(()=>f.calls.some(c=>c.route.startsWith('/job-status')));const report=await f.module.reconcileStored();assert.equal(report.checked,0);assert.equal(report.pending[0].liveOwned,true);
+ let finished=false;const queued=f.call(next,{command:'npm test'},'project_exec').then(r=>{finished=true;return r;});await new Promise(r=>setImmediate(r));assert.equal(finished,false);assert.equal(f.retained(),1);assert.equal(f.heavyBodies(),0);
+ f.setHold(false);assert.equal((await queued).isError,false);await eventually(()=>f.ctx.jobs.get(id,old.id).status==='completed');assert.equal(f.heavyBodies(),1);assert.equal(f.retained(),0);
 });
