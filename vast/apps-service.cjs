@@ -19,6 +19,11 @@ function createAppsService(cfg={},injected){
   if(req.method!=='GET'||u.pathname==='/export-download')try{await admission.admit('apps_enqueue');}catch{return json(res,503,{code:'RUNTIME_ADMISSION_CLOSED',error:'Harness is verifying its runtime. Retry shortly.'});}
   if(req.method==='GET')await guardAppsTarget(manager,u.pathname,Object.fromEntries(u.searchParams));
   if(req.method==='GET'&&u.pathname==='/state')return json(res,200,await manager.state());
+  if(req.method==='GET'&&u.pathname==='/resource-export-download'){
+   const e=manager.archivedCleanup.resourceDownload({...Object.fromEntries(u.searchParams),token:req.headers['x-harness-resource-authority']});let release;try{release=manager.beginTransfer();}catch(error){fs.closeSync(e.descriptor);throw error;}res.once('close',release);res.setTimeout(120000,()=>res.destroy());
+   res.writeHead(200,{'Content-Type':'application/x-tar','Content-Length':e.bytes,'Content-Disposition':'attachment; filename="'+e.filename+'"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+   const input=fs.createReadStream(null,{fd:e.descriptor,autoClose:true});input.on('error',()=>res.destroy());res.on('close',()=>input.destroy());return input.pipe(res);
+  }
   if(req.method==='GET'&&u.pathname==='/job-log')return json(res,200,{text:manager.jobLog(u.searchParams.get('id'))});
   if(req.method==='GET'&&u.pathname==='/container-log')return json(res,200,{text:await manager.logs(u.searchParams.get('id'))});
   if(req.method==='GET'&&u.pathname==='/releases')return json(res,200,{releases:await manager.releaseList(u.searchParams.get('id'))});
@@ -29,6 +34,7 @@ function createAppsService(cfg={},injected){
   if(!data||typeof data!=='object'||Array.isArray(data))throw Object.assign(Error('Expected an operation object'),{status:400});
   await guardAppsTarget(manager,u.pathname,data);
   if(u.pathname==='/archived-cleanup')return json(res,200,await manager.archivedCleanup.handle(data));
+  if(u.pathname==='/resources')return json(res,200,await manager.archivedCleanup.resources(data));
   if(u.pathname==='/register')return json(res,200,await manager.register(data.path,data._contextProjectId));
   if(u.pathname==='/scaffold')return json(res,200,await manager.scaffold(data.path,data.dryRun===true,data._contextProjectId));
   if(u.pathname==='/vault-config')return json(res,200,await manager.configureVault(data));
@@ -44,7 +50,7 @@ function createAppsService(cfg={},injected){
   if(u.pathname==='/project-action')return json(res,202,manager.enqueue(data.id,data.action,{releaseId:data.releaseId,targetId:data.targetId}));
   if(u.pathname==='/container-action')return json(res,200,await manager.containerAction(data.id,data.action));
   return json(res,404,{error:'Not found'});
- }catch(e){const resourceDiagnostic=diagnosticFor(e);if(!res.headersSent)json(res,e.status||400,{error:e.message,...(/^CLEANUP_[A-Z_]+$/.test(e.code||'')?{code:e.code}:{}),...(resourceDiagnostic?{code:e.code,resourceDiagnostic}:{})});else res.destroy();}});
+ }catch(e){const resourceDiagnostic=diagnosticFor(e);if(!res.headersSent)json(res,e.status||400,{error:e.message,...(/^(?:CLEANUP|RESOURCE)_[A-Z_]+$/.test(e.code||'')?{code:e.code}:{}),...(resourceDiagnostic?{code:e.code,resourceDiagnostic}:{})});else res.destroy();}});
  server.on('close',()=>{clearInterval(clock);for(const p of previews)p.close();});return{server,manager,previews};
 }
 module.exports={createAppsService};

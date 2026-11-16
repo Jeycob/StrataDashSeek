@@ -4,6 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import {createRequire} from 'node:module';
 import {sameRequestOrigin,boundedJSON} from './http.mjs';
+import {installDockerResourceRoutes} from './docker-resources.mjs';
 const {atomicJson}=createRequire(import.meta.url)('../mobile/private-json.cjs');
 const fail=code=>Object.assign(Error(code),{code,status:409});
 const pending=op=>op&&['running','reconciliation_required'].includes(op.state);
@@ -55,6 +56,7 @@ export function installDockerCleanup(ctx,manager,appsConfig,callApps){
  const guardExecution=async(input,next)=>{const id=input.agent?.id;let reserved=[];try{const grant=await json(authorityFile);if(grant.expiresAt>Date.now())reserved=grant.reservedIds||[];}catch(e){if(e.code!=='ENOENT')throw e;}const op=await readOperation();if(id&&(reserved.includes(id)||pending(op)&&op.ownerSessionIds?.includes(id)))throw fail('CLEANUP_RECONCILIATION_REQUIRED');return next();};
  const removeStep=owner.on('agent/pre-step',guardExecution,{prepend:true,global:true}),removeTool=owner.on('tools/execute',guardExecution,{prepend:true,global:true});ctx.effect(()=>()=>{removeStep?.();removeTool?.();});
  const response=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+ installDockerResourceRoutes(ctx,manager,appsConfig,{gated,readJournal:()=>json(journal),callApps});
  ctx.effect(()=>ctx.connection.fetch.register({path:'/api/workbench/docker-cleanup',methods:['GET','POST'],requestBody:'buffered',fetch:async request=>{
   try{
    if(request.method==='GET'){const params=new URL(request.url).searchParams,selector=Object.fromEntries(['operationId','planId'].filter(k=>params.has(k)).map(k=>[k,params.get(k)]));if(Object.keys(selector).length)return response(view(await gated(token=>rpc({op:'reconcile',token,...selector}))));return response(view(await gated(token=>rpc({op:'status',token}))));}

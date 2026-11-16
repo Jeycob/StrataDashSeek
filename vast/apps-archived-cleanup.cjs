@@ -75,6 +75,7 @@ class ArchivedDockerCleanup{
  async handle(input){if(!input||typeof input!=='object'||Array.isArray(input))throw fail('CLEANUP_REQUEST_INVALID',400);const m=this.manager;
   if(input.op==='settings'){if(typeof input.enabled!=='boolean')throw fail('CLEANUP_REQUEST_INVALID',400);this.data.enabled=input.enabled;this.save();return this.response();}
   if(input.op==='preferences')return this.response();
+  if(input.op==='reconcile'){const op=input.operationId!==undefined||input.planId!==undefined?this.lookup(input):this.data.operation;if(op?.resourceAction){await this.resources({op:'inventory',scope:'global',token:input.token,operationId:op.id});return{...this.response(),operation:this.lookup({planId:op.planId})};}}
   if(m.busy||m.ticking||m.previewRequests||m.serviceClosing||m.sleepToken?.()){if(input.op==='status')return this.response({availability:'deferred',reasonCode:'APPS_BUSY',rows:[]});throw fail('CLEANUP_BUSY');}
   // Maintenance holds exclusion without resetting the billable idle clock.
   m.busy='archived-docker-cleanup';try{m.heartbeat?.();if(input.op==='operation')return{...this.response(),operation:this.lookup(input)};if(input.op==='reconcile')return await this.reconcile(input.token,input);
@@ -101,4 +102,5 @@ class ArchivedDockerCleanup{
  }
  async reconcile(token,selector={}){const op=selector.operationId!==undefined||selector.planId!==undefined?this.lookup(selector):this.data.operation;this.authority(token);const result=()=>({...this.response(),operation:op});if(this.availability()[0]!=='ready'||!op)return result();if(!op.intent){if(['running','reconciliation_required'].includes(op.state)){op.state='completed';op.finishedAt=Date.now();this.save();}return result();}const i=op.intent;try{await this.manager.engine.json('GET',(i.kind==='container'?'/containers/':'/images/')+encodeURIComponent(i.id)+'/json',{timeout:3000});}catch(e){if(e.dockerStatus===404){op.results=op.results.filter(r=>key(r)!==key(i));op.results.push({kind:i.kind,id:i.id,outcome:'already_absent',reasonCode:null});op.intent=null;op.state='completed';op.finishedAt=Date.now();op.errorCode=null;this.save();}}return result();}
 }
+require('./apps-resources.cjs').initMethods(ArchivedDockerCleanup);
 module.exports={ArchivedDockerCleanup,graph,selection,hash};

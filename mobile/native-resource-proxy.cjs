@@ -5,7 +5,7 @@ function nativeResourceRoute(route,method){const value=routes.get(route);return 
 function proxyNativeResource({route,method,query,cookie,payload,res,port,publicHost,maxDownloadBytes=1024**3,deadlineMs=120000}){
  const target=nativeResourceRoute(route,method);if(!target)throw Error('RESOURCE_ROUTE_REFUSED');
  if(typeof cookie!=='string'||!cookie||cookie.length>16384)throw Error('RESOURCE_OWNER_REQUIRED');
- const parameters=new URLSearchParams();for(const k of ['scope','sessionId','kind','cursor','limit','q','operationId'])if(query.has(k))parameters.set(k,query.get(k));
+ const parameters=new URLSearchParams();for(const k of ['scope','sessionId','kind','state','cursor','limit','q','operationId'])if(query.has(k))parameters.set(k,query.get(k));
  const data=method==='POST'?JSON.stringify(payload):null;if(data&&Buffer.byteLength(data)>16384)throw Error('RESOURCE_BODY_TOO_LARGE');
  return new Promise(resolve=>{
   let settled=false,upstream,timer,total=0;

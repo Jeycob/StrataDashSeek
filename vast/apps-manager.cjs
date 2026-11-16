@@ -54,6 +54,7 @@ class AppsManager {
   queueMicrotask(async()=>{job.status='running';this.save();try{if(action==='wake')await this.ready();else await this.worker.stop();job.status='passed';this.log(job,action==='wake'?'Docker worker is ready.\n':'Docker worker saved and asleep.\n');}catch(e){job.status='failed';job.error=e.message;this.log(job,e.message+'\n');}finally{this.redactions?.delete(job.id);job.endedAt=Date.now();this.setBusy(null);this.save();}});return job;
  }
  async tick(){
+  await require('./apps-resources.cjs').expireResources(this.archivedCleanup);
   this.heartbeat();if(!this.cfg.enabled||this.serviceClosing||this.ticking||!this.worker||!this.canSleep()||this.sleepToken())return;
   if(this.worker.phase==='recovering'||this.worker.phase==='ready'&&Date.now()-this.worker.lastUsed>(this.cfg.vm.idleSeconds||120)*1000){
    this.ticking=true;try{assertStartOutcomesKnown(this);assertDeploymentIdle(this,{allowCurrent:false});if(this.worker.phase==='recovering')await this.worker.ensure();else await this.worker.stop();}catch(e){this.worker.error=e.message;}finally{this.ticking=false;this.heartbeat();}
