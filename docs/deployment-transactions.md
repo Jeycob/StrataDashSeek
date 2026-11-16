@@ -41,6 +41,14 @@ same SQL hash/version transition runs on shadow and latest final copies.
 PostgreSQL/MySQL and mixed upload/database volumes require another verified
 data adapter and are refused before stopping production.
 
+A cleanly closed WAL database can retain its WAL header after SQLite removes
+its sidecars. Before inspecting such a main-file-only source, the adapter
+rechecks that no running container has a writable mount, then uses a bounded
+private scratch copy. Source identity, contents and inventory are checked
+again; the mounted source remains read-only. Any existing WAL/SHM/journal
+prevents this fallback, so committed WAL pages are never ignored. Only the
+explicit writable migration target may initialize its own SQLite metadata.
+
 The integration must first clone active data to an isolated test generation.
 Candidate and final generations are distinct even on the first deployment.
 After tests, stop the old writer only for the bounded final copy from current
@@ -63,8 +71,9 @@ before candidate/test creation and remeasure before promotion; these helpers do
 not silently prune data, wake a worker or enlarge the approved pilot.
 
 SQLite admission additionally measures the operator-pinned helper image and
-reserves four retained helper VFS copies, their inodes and 128 MiB helper RAM
-before the first data inspection. Helpers have no network, no app image code,
+reserves four retained helper VFS copies, their inodes, 128 MiB base helper RAM
+and database-sized scratch plus 1 MiB overhead before the first data inspection.
+Helpers have no network, no app image code,
 read-only rootfs and source mount, and only CHOWN/DAC_READ_SEARCH capabilities.
 The final-copy operation is durable and single-use. Even a completed final copy
 cannot be replayed after a writer resumes; a new attempt needs a new release and

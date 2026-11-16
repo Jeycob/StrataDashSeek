@@ -36,7 +36,7 @@ export function gateOutcome(results, {stale = false, dirty = false, unclassified
   return results.length && results.every(row => row.outcome === 'passed') ? 'passed' : 'unrunnable';
 }
 export function testEnvironment(source, serviceRoot) {
-  const allowed = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'LD_LIBRARY_PATH', 'PLAYWRIGHT_BROWSERS_PATH', 'HARNESS_NATIVE_CLI', 'HARNESS_PLAYWRIGHT_MODULE', 'HARNESS_WEB_PUSH_MODULE', 'HARNESS_WRANGLER_CLI', 'HARNESS_BROWSER_CHANNEL', 'HARNESS_PYTHON', 'HOMEAI_RUNTIME', 'EFFICIENCY_SDK_ROOT', 'NODE_PATH', 'PYTHONPATH'];
+  const allowed = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'WINDIR', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL', 'LD_LIBRARY_PATH', 'PLAYWRIGHT_BROWSERS_PATH', 'HARNESS_NATIVE_CLI', 'HARNESS_PLAYWRIGHT_MODULE', 'HARNESS_WEB_PUSH_MODULE', 'HARNESS_WRANGLER_CLI', 'HARNESS_BROWSER_CHANNEL', 'HARNESS_PYTHON', 'HARNESS_FIREWALL_TOOLS', 'HOMEAI_RUNTIME', 'EFFICIENCY_SDK_ROOT', 'NODE_PATH', 'PYTHONPATH'];
   const home=path.join(serviceRoot,'home');
   return {...Object.fromEntries(allowed.filter(name => source[name] !== undefined).map(name => [name, source[name]])),HOME:home,USERPROFILE:home,APPDATA:path.join(home,'AppData','Roaming'),LOCALAPPDATA:path.join(home,'AppData','Local'),DSH_HOME:path.join(home,'.dsh'),XDG_CONFIG_HOME:path.join(home,'.config'),GIT_CONFIG_NOSYSTEM:'1',GIT_CONFIG_GLOBAL:path.join(home,'.gitconfig'),GIT_CONFIG_COUNT:'1',GIT_CONFIG_KEY_0:'safe.directory',GIT_CONFIG_VALUE_0:root, HOMEAI_ROOT: serviceRoot, CI: '1', PYTHONDONTWRITEBYTECODE: '1', WRANGLER_SEND_METRICS: 'false'};
 }

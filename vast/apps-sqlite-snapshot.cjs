@@ -29,26 +29,64 @@ function schema(db){
  const rows=db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").all();
  return digest({rows,userVersion:db.prepare('PRAGMA user_version').get().user_version,applicationId:db.prepare('PRAGMA application_id').get().application_id});
 }
-async function inspectSqlite({sourceRoot,database,maxBytes=64*1024**2}){
+function quiescentProof(value){
+ if(value===undefined)return false;
+ if(!value||typeof value!=='object'||Array.isArray(value)||value.version!==1||value.noRunningWriters!==true||Object.keys(value).sort().join(',')!=='noRunningWriters,version')throw fail('SQLITE_QUIESCENT_PROOF_REQUIRED');
+ return true;
+}
+const sameFile=(a,b)=>['dev','ino','nlink','size','mode','uid','gid','mtimeMs','ctimeMs'].every(key=>a[key]===b[key]);
+async function sourceHash(handle,maxBytes,until,copy){
+ const hash=crypto.createHash('sha256'),buffer=Buffer.alloc(64*1024);let position=0;
+ for(;;){if(Date.now()>until)throw fail('SQLITE_SNAPSHOT_TIMEOUT');const{bytesRead}=await handle.read(buffer,0,Math.min(buffer.length,maxBytes-position+1),position);if(!bytesRead)break;position+=bytesRead;if(position>maxBytes)throw fail('SQLITE_SNAPSHOT_SIZE_LIMIT');hash.update(buffer.subarray(0,bytesRead));if(copy){let written=0;while(written<bytesRead){const result=await copy.write(buffer,written,bytesRead-written,position-bytesRead+written);if(!result.bytesWritten)throw fail('SQLITE_SCRATCH_COPY_FAILED');written+=result.bytesWritten;}}}
+ return hash.digest('hex');
+}
+async function unchanged(input){
+ const current=await root(input.source.directory),names=(await fs.readdir(current.directory)).sort();
+ if(!sameFile(current.stat,input.source.stat)||names.length!==1||names[0]!==input.database||!sameFile(await fs.lstat(input.file),input.opened.stat)||!sameFile(await input.opened.handle.stat(),input.opened.stat)||await sourceHash(input.opened.handle,input.maxBytes,input.until)!==input.sourceHash)throw fail('SQLITE_SOURCE_CHANGED');
+}
+async function releaseInput(input,originalError){
+ const errors=[];try{input.db?.close();}catch(e){errors.push(e);}
+ if(input.scratch)try{if(input.sourceHash)await unchanged(input);}catch(e){errors.push(e);}
+ try{await input.opened?.handle.close();}catch(e){errors.push(e);}
+ if(input.scratch)try{const stat=await fs.lstat(input.scratch.directory);if(stat.isSymbolicLink()||stat.dev!==input.scratch.stat.dev||stat.ino!==input.scratch.stat.ino)throw fail('SQLITE_SCRATCH_CHANGED');await fs.rm(input.scratch.directory,{recursive:true,force:false});}catch(e){errors.push(e);}
+ if(errors.length){const error=errors[0];if(originalError){originalError.cleanupFailed=true;originalError.cleanupErrorCode=/^[A-Z0-9_]+$/.test(error.code||'')?error.code:'SQLITE_SCRATCH_CLEANUP_FAILED';}else throw error;}
+}
+async function inspectSqlite({sourceRoot,database,maxBytes=64*1024**2,quiescentSource,scratchRoot='/scratch'},{readOnly=true}={}){
  if(!filename.test(database||'')||!Number.isSafeInteger(maxBytes)||maxBytes<4096||maxBytes>256*1024**2)throw fail('SQLITE_SNAPSHOT_POLICY_INVALID');
- const source=await root(sourceRoot);await inventory(source.directory,database,maxBytes);
- const file=path.join(source.directory,database),opened=await regular(file);let db;
+ const quiescent=quiescentProof(quiescentSource),source=await root(sourceRoot);await inventory(source.directory,database,maxBytes);
+ const file=path.join(source.directory,database),opened=await regular(file),input={source,file,opened,database,maxBytes,until:Date.now()+15000};let db;
  try{
-  db=new DatabaseSync(file,{readOnly:true,timeout:100,allowExtension:false,defensive:true});db.exec('PRAGMA trusted_schema=OFF; PRAGMA query_only=ON;');
+  const header=Buffer.alloc(20);await opened.handle.read(header,0,header.length,0);
+  const names=await fs.readdir(source.directory),mainOnly=names.length===1&&names[0]===database,walHeader=header.subarray(0,16).equals(Buffer.from('SQLite format 3\0'))&&header[18]===2&&header[19]===2;
+  let inspectedFile=file;
+  if(readOnly&&mainOnly&&walHeader&&!quiescent)throw fail('SQLITE_QUIESCENT_PROOF_REQUIRED');
+  if(readOnly&&quiescent&&mainOnly&&walHeader){
+   // The adapter has just excluded every running RW mount. Never use this path
+   // with WAL/SHM/journal files: their committed pages must use online backup.
+   const scratch=await root(scratchRoot);if(scratch.stat.dev===source.stat.dev&&scratch.stat.ino===source.stat.ino||process.platform!=='win32'&&((scratch.stat.mode&0o777)!==0o700||typeof process.getuid==='function'&&scratch.stat.uid!==process.getuid()))throw fail('SQLITE_SCRATCH_UNSAFE');
+   const directory=await fs.mkdtemp(path.join(scratch.directory,'sqlite-ro-'));input.scratch={directory,stat:await fs.lstat(directory)};
+   inspectedFile=path.join(directory,database);const copy=await fs.open(inspectedFile,'wx',0o600);
+   try{input.sourceHash=await sourceHash(opened.handle,maxBytes,input.until,copy);await copy.sync();}finally{await copy.close();}
+   await unchanged(input);
+  }
+  // A private, bounded copy may create its own WAL-index files. The mounted
+  // source is always read-only, including this quiescent path; no immutable URI.
+  const beforeOpen=await fs.lstat(file);if(!sameFile(beforeOpen,opened.stat)||beforeOpen.isSymbolicLink())throw fail('SQLITE_SOURCE_CHANGED');
+  db=new DatabaseSync(inspectedFile,{readOnly:readOnly&&!input.scratch,timeout:100,allowExtension:false,defensive:true});input.db=db;db.exec('PRAGMA trusted_schema=OFF; PRAGMA query_only=ON;');
   const now=await fs.lstat(file);if(now.isSymbolicLink()||now.dev!==opened.stat.dev||now.ino!==opened.stat.ino)throw fail('SQLITE_SOURCE_CHANGED');
   const pageSize=db.prepare('PRAGMA page_size').get().page_size,pageCount=db.prepare('PRAGMA page_count').get().page_count;
   if(!Number.isSafeInteger(pageSize*pageCount)||pageSize*pageCount>maxBytes)throw fail('SQLITE_SNAPSHOT_SIZE_LIMIT');
   if(db.prepare('PRAGMA quick_check(1)').get().quick_check!=='ok')throw fail('SQLITE_SOURCE_CORRUPT');
-  return{source,file,opened,db,pageSize,pageCount,schemaHash:schema(db)};
- }catch(error){db?.close();await opened.handle.close();throw error;}
+  return Object.assign(input,{pageSize,pageCount,schemaHash:schema(db)});
+ }catch(error){await releaseInput(input,error);throw error;}
 }
-async function snapshotSqlite({sourceRoot,targetRoot,database,maxBytes=64*1024**2,timeoutMs=15000,expectedSchemaHash,migration}={}){
+async function snapshotSqlite({sourceRoot,targetRoot,database,maxBytes=64*1024**2,timeoutMs=15000,expectedSchemaHash,migration,quiescentSource,scratchRoot='/scratch'}={}){
  if(!Number.isInteger(timeoutMs)||timeoutMs<1||timeoutMs>30000||expectedSchemaHash!==undefined&&!/^[a-f0-9]{64}$/.test(expectedSchemaHash))throw fail('SQLITE_SNAPSHOT_POLICY_INVALID');
  const target=await root(targetRoot),source=await root(sourceRoot);
  if(source.stat.dev===target.stat.dev&&source.stat.ino===target.stat.ino)throw fail('SQLITE_VOLUME_ALIAS');
  if((await fs.readdir(target.directory)).length)throw fail('SQLITE_TARGET_NOT_EMPTY');
- const input=await inspectSqlite({sourceRoot,database,maxBytes}),until=Date.now()+timeoutMs;
- let output,temporary=path.join(target.directory,'snapshot-'+crypto.randomUUID()+'.sqlite'),published=false;
+ const input=await inspectSqlite({sourceRoot,database,maxBytes,quiescentSource,scratchRoot}),until=Date.now()+timeoutMs;
+ let output,temporary=path.join(target.directory,'snapshot-'+crypto.randomUUID()+'.sqlite'),published=false,failure;
  const destination=path.join(target.directory,database);
  try{
   if(expectedSchemaHash&&input.schemaHash!==expectedSchemaHash)throw fail('SQLITE_SCHEMA_CHANGE_UNSUPPORTED');
@@ -78,12 +116,13 @@ async function snapshotSqlite({sourceRoot,targetRoot,database,maxBytes=64*1024**
   if(process.platform!=='win32'){const directory=await fs.open(target.directory,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);try{await directory.chmod(source.stat.mode&0o777);await directory.chown(source.stat.uid,source.stat.gid);await directory.sync();}finally{await directory.close();}}
   return{version:1,kind:'sqlite-online-backup',database,bytes:stat.size,schemaHash,...(migrationProof?{sourceSchemaHash:input.schemaHash,userVersion:migrationProof.userVersion,migrationSha256:migrationProof.migrationSha256,existingDataPreserved:true}:{})};
  }catch(error){
+  failure=error;
   // Never remove a published generation. Its state is reconciled by the journal.
-  await output?.close();output=null;
-  if(!published&&temporary)await fs.unlink(temporary).catch(e=>{if(e.code!=='ENOENT')throw e;});throw error;
- }finally{await output?.close();input.db.close();await input.opened.handle.close();}
+  try{await output?.close();}catch(cleanup){error.cleanupFailed=true;error.cleanupErrorCode=cleanup.code||'SQLITE_SCRATCH_CLEANUP_FAILED';}output=null;
+  if(!published&&temporary)await fs.unlink(temporary).catch(e=>{if(e.code!=='ENOENT'){error.cleanupFailed=true;error.cleanupErrorCode=e.code||'SQLITE_SCRATCH_CLEANUP_FAILED';}});throw error;
+ }finally{try{await output?.close();}catch(error){if(!failure){await releaseInput(input,error);throw error;}failure.cleanupFailed=true;failure.cleanupErrorCode=error.code||'SQLITE_SCRATCH_CLEANUP_FAILED';}await releaseInput(input,failure);}
 }
-async function inspectPolicy(options){const input=await inspectSqlite(options);try{return{version:1,database:options.database,schemaHash:input.schemaHash,userVersion:input.db.prepare('PRAGMA user_version').get().user_version,uid:input.opened.stat.uid,gid:input.opened.stat.gid,bytes:input.pageSize*input.pageCount};}finally{input.db.close();await input.opened.handle.close();}}
+async function inspectPolicy(options,access){const input=await inspectSqlite(options,access);let failure;try{return{version:1,database:options.database,schemaHash:input.schemaHash,userVersion:input.db.prepare('PRAGMA user_version').get().user_version,uid:input.opened.stat.uid,gid:input.opened.stat.gid,bytes:input.pageSize*input.pageCount};}catch(error){failure=error;throw error;}finally{await releaseInput(input,failure);}}
 const quote=name=>'"'+name.replaceAll('"','""')+'"';
 function existingData(db,definition){
  const tables=definition||db.prepare("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>({name:row.name,columns:db.prepare('PRAGMA table_xinfo('+quote(row.name)+')').all()}));
@@ -103,7 +142,9 @@ function existingData(db,definition){
 }
 async function migrateSqlite({targetRoot,database,sql,sha256,expectedSourceSchemaHash,fromVersion,toVersion,maxBytes=64*1024**2}={}){
  if(typeof sql!=='string'||!sql.trim()||Buffer.byteLength(sql)>65536||!/^[a-f0-9]{64}$/.test(sha256||'')||crypto.createHash('sha256').update(sql).digest('hex')!==sha256||!/^[a-f0-9]{64}$/.test(expectedSourceSchemaHash||'')||!Number.isInteger(fromVersion)||!Number.isInteger(toVersion)||fromVersion<0||toVersion<=fromVersion||toVersion>2147483647)throw fail('SQLITE_MIGRATION_POLICY_INVALID');
- const inspected=await inspectPolicy({sourceRoot:targetRoot,database,maxBytes});if(inspected.schemaHash!==expectedSourceSchemaHash||inspected.userVersion!==fromVersion)throw fail('SQLITE_MIGRATION_SOURCE_MISMATCH');
+ // Only the explicit writable migration target may initialize its own WAL
+ // metadata. This private argument is never accepted through the helper DTO.
+ const inspected=await inspectPolicy({sourceRoot:targetRoot,database,maxBytes},{readOnly:false});if(inspected.schemaHash!==expectedSourceSchemaHash||inspected.userVersion!==fromVersion)throw fail('SQLITE_MIGRATION_SOURCE_MISMATCH');
  const directory=await root(targetRoot),file=path.join(directory.directory,database);let db,committed=false;
  try{
   db=new DatabaseSync(file,{timeout:100,allowExtension:false,defensive:true});const pageSize=db.prepare('PRAGMA page_size').get().page_size;

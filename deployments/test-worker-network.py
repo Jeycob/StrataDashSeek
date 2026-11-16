@@ -2,7 +2,7 @@
 
 unshare -n -- python3 test-worker-network.py GENERATED_FIREWALL_SH IPTABLES_BIN_DIR
 """
-import json, os, pathlib, subprocess, sys, time
+import json, os, pathlib, signal, subprocess, sys, time
 
 def main():
     if os.geteuid() != 0 or os.readlink('/proc/self/ns/net') == os.readlink('/proc/1/ns/net'):
@@ -51,7 +51,7 @@ while True:
     udp_query = '''import socket,sys
 s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(1);s.sendto(b'check',(sys.argv[1],int(sys.argv[2])));print(s.recv(1024).decode())
 '''
-    def http(namespace, url): return command(['python3','-c',http_query,url],namespace)
+    def http(namespace, url): return command([sys.executable,'-c',http_query,url],namespace)
     try:
         command(['ip','link','set','lo','up'])
         host, app = network(), network()
@@ -75,11 +75,11 @@ s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.settimeout(1);s.sendto(b'che
         command(['iptables','-A','FORWARD','-j','DOCKER-USER'])
         command(['iptables','-A','FORWARD','-j','ACCEPT'])
         command(['iptables','-t','nat','-A','PREROUTING','-i','eth0','-p','tcp','--dport','18080','-j','DNAT','--to-destination','172.18.0.2:8080'])
-        spawn(['python3','-c',http_server,'2375','CONTROL_OK'])
-        spawn(['python3','-c',http_server,'19075','HOST_LOOPBACK_OK'],host)
-        spawn(['python3','-c',http_server,'8080','APPLICATION_OK'],app)
-        spawn(['python3','-c',udp_server,'53'],host)
-        spawn(['python3','-c',udp_server,'67'],host)
+        spawn([sys.executable,'-c',http_server,'2375','CONTROL_OK'])
+        spawn([sys.executable,'-c',http_server,'19075','HOST_LOOPBACK_OK'],host)
+        spawn([sys.executable,'-c',http_server,'8080','APPLICATION_OK'],app)
+        spawn([sys.executable,'-c',udp_server,'53'],host)
+        spawn([sys.executable,'-c',udp_server,'67'],host)
         for _ in range(30):
             if http(host,'http://10.0.2.15:2375/') == 'CONTROL_OK': break
             time.sleep(.02)
@@ -92,7 +92,7 @@ try:
  s.sendall(b'GET / HTTP/1.0\\r\\nHost: test\\r\\n\\r\\n');print('ALLOWED' if s.recv(1024) else 'DENIED',flush=True)
 except Exception: print('DENIED',flush=True)
 '''
-        persistent = subprocess.Popen(['nsenter','-t',str(app),'-n','--','python3','-c',persistent_code],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+        persistent = subprocess.Popen(['nsenter','-t',str(app),'-n','--',sys.executable,'-c',persistent_code],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
         children.append(persistent)
         assert persistent.stdout.readline().strip() == 'CONNECTED'
         command(['sh',firewall])
@@ -107,8 +107,8 @@ except Exception: print('DENIED',flush=True)
         assert http(app,'http://10.0.2.2:19075/') == 'DENIED'
         assert http(None,'http://10.0.2.2:19075/') == 'DENIED'
         assert http(host,'http://10.0.2.15:18080/') == 'APPLICATION_OK'
-        assert command(['python3','-c',udp_query,'10.0.2.3','53'],app) == 'UDP_OK'
-        assert command(['python3','-c',udp_query,'10.0.2.2','67']) == 'UDP_OK'
+        assert command([sys.executable,'-c',udp_query,'10.0.2.3','53'],app) == 'UDP_OK'
+        assert command([sys.executable,'-c',udp_query,'10.0.2.2','67']) == 'UDP_OK'
         command(['ip','link','set','docker0','name','br-compose'])
         assert http(app,'http://172.18.0.1:2375/') == 'DENIED'
         assert http(host,'http://10.0.2.15:18080/') == 'APPLICATION_OK'
@@ -125,4 +125,9 @@ except Exception: print('DENIED',flush=True)
             try: child.wait(timeout=2)
             except subprocess.TimeoutExpired: child.kill(); child.wait()
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    # A bounded fixture timeout must still terminate its own namespace children.
+    def terminate(_signal, _frame):
+        raise SystemExit(143)
+    signal.signal(signal.SIGTERM, terminate)
+    main()

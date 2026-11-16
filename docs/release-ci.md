@@ -24,6 +24,16 @@ disappear through unittest discovery conventions. Linux metadata/two-UID
 fixtures need root and run under sudo only on the disposable runner. The gate
 refuses a host containing the production Harness guard path.
 
+The real firewall fixture has a dedicated Node test wrapper. It generates the
+current worker rules and starts the packet checks with `unshare --net`; the
+Python fixture refuses the host namespace. The wrapper requires positive
+results for bridge/control denial, pre-existing connections, previews, DNS/DHCP
+and idempotence. Ubuntu's `iptables`, `iproute2` and `util-linux` are test
+prerequisites, with installed versions recorded. `HARNESS_FIREWALL_TOOLS` may
+select an explicitly prepared local tools directory. Missing tools or namespace
+support fail the required check; the raw Python helper is not run a second time
+without its required arguments.
+
 Native SDK tests receive the pinned CLI explicitly. Both source fixtures and
 the literal distributed UI are exercised by existing browser suites. The gate
 also executes the real UI builder in a temporary source replica and compares

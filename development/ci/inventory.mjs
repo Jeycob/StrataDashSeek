@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const ignored = new Set(['.git', 'node_modules', '.wrangler', '__pycache__', '.harness', '.agents', '.codex', 'work', 'outputs', 'secrets', 'root-secrets', 'state', 'deployments']);
 const helpers = new Map([
+  ['deployments/test-worker-network.py', 'Real packet fixture invoked only by the required worker-network-linux-check.cjs wrapper in a fresh root network namespace.'],
   ['development/test-command.cjs', 'Production Node test-argument utility; covered by its test file.'],
   ['workspace/native-ui/test-bundle.cjs', 'Source fixture builder; covered by browser suites.'],
   ['vast/apps-browser-check.cjs', 'Owned-release browser verification adapter; requires a project, plan and release ID.']
@@ -14,7 +15,7 @@ const hostFixtures = new Map([
   ['vast/completion-guard-smoke.cjs', 'Legacy fixture requires an installed /data/harness profile and fixed local ports; never run against production from CI.'],
   ['workspace/reasoning-smoke.cjs', 'Legacy fixture requires installed host profiles; current-source unit/SDK checks are separate.']
 ]);
-const linuxChecks = new Set(['vast/runtime-paths-linux-check.cjs', 'vast/startup-update-linux-check.cjs', 'workspace/process-lock-linux-check.mjs', 'workspace/checkpoint-restore-linux-check.mjs', 'mobile/runtime-readiness-native-check.cjs', 'vast/apps-context-linux-check.cjs','vast/runtime-lease-linux-check.cjs','vast/startup-hook-linux-check.cjs']);
+const linuxChecks = new Set(['deployments/worker-network-linux-check.cjs','vast/runtime-paths-linux-check.cjs', 'vast/startup-update-linux-check.cjs', 'workspace/process-lock-linux-check.mjs', 'workspace/checkpoint-restore-linux-check.mjs', 'mobile/runtime-readiness-native-check.cjs', 'vast/apps-context-linux-check.cjs','vast/runtime-lease-linux-check.cjs','vast/startup-hook-linux-check.cjs']);
 const rootTests = new Set(['mobile/runtime-readiness.test.cjs', 'vast/apps-data-linux-check.cjs']);
 export function candidate(name) {
   const base = path.posix.basename(name);

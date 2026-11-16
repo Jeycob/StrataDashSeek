@@ -17,7 +17,7 @@ async function fixture(t,{first=false,helperTimeoutMs=2000}={}){
    if(u.pathname==='/containers/create'){bodies.push(body);assert(job.dataOperations&&Object.values(job.dataOperations.operations).some(o=>o.state==='intent'));const id=(next++).toString(16).padStart(64,'0');containers.set(id,{Id:id,Name:'/'+u.searchParams.get('name'),Image:body.Image,Config:{Labels:body.Labels},body,State:{Running:false,Status:'created',StartedAt:'0001-01-01T00:00:00Z'},Mounts:body.HostConfig.Mounts.map(m=>({Type:m.Type,Name:m.Source,Destination:m.Target,RW:!m.ReadOnly}))});return send({Id:id});}
    const match=u.pathname.match(/^\/containers\/([a-f0-9]{64})\/(json|start|wait|logs|stop|kill)$/),c=match&&containers.get(match[1]);if(!c)return send({message:'not found'},404);
    if(match[2]==='json')return send(c);
-   if(match[2]==='start'){c.State.Running=true;c.work=(async()=>{if(hang)return new Promise(()=>{});const opts=JSON.parse(c.body.Cmd[2]);for(const m of c.body.HostConfig.Mounts){if(m.Target==='/source')opts.sourceRoot=volumes.get(m.Source).dir;if(m.Target==='/target')opts.targetRoot=volumes.get(m.Source).dir;}try{const result=await exec(process.execPath,['-e',c.body.Cmd[0],c.body.Cmd[1],JSON.stringify(opts)],{timeout:1500,maxBuffer:4096,windowsHide:true});c.output=result.stdout;c.exit=0;}catch{c.output='';c.exit=1;}c.State.Running=false;})();return send({});}
+   if(match[2]==='start'){c.State.Running=true;c.work=(async()=>{if(hang)return new Promise(()=>{});const opts=JSON.parse(c.body.Cmd[2]);for(const m of c.body.HostConfig.Mounts){if(m.Target==='/source')opts.sourceRoot=volumes.get(m.Source).dir;if(m.Target==='/target')opts.targetRoot=volumes.get(m.Source).dir;}if(opts.quiescentSource){assert.equal(opts.scratchRoot,'/scratch');assert(c.body.HostConfig.Tmpfs['/scratch']);opts.scratchRoot=path.join(directory,'scratch-'+c.Id);fs.mkdirSync(opts.scratchRoot,{mode:0o700});}try{const result=await exec(process.execPath,['-e',c.body.Cmd[0],c.body.Cmd[1],JSON.stringify(opts)],{timeout:1500,maxBuffer:4096,windowsHide:true});c.output=result.stdout;c.exit=0;}catch{c.output='';c.exit=1;}c.State.Running=false;})();return send({});}
    if(match[2]==='wait'){if(hang)return;await c.work;return send({StatusCode:c.exit});}
    if(match[2]==='logs')return res.end(c.output);
    if(match[2]==='stop'||match[2]==='kill'){c.State.Running=false;return send({});}
@@ -33,7 +33,7 @@ test('latest active SQLite rows survive separate tested shadow and final generat
  sql(f.file('production'),"INSERT INTO orders VALUES(3,'new-production-order');");await assert.rejects(f.adapter.finalizeLatest(f.plan,verified),{code:'DEPLOYMENT_DATA_OLD_WRITER_NOT_STOPPED'});
  f.containers.get(old).State.Running=false;const final=await f.adapter.finalizeLatest(f.plan,verified);assert.deepEqual(sql(f.file(final.finalVolume),'SELECT id FROM orders ORDER BY id').map(r=>r.id),[1,3]);assert.deepEqual(sql(f.file(shadow.shadowVolume),'SELECT id FROM orders ORDER BY id').map(r=>r.id),[1,2]);assert(!JSON.stringify(final).includes('retained-order'));
  assert(f.job.creations.length>=4);assert(f.job.creations.every(record=>record.jobId===release&&record.slot));
- for(const body of f.bodies){assert.equal(body.HostConfig.NetworkMode,'none');assert.equal(body.HostConfig.ReadonlyRootfs,true);assert.equal(body.HostConfig.Memory,128*1024**2);assert.deepEqual(body.HostConfig.CapDrop,['ALL']);assert.deepEqual(body.HostConfig.CapAdd,['CHOWN','DAC_READ_SEARCH']);assert(body.HostConfig.Mounts.every(m=>m.VolumeOptions.NoCopy===true));assert(body.HostConfig.Mounts.filter(m=>m.Target==='/source').every(m=>m.ReadOnly));}
+ for(const body of f.bodies){const options=JSON.parse(body.Cmd[2]);assert.equal(body.HostConfig.NetworkMode,'none');assert.equal(body.HostConfig.ReadonlyRootfs,true);assert.equal(body.HostConfig.Memory,(options.quiescentSource?193:128)*1024**2);assert.equal(body.HostConfig.MemorySwap,body.HostConfig.Memory);if(options.quiescentSource){assert.deepEqual(options.quiescentSource,{version:1,noRunningWriters:true});assert.equal(options.scratchRoot,'/scratch');assert.deepEqual(body.HostConfig.Tmpfs,{'/scratch':'rw,noexec,nosuid,nodev,mode=0700,size='+65*1024**2});}else assert.equal(body.HostConfig.Tmpfs,undefined);assert.deepEqual(body.HostConfig.CapDrop,['ALL']);assert.deepEqual(body.HostConfig.CapAdd,['CHOWN','DAC_READ_SEARCH']);assert(body.HostConfig.Mounts.every(m=>m.VolumeOptions.NoCopy===true));assert(body.HostConfig.Mounts.filter(m=>m.Target==='/source').every(m=>m.ReadOnly));}
 });
 test('first deployment keeps initialized PRETEST baseline instead of promoting test-written data',async t=>{
  const f=await fixture(t,{first:true}),active=await f.adapter.inspectActive(f.plan),shadow=await f.adapter.prepareShadow(f.plan,active);sql(f.file(shadow.shadowVolume),"CREATE TABLE orders(id INTEGER PRIMARY KEY); INSERT INTO orders VALUES(1);");
@@ -97,5 +97,36 @@ test('Compose old-writer set must all stop; shared volume cannot be finalized wh
 });
 test('first-init migration uses inspected owner without added capabilities',async t=>{
  const f=await fixture(t,{first:true}),statement='ALTER TABLE orders ADD COLUMN note TEXT;',migration={sql:statement,sha256:crypto.createHash('sha256').update(statement).digest('hex'),fromVersion:0,toVersion:1},p={...f.plan,migration};
- const active=await f.adapter.inspectActive(p),shadow=await f.adapter.prepareShadow(p,active);sql(f.file(shadow.shadowVolume),'CREATE TABLE orders(id INTEGER PRIMARY KEY);');const baseline=await f.adapter.verifyShadow(p,shadow,{captureBaseline:true});assert.equal(baseline.migrationDisposition,'applied-before-tests');const body=f.bodies.find(body=>JSON.parse(body.Cmd[2]).migrate);assert(body);assert.match(body.User,/^\d+:\d+$/);assert.equal(body.HostConfig.CapAdd,undefined);assert.deepEqual(body.HostConfig.CapDrop,['ALL']);assert.equal(body.HostConfig.Mounts.length,1);assert.equal(body.HostConfig.Mounts[0].ReadOnly,false);
+ const active=await f.adapter.inspectActive(p),shadow=await f.adapter.prepareShadow(p,active);sql(f.file(shadow.shadowVolume),'PRAGMA journal_mode=WAL; CREATE TABLE orders(id INTEGER PRIMARY KEY);');const baseline=await f.adapter.verifyShadow(p,shadow,{captureBaseline:true});assert.equal(baseline.migrationDisposition,'applied-before-tests');const body=f.bodies.find(body=>JSON.parse(body.Cmd[2]).migrate);assert(body);assert.match(body.User,/^\d+:\d+$/);assert.equal(body.HostConfig.CapAdd,undefined);assert.deepEqual(body.HostConfig.CapDrop,['ALL']);assert.equal(body.HostConfig.Mounts.length,1);assert.equal(body.HostConfig.Mounts[0].ReadOnly,false);assert.equal(body.HostConfig.Memory,128*1024**2);assert.equal(body.HostConfig.Tmpfs,undefined);
+});
+
+test('quiescent tested or baseline proof refuses any running RW candidate even if caller supplies its ID',async t=>{
+ const f=await fixture(t,{first:true}),active=await f.adapter.inspectActive(f.plan),shadow=await f.adapter.prepareShadow(f.plan,active),id='7'.repeat(64);sql(f.file(shadow.shadowVolume),'CREATE TABLE orders(id INTEGER PRIMARY KEY);');
+ f.containers.set(id,{Id:id,Image:'sha256:'+'1'.repeat(64),Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:project}},State:{Running:true},Mounts:[{Type:'volume',Name:shadow.shadowVolume,Destination:'/data',RW:true}]});
+ const before=f.bodies.length;for(const captureBaseline of[true,false])await assert.rejects(f.adapter.verifyShadow(f.plan,shadow,{candidateContainerId:id,captureBaseline}),{code:'DEPLOYMENT_DATA_VOLUME_BUSY'});assert.equal(f.bodies.length,before);
+});
+
+test('internal quiescent helper does not trust a caller flag when the actual source writer is running',async t=>{
+ const f=await fixture(t);await assert.rejects(f.adapter.helper(f.plan,'db-final','production',null,null,{quiescentSource:true}),{code:'DEPLOYMENT_DATA_VOLUME_BUSY'});assert.equal(f.bodies.length,0);assert.equal(f.containers.get(old).State.Running,true);
+});
+
+test('a writer resumed after helper create is detected before helper start and marks finalization for recovery',async t=>{
+ const f=await fixture(t),active=await f.adapter.inspectActive(f.plan),shadow=await f.adapter.prepareShadow(f.plan,active),verified=await f.adapter.verifyShadow(f.plan,shadow);f.containers.get(old).State.Running=false;
+ const owned=f.manager.engine.owned.bind(f.manager.engine);let finalId;
+ f.manager.engine.owned=async(...args)=>{const c=await owned(...args);if(c.body){const o=JSON.parse(c.body.Cmd[2]);if(o.quiescentSource&&o.targetRoot){finalId=c.Id;f.containers.get(old).State.Running=true;}}return c;};
+ await assert.rejects(f.adapter.finalizeLatest(f.plan,verified),{code:'DEPLOYMENT_DATA_VOLUME_BUSY',phase:'recovery_required'});assert(finalId);assert(!f.calls.some(row=>row[1]==='/containers/'+finalId+'/start'));assert.equal(f.job.dataOperations.operations.finalization.state,'recovery_required');
+});
+
+test('final quiescent copy preserves latest closed-WAL rows and source bytes with bounded helper scratch',async t=>{
+ const f=await fixture(t),active=await f.adapter.inspectActive(f.plan),shadow=await f.adapter.prepareShadow(f.plan,active),verified=await f.adapter.verifyShadow(f.plan,shadow);sql(f.file('production'),"PRAGMA journal_mode=WAL; INSERT INTO orders VALUES(23,'latest committed');");f.containers.get(old).State.Running=false;
+ const before=fs.readFileSync(f.file('production'));assert.equal(before[18],2);assert.deepEqual(fs.readdirSync(f.volumes.get('production').dir),['app.sqlite']);const final=await f.adapter.finalizeLatest(f.plan,verified);
+ assert.deepEqual(sql(f.file(final.finalVolume),'SELECT id FROM orders ORDER BY id').map(row=>row.id),[1,23]);assert.deepEqual(fs.readFileSync(f.file('production')),before);assert.deepEqual(fs.readdirSync(f.volumes.get('production').dir),['app.sqlite']);
+ for(const name of fs.readdirSync(f.directory).filter(name=>name.startsWith('scratch-')))assert.deepEqual(fs.readdirSync(path.join(f.directory,name)),[]);
+});
+
+test('explicit legacy final source remains supported while unowned shadow never receives the legacy exception',async t=>{
+ const f=await fixture(t),p={...f.plan,allowLegacy:true};f.volumes.get('production').Labels={};const active=await f.adapter.inspectActive(p),shadow=await f.adapter.prepareShadow(p,active),candidateVolume=f.volumes.get(shadow.shadowVolume),labels=candidateVolume.Labels;
+ candidateVolume.Labels={};await assert.rejects(f.adapter.verifyShadow(p,shadow),{code:'DEPLOYMENT_DATA_VOLUME_UNOWNED'});candidateVolume.Labels=labels;
+ const verified=await f.adapter.verifyShadow(p,shadow);sql(f.file('production'),"INSERT INTO orders VALUES(31,'latest legacy row');");f.containers.get(old).State.Running=false;
+ const final=await f.adapter.finalizeLatest(p,verified);assert.deepEqual(sql(f.file(final.finalVolume),'SELECT id FROM orders ORDER BY id').map(row=>row.id),[1,31]);assert.deepEqual(f.volumes.get('production').Labels,{});
 });

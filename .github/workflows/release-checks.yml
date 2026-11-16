@@ -24,7 +24,6 @@ jobs:
       HARNESS_WEB_PUSH_MODULE: ${{ github.workspace }}/runtime/node_modules/web-push
       HARNESS_PLAYWRIGHT_MODULE: ${{ github.workspace }}/development/ci/node_modules/playwright
       HARNESS_WRANGLER_CLI: ${{ github.workspace }}/development/ci/node_modules/wrangler/bin/wrangler.js
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/playwright-browsers
       PYTHONDONTWRITEBYTECODE: '1'
       WRANGLER_SEND_METRICS: 'false'
     steps:
@@ -48,9 +47,14 @@ jobs:
       - name: Install exact production SDK and isolated test tooling
         id: dependencies
         run: |
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/playwright-browsers"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           npm ci --prefix runtime --no-audit --no-fund
           npm ci --prefix development/ci --no-audit --no-fund
           python -m pip install --no-deps --requirement development/ci/requirements.txt
+          sudo -n apt-get update
+          sudo -n apt-get install --no-install-recommends -y iptables iproute2
+          dpkg-query -W iptables iproute2 util-linux
           node development/ci/node_modules/playwright/cli.js install --with-deps chromium
           echo "HARNESS_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
       - name: Build the Worker without uploading or provisioning
