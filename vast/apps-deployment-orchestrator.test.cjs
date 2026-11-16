@@ -48,6 +48,43 @@ test('first SQLite deployment initializes only shadow with image copy; tests nev
 test('SQLite update copies current data after old writers stop and uses NoCopy for both generations',async t=>{
  const f=await fixture(t,{sqlite:true});await f.m.verifyRelease(f.p,f.job);assert(f.events.indexOf('stop:'+old)<f.events.indexOf('final-copy'));assert(f.creates.every(c=>c.body.HostConfig.Mounts[0].VolumeOptions.NoCopy===true));assert.deepEqual(f.m.finalRows,[1,9]);
 });
+
+async function journaledPublication(f,{sqlite=true}={}){
+ const generation='7'.repeat(16),candidateGeneration='6'.repeat(16),candidate='e'.repeat(64),replica='f'.repeat(64),stopped='8'.repeat(64),productionVolume='sdsh-'+project+'-'+generation+'-data',candidateVolume='sdsh-'+project+'-'+candidateGeneration+'-data';
+ Object.assign(f.m.project(),{dataGeneration:generation,source:{sha256:schema}});
+ const actor=(id,gen,running)=>({Id:id,Image:image,Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:project,[LABEL+'.release']:prior,[LABEL+'.job']:prior,[LABEL+'.role']:'candidate',[LABEL+'.generation']:gen,'com.docker.compose.service':'web'}},HostConfig:{Memory:128*1024**2,RestartPolicy:{Name:'no'}},State:{Running:running,Status:running?'running':'exited'},Mounts:sqlite?[{Type:'volume',Name:gen===generation?productionVolume:candidateVolume,Destination:'/app/data',RW:true}]:[],Ports:[]});
+ for(const[id,gen,running]of[[old,generation,true],[candidate,candidateGeneration,false],[replica,generation,true],[stopped,generation,false]])f.containers.set(id,actor(id,gen,running));
+ const state=new DeploymentState(path.join(f.stateDir,'deployment-transactions')),identity={projectId:project,releaseId:prior,sourceHash:schema,dataGeneration:generation};
+ try{state.begin(identity,{candidateDataGeneration:candidateGeneration});state.transition(identity,'prepared',sqlite?{candidateVolumes:{data:candidateVolume}}:{});state.transition(identity,'verifying',{candidateContainers:{web:candidate},images:{web:image}});state.transition(identity,'promotable',{checksHash:schema});state.transition(identity,'promoting',{activeContainers:{web:old},...(sqlite?{productionVolumes:{data:productionVolume}}:{})});state.transition(identity,'active',{activeObservedHash:schema});}finally{state.close();}
+ return{generation,candidateGeneration,candidate,replica,stopped,productionVolume,candidateVolume};
+}
+
+test('updates retain exact stopped verification actors while every published-generation writer remains in the cutover',async t=>{
+ for(const sqlite of[false,true])await t.test(sqlite?'SQLite':'stateless',async t=>{
+  const f=await fixture(t,{sqlite}),priorActors=await journaledPublication(f,{sqlite}),inspect=f.Data.prototype.inspectActive;
+  if(sqlite)f.Data.prototype.inspectActive=async function(plan){assert.deepEqual(new Set(plan.oldContainerIds),new Set([old,priorActors.replica,priorActors.stopped]));assert(plan.oldContainerIds.every(id=>f.containers.get(id).Mounts[0].Name===priorActors.productionVolume));return inspect.call(this,plan);};
+  await f.m.verifyRelease(f.p,f.job);
+  assert.deepEqual(new Set(f.job.deploymentRuntime.oldContainerIds),new Set([old,priorActors.replica,priorActors.stopped]));assert.deepEqual(f.job.deploymentRuntime.retainedCandidateIds,[priorActors.candidate]);
+  assert(!f.events.includes('stop:'+priorActors.candidate));assert(f.containers.has(priorActors.candidate));for(const id of[old,priorActors.replica,priorActors.stopped])assert.equal(f.containers.get(id).State.Running,false);
+ });
+});
+
+test('running, changed or unsafe retained candidates and unknown generations fence updates before old writers are stopped',async t=>{
+ const changes={running:(f,a)=>{f.containers.get(a.candidate).State.Running=true;},restart:(f,a)=>{f.containers.get(a.candidate).HostConfig.RestartPolicy.Name='always';},role:(f,a)=>{f.containers.get(a.candidate).Config.Labels[LABEL+'.role']='test';},generation:(f,a)=>{f.containers.get(a.candidate).Config.Labels[LABEL+'.generation']=a.generation;},image:(f,a)=>{f.containers.get(a.candidate).Image=newImage;},productionMount:(f,a)=>{f.containers.get(a.candidate).Mounts[0].Name=a.productionVolume;},bindMount:(f,a)=>{f.containers.get(a.candidate).Mounts[0].Type='bind';},unknownGeneration:(f,a)=>{f.containers.get(a.replica).Config.Labels[LABEL+'.generation']='9'.repeat(16);},missingGeneration:(f,a)=>{delete f.containers.get(a.replica).Config.Labels[LABEL+'.generation'];},missingPublished:(f)=>{f.containers.delete(old);}};
+ for(const[name,change]of Object.entries(changes))await t.test(name,async t=>{const f=await fixture(t,{sqlite:true}),actors=await journaledPublication(f);change(f,actors);await assert.rejects(f.m.verifyRelease(f.p,f.job),{code:'DEPLOYMENT_EXISTING_PROJECT_WORK_UNRESOLVED'});assert.equal(f.creates.length,0);assert(!f.events.includes('phase:promoting'));assert(!f.events.includes('stop:'+old));});
+});
+
+test('publication journal or pointer conflicts are never repaired by ignoring historical containers',async t=>{
+ for(const mismatch of['generation','source','missingJournal'])await t.test(mismatch,async t=>{const f=await fixture(t,{sqlite:true});if(mismatch==='missingJournal')f.m.project().dataGeneration='7'.repeat(16);else{await journaledPublication(f);if(mismatch==='generation')f.m.project().dataGeneration='8'.repeat(16);else f.m.project().source.sha256='9'.repeat(64);}await assert.rejects(f.m.verifyRelease(f.p,f.job),{code:'DEPLOYMENT_PUBLISHED_PROOF_INVALID'});assert.equal(f.creates.length,0);assert(!f.events.includes('stop:'+old));});
+});
+
+test('stopped actors claiming the published generation cannot escape inspection through changed release or helper labels',async t=>{
+ for(const change of['release','data-helper','test','restart'])await t.test(change,async t=>{const f=await fixture(t,{sqlite:true}),actors=await journaledPublication(f),extra=f.containers.get(actors.replica);extra.State={Running:false,Status:'exited'};extra.HostConfig.RestartPolicy.Name='always';if(change==='release')extra.Config.Labels[LABEL+'.release']='0'.repeat(16);else if(change!=='restart')extra.Config.Labels[LABEL+'.role']=change;await assert.rejects(f.m.verifyRelease(f.p,f.job),{code:change==='restart'?'DEPLOYMENT_OLD_RESTART_POLICY_UNSAFE':'DEPLOYMENT_EXISTING_PROJECT_WORK_UNRESOLVED'});assert.equal(f.creates.length,0);assert(!f.events.includes('stop:'+old));});
+});
+
+test('an unjournaled stopped container is not silently excluded, and published writers still undergo volume validation',async t=>{
+ for(const legacy of[true,false])await t.test(legacy?'legacy':'wrong-volume',async t=>{const f=await fixture(t,{sqlite:true}),actors=await journaledPublication(f);if(legacy)delete f.m.project().dataGeneration;else f.containers.get(actors.replica).Mounts[0].Name='unrelated-volume';f.Data.prototype.inspectActive=async function(plan){const names=new Set(plan.oldContainerIds.map(id=>f.containers.get(id).Mounts[0].Name));assert(names.size>1);throw Object.assign(Error('DEPLOYMENT_DATA_ACTIVE_UNSUPPORTED'),{code:'DEPLOYMENT_DATA_ACTIVE_UNSUPPORTED'});};await assert.rejects(f.m.verifyRelease(f.p,f.job),{code:'DEPLOYMENT_DATA_ACTIVE_UNSUPPORTED'});assert.equal(f.creates.length,0);assert(!f.events.includes('stop:'+old));});
+});
 test('multi-service Compose uses isolated networks, exact service aliases and no legacy Compose up',async t=>{
  const f=await fixture(t,{compose:true});const result=await f.m.composeRelease(f.p,f.job);assert.equal(Object.keys(result.images).length,2);assert.equal(f.creates.length,4);assert.notEqual(f.creates[0].body.HostConfig.NetworkMode,f.creates[2].body.HostConfig.NetworkMode);assert(f.creates.every(c=>c.body.NetworkingConfig.EndpointsConfig[c.body.HostConfig.NetworkMode].Aliases.length===1));assert(!f.calls.some(call=>call[0]==='cli'&&call.includes('up')));const web=f.creates.find(c=>c.body.Labels['com.docker.compose.service']==='web');assert.equal(web.body.Healthcheck.Interval,2e9);
 });
