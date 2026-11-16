@@ -4,10 +4,17 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {spawnSync} from 'node:child_process';
-import {summary, gateOutcome, testEnvironment, combineReports} from './release-ci.mjs';
+import {summary, gateOutcome, testEnvironment, combineReports, failureAnnotations} from './release-ci.mjs';
 import {candidate, classify, inventory} from './ci/inventory.mjs';
 const run = (stdout, extra = {}) => ({stdout, stderr: '', exitCode: 0, error: null, timedOut: false, truncated: false, aborted: false, ...extra});
 const tap = '# tests 2\n# pass 2\n# fail 0\n# skipped 0\n# cancelled 0\n# todo 0\n';
+
+test('failed release suites produce escaped public annotations without process output or changing the gate',()=>{
+  const report={passed:false,results:[{file:'vast/bad,\n%fixture.test.cjs',lane:'linux-root',outcome:'failed',exitCode:1,counts:{failed:2,skipped:0,cancelled:0},stdout:'PRIVATE_PROCESS_OUTPUT',stderr:'PRIVATE_ENV_VALUE'}]};
+  const [line]=failureAnnotations(report);assert.match(line,/file=vast\/bad%2C%0A%25fixture.test.cjs/);assert.match(line,/linux-root: failed; exit=1; failed=2/);assert.equal(line.includes('\n'),false);assert.equal(line.includes('PRIVATE_'),false);assert.equal(report.passed,false);
+  assert.deepEqual(failureAnnotations({...report,passed:true}),[]);assert.deepEqual(failureAnnotations({inventory:{},passed:false}),[]);
+  assert.match(failureAnnotations({passed:false,outcome:'unrunnable',reason:'MISSING_LANE',results:[]})[0],/MISSING_LANE/);
+});
 
 test('combined evidence requires every suite exactly once, clean matching source and actual successful results',()=>{
   const entries=[{file:'a.test.mjs',lane:'portable',required:true,kind:'node'},{file:'b.test.cjs',lane:'linux-root',required:true,kind:'node'}],list={entries,unclassified:[]};

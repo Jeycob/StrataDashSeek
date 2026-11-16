@@ -160,9 +160,24 @@ async function combineDirectory(output){
   if(!report.workerArtifacts?.length){report.passed=false;report.outcome='unrunnable';report.reason='WORKER_ARTIFACT_UNAVAILABLE';}
   await fs.writeFile(path.join(output,'report.json'),JSON.stringify(report,null,2));return report;
 }
+export function failureAnnotations(report) {
+  if (report.inventory || report.passed) return [];
+  const escape = value => String(value).replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+  const property = value => escape(value).replaceAll(':', '%3A').replaceAll(',', '%2C');
+  const failures = (report.results || []).filter(row => row.outcome !== 'passed');
+  const rows = failures.length ? failures : [{file: '.github/workflows/release-checks.yml', lane: report.lane || 'combined', outcome: report.outcome, reason: report.reason}];
+  return rows.slice(0, 30).map(row => {
+    const counts = row.counts ? `; failed=${row.counts.failed ?? 0}; skipped=${row.counts.skipped ?? 0}; cancelled=${row.counts.cancelled ?? 0}` : '';
+    const reason = /^[A-Z0-9_]+$/.test(row.reason || '') ? `; ${row.reason}` : '';
+    // Only structured suite metadata is public. Never copy process logs or env.
+    const message = `${row.lane || 'unknown'}: ${row.outcome || 'unrunnable'}${Number.isInteger(row.exitCode) ? '; exit=' + row.exitCode : ''}${counts}${reason}`;
+    return `::error file=${property(row.file)},line=1,title=Release check failed::${escape(message)}`;
+  });
+}
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2), value = name => args[args.indexOf(name) + 1];
   (args.includes('--combine')?combineDirectory(value('--output')):releaseCI({lane: args.includes('--lane') ? value('--lane') : 'all', output: value('--output'), inventoryOnly: args.includes('--inventory'), allowDirty: args.includes('--allow-dirty')})).then(report => {
+    for (const annotation of failureAnnotations(report)) console.error(annotation);
     console.log(JSON.stringify(report.inventory ? {inventoryOnly: true, files: report.inventory.entries.length, unclassified: report.inventory.unclassified, source: report.source} : {passed: report.passed, outcome: report.outcome, suites: report.results.length, source: report.source, report: path.join(value('--output'), 'report.json')}));
     if (!report.inventory) process.exitCode = report.passed ? 0 : 1;
   }).catch(error => {console.error(error.message); process.exitCode = 1;});
