@@ -1,0 +1,4 @@
+# Authentication belongs to the scoped root broker, never a public listener.
+auth: none
+cert: false
+bind-addr: 0.0.0.0:8080
