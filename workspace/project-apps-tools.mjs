@@ -57,17 +57,37 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
   if(response?.version!==1||response.job?.id!==id)throw fail('PROJECT_APPS_JOB_INVALID');
   return{projectId,job:jobView(response.job)};
  }
- async function settlement(admission,signal){
+ async function storedSettlement(record,signal){
   // Private read-only continuation of this exact admitted request. It retains
   // no authority to enqueue, read logs or choose another project after revocation.
-  const id=admission.lifetime.snapshot().appsJobId;
-  const query=new URLSearchParams({_contextProjectId:admission.projectId,...(id?{id}:{requestId:admission.requestId})});
+  const id=record.appsJobId;
+  const query=new URLSearchParams({_contextProjectId:record.projectId,...(id?{id}:{requestId:record.requestId})});
   let response;try{response=await callApps((id?'/job-status':'/project-request')+'?'+query,undefined,{...appsConfig,signal,timeoutMs:8000});}catch{throw fail('PROJECT_APPS_SETTLEMENT_UNCERTAIN');}
   if(response?.version!==1)throw fail('PROJECT_APPS_SETTLEMENT_INVALID');
-  if(!id){if(response.requestId!==admission.requestId||response.state!=='recorded')throw fail('PROJECT_APPS_SETTLEMENT_UNCERTAIN');}
+  if(!id){if(response.requestId!==record.requestId||response.state!=='recorded')throw fail('PROJECT_APPS_SETTLEMENT_UNCERTAIN');}
   const job=jobView(response.job);
   if(id&&job.id!==id||job.action!=='verify')throw fail('PROJECT_APPS_SETTLEMENT_INVALID');
+  return job;
+ }
+ async function settlement(admission,signal){
+  const job=await storedSettlement({...admission,appsJobId:admission.lifetime.snapshot().appsJobId},signal);
   admission.lifetime.accepted(job.id);return job;
+ }
+ async function reconcileStored(){
+  if(typeof receiptStore?.list!=='function')throw fail('PROJECT_APPS_RECEIPTS_UNAVAILABLE');
+  const rows=await receiptStore.list(),controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),8000);timer.unref?.();let checked=0;
+  const liveIds=new Set([...pending.values()].filter(p=>p.lifetime.snapshot().leaseRetained).map(p=>p.requestId));
+  try{
+   for(const row of rows){
+    if(liveIds.has(row.requestId))continue;
+    if(checked>=32||controller.signal.aborted)break;checked++;
+    try{const job=await storedSettlement(row,controller.signal);if(job.workSettled&&job.terminal&&['passed','failed'].includes(job.status)&&!job.recoveryRequired)await receiptStore.remove(row.requestId);}catch{/* Persisted unknown/error never proves quiescence. */}
+   }
+  }finally{clearTimeout(timer);}
+  const remaining=await receiptStore.list(),currentLiveIds=new Set([...pending.values()].filter(p=>p.lifetime.snapshot().leaseRetained).map(p=>p.requestId));
+  const view=remaining.map(row=>({...row,liveOwned:currentLiveIds.has(row.requestId)}));
+  return{version:1,checked,pending:view,reconciliationRequired:view.some(row=>!row.liveOwned)};
  }
  function jobs(){const value=typeof ctx.get==='function'?ctx.get('jobs'):ctx.jobs;if(!value||typeof value.start!=='function')throw fail('PROJECT_APPS_SDK_JOBS_UNAVAILABLE');return value;}
  async function deploy(execution){
@@ -137,5 +157,5 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
  }
  const definition={name:'project_apps',description:'Manage the current isolated project application through the authenticated Apps controller, without guest credentials or arbitrary CLI. Prepare .harness-app.json (version:1, name, port1024..65535, testCommand, healthPath and the existing Dockerfile/Compose declaration) and real health/browser checks; register reads that manifest. verify_deploy registers and starts the existing verify-and-deploy workflow as an owned SDK monitoring job. Inspect progress using job_output/job_list; status returns this project only and its real applicationUrl. job_status/job_log take an owned Apps job ID; job_log returns bounded existing controller-redacted diagnostics. Apps cannot be canceled here: SDK kill/timeout retains admission until exact Apps settlement, or requires reconciliation after uncertainty. Status contains only own rows among the last 30 global jobs; absence never proves enqueue failed. No global power, settings, delete, export, rollback or arbitrary target operations.',parameters:projectAppsParameters,isConcurrencySafe:()=>false,output:{schema:{type:'object'},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]},execute};
  const disposeRegistration=ctx.tools.register(definition,{when:({agent})=>{const a=manager.ownerAgent(agent),p=manager.data.sessions[a?.id];return Boolean(p&&!p.legacy);}});
- return{execute,pendingAdmissions:()=>[...pending.values()].map(p=>({ownerId:p.ownerId,projectId:p.projectId,requestId:p.requestId,...p.lifetime.snapshot()})),async reconcilePending(execution){for(const[id,p]of pending){if(p.ownerId!==owner(execution).id)continue;const current=await settlement(p,execution.signal);if(current.terminal){p.lifetime.terminal(current);pending.delete(id);await receiptStore.remove(p.requestId);}}},async dispose(){if(disposed)return;closing=true;disposeRegistration();for(const entry of active){try{entry.registry.kill(entry.id,entry.owner,'Apps monitor disposed');}catch{entry.cancel();}}await Promise.all([...active].map(entry=>entry.done));disposed=true;}};
+ return{execute,reconcileStored,async beforeHeavy(){const report=await reconcileStored();if(report.reconciliationRequired)throw fail('PROJECT_APPS_RECONCILIATION_REQUIRED');},pendingAdmissions:()=>[...pending.values()].map(p=>({ownerId:p.ownerId,projectId:p.projectId,requestId:p.requestId,...p.lifetime.snapshot()})),async reconcilePending(execution){for(const[id,p]of pending){if(p.ownerId!==owner(execution).id)continue;const current=await settlement(p,execution.signal);if(current.terminal&&current.workSettled){p.lifetime.terminal(current);pending.delete(id);await receiptStore.remove(p.requestId);}}},async dispose(){if(disposed)return;closing=true;disposeRegistration();for(const entry of active){try{entry.registry.kill(entry.id,entry.owner,'Apps monitor disposed');}catch{entry.cancel();}}await Promise.all([...active].map(entry=>entry.done));disposed=true;}};
 }

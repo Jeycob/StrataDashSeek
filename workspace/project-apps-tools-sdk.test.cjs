@@ -32,7 +32,7 @@ async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=fals
   const lease=await import(pathToFileURL(process.env.HOMEAI_HEAVY_LEASE_MODULE));retainHeavyToolLease=lease.retainHeavyToolLease;
   ctx.on('tools/execute',async(exec,next)=>{if(exec.name!=='project_apps'||exec.arguments.operation!=='verify_deploy')return next();retained++;const release=lease.bindHeavyToolLease(exec,{release(){retained--;}});try{return await next();}finally{release();}},{global:true});
  }
- const module=S.createProjectAppsTools(ctx,manager,{callApps,appsConfig:{workspaceRoot,keyFile:'PRIVATE_KEY_PATH'},receiptStore:{async save(row){receipts.set(row.requestId,{...row});},async remove(id){receipts.delete(id);}},retainHeavyToolLease,pollMs:10,monitorMs:1000});
+ const module=S.createProjectAppsTools(ctx,manager,{callApps,appsConfig:{workspaceRoot,keyFile:'PRIVATE_KEY_PATH'},receiptStore:{async list(){return[...receipts.values()].map(r=>({...r}));},async save(row){receipts.set(row.requestId,{...row});},async remove(id){receipts.delete(id);}},retainHeavyToolLease,pollMs:10,monitorMs:1000});
  const pipeline=new S.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>S.executeToolBatch(input,pipeline,()=>1)});
  function agent(id,{owner,mode}={}){const a={id,owner,status:'idle',inbox:{nextStep:[],remove(){}},session:{id,mode,header:{createdAt:2000},append(){}},inject(){},followup(){}};const scope=S.createScope(ctx,a);a.ctx=scope.ctx;scopes.push(scope);agents.set(id,a);if(!owner)manager.data.sessions[id]={root};return a;}
  async function call(agent,args={operation:'status'},name='project_apps',signal=new AbortController().signal){const toolSet=await ctx.tools.resolve({agent,modelSelection:{provider:'fixture',model:'fixture'},signal:new AbortController().signal});try{const result=await ctx.tools.execute({agent,signal,toolSet,calls:[{id:'apps-call',name,arguments:JSON.stringify(args)}]});return result.results[0].result;}finally{toolSet.dispose();}}
@@ -96,4 +96,15 @@ test('failed deployment yields failed SDK job and disposal stops only monitors',
 test('authority failure reveals no private exception and never reaches Apps API',async t=>{
  const f=await fixture(t,{authorityFailure:true}),a=f.agent('owner');const result=await f.call(a,{operation:'register'});
  assert.equal(result.isError,true);assert.match(JSON.stringify(result),/PROJECT_APPS_AUTHORITY_UNAVAILABLE/);assert(!JSON.stringify(result).includes('PRIVATE_PATH'));assert.equal(f.calls.length,0);
+});
+test('restart guard blocks orphan running/unknown receipts and clears only exact workSettled metadata',async t=>{
+ const f=await fixture(t),row={ownerId:'owner',projectId:f.projectId,requestId:'d'.repeat(32),appsJobId:f.appsId,startedAt:1};f.receipts.set(row.requestId,row);
+ await assert.rejects(f.module.beforeHeavy(),/PROJECT_APPS_RECONCILIATION_REQUIRED/);assert.equal(f.receipts.size,1);
+ await f.module.beforeHeavy();assert.equal(f.receipts.size,0);assert(f.calls.every(c=>c.route.startsWith('/job-status')));
+ f.receipts.set(row.requestId,{...row,appsJobId:null});const report=await f.module.reconcileStored();assert.equal(report.reconciliationRequired,true);assert.equal(report.pending[0].liveOwned,false);assert.equal(f.receipts.size,1);
+});
+test('restart guard skips currently owned retained receipts so normal heavy queue retains authority',async t=>{
+ const f=await fixture(t,{hold:true}),a=f.agent('owner'),result=await f.call(a,{operation:'verify_deploy'}),id=result.value.sdkJobId;
+ await eventually(()=>f.calls.some(c=>c.route.startsWith('/job-status')));const report=await f.module.reconcileStored();assert.equal(report.reconciliationRequired,false);assert.equal(report.pending[0].liveOwned,true);assert.equal(f.retained(),1);
+ f.setHold(false);await eventually(()=>f.ctx.jobs.get(id,a.id).status==='completed');assert.equal(f.retained(),0);
 });
