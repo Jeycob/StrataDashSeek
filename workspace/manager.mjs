@@ -92,18 +92,22 @@ export class WorkspaceManager {
       if (settings.projectMode === 'continue') root = await fs.realpath(current);
       else {
         ({ root, branch, baseCommit, sourceCommit, independentRepository } = await createIndependentProject({ projectsRoot: this.projectsRoot, sessionId: agent.id, sourceRoot: current, mode: settings.projectMode, baseCommit: settings.baseCommit, signal }));
-        this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, root));
-        await this.ctx.workingDirectory.set(agent, root, signal);
       }
       const ports = await this.allocatePorts(), databasePath = path.join(root, '.harness', 'data', 'app.sqlite');
       await fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
       record = { root, sourceRoot: current, workspaceId: workspace?.id, ports, databasePath, baseCommit, sourceCommit, branch, independentRepository, nativeWorktree, at: Date.now(), settings };
-      this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save();
       await atomicJSON(path.join(root, '.harness', 'project.json'), { sessionId: agent.id, ports, databasePath, baseCommit, root });
       // Change tracking is optional: a full source baseline must never prevent
       // the user's project from starting when disk reserve is unavailable.
+      // Capture Git while this fresh independent root is still unpublished:
+      // neither an executor nor the editor may mutate its object store yet.
       try { await this.changes.initialize(agent.id, record, { projectCreated: true, signal }); }
       catch (error) { this.ctx.logger?.warn('Change baseline unavailable: ' + (error.code ?? 'CHANGES_UNAVAILABLE')); }
+      this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save();
+      if (independentRepository) {
+        this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, root));
+        await this.ctx.workingDirectory.set(agent, root, signal);
+      }
       this.pendingNotices.set(agent.id, notice(`Project files are prepared. Command and editor readiness are checked separately when requested. Work only in ${JSON.stringify(root)}. ${sourceCommit ? `Source commit: ${sourceCommit}; independent shallow Git baseline, with no borrowed object store. Source checkout and uncommitted files were not copied or changed.` : independentRepository ? 'This independent task has a new empty Git repository and an initial commit.' : 'This conversation retains its selected existing directory; commands require an independently enrolled project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec require the same isolated guest executor, where this project is mounted at /workspace and DATABASE_URL=file:/workspace/.harness/data/app.sqlite. PORT, API_PORT and TEST_PORT use the assigned values. If runtime admission or prepared tools are unavailable, report the diagnostic and retain the files. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. When the immutable guest toolchain is available, its quality contract documentation is /opt/homeai/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Verification never renews the total task allowance. Repeated identical errors without progress or an exhausted allowance stop safely with retained files.`));
       return record;
     });

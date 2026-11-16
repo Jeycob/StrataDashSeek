@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { LiveChanges } from './changes.mjs';
+import { projectGit } from './project-repository.mjs';
 
 const execute = promisify(execFile);
 const runtimeRoot = process.env.HOMEAI_RUNTIME ?? (process.env.HARNESS_NATIVE_CLI
@@ -137,16 +138,16 @@ test('existing project using its source directory never claims a historical empt
   assert.equal(result.total, 0);
 });
 
-test('git base compares committed content and includes untracked files without changing the repository', async t => {
-  const f = await fixture(t, {}, 'continue');
+test('git base compares privately retained committed content and includes untracked files without changing the repository', async t => {
+  const f = await fixture(t);
   const hooks = path.join(f.directory, 'empty-hooks'); await fs.mkdir(hooks);
   const git = async (...args) => (await execute('git', ['-c', 'core.hooksPath=' + hooks,
     '-c', 'user.name=Live Changes Fixture', '-c', 'user.email=fixture@example.invalid', ...args],
   { cwd: f.root, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null' }, windowsHide: true, timeout: 10000, maxBuffer: 1024 * 1024 })).stdout;
   await git('init', '--quiet'); await f.write('tracked.txt', 'committed\n'); await git('add', '--', 'tracked.txt');
   await git('commit', '--quiet', '-m', 'fixture baseline');
-  f.project.baseCommit = (await git('rev-parse', 'HEAD')).trim(); f.project.nativeWorktree = true;
-  await f.tracker.initialize('one', f.project);
+  f.project.baseCommit = (await git('rev-parse', 'HEAD')).trim(); f.project.independentRepository = true;
+  await f.tracker.initialize('one', f.project, { projectCreated: true });
   assert.equal((await f.tracker.list('one', f.project)).total, 0);
   await f.write('tracked.txt', 'working change\n'); await f.write('untracked.txt', 'new file\n');
   const statusBefore = await git('status', '--porcelain=v1');
@@ -157,6 +158,89 @@ test('git base compares committed content and includes untracked files without c
   const diff = await f.tracker.diff('one', f.project, { path: 'tracked.txt' });
   assert.ok(lines(diff).includes('-committed')); assert.ok(lines(diff).includes('+working change'));
   assert.equal(await git('status', '--porcelain=v1'), statusBefore);
+});
+
+async function gitFixture(t, options = {}, format = 'sha1') {
+  const f = await fixture(t, options), git = args => projectGit(f.root, args);
+  await git(['init', '--initial-branch=main', '--template=', '--object-format=' + format, '.']);
+  await f.write('tracked.txt', 'committed\n'); await git(['add', '.']);
+  await git(['-c', 'user.name=Synthetic', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'baseline']);
+  f.project.baseCommit = (await git(['rev-parse', 'HEAD'])).trim(); f.project.independentRepository = true;
+  return { ...f, git, capture: () => f.tracker.initialize('one', f.project, { projectCreated: true }) };
+}
+
+test('published Git replacement refs, alternates and hostile config never participate in later diffs or restart', async t => {
+  const f = await gitFixture(t); await f.capture();
+  const original = (await f.git(['rev-parse', 'HEAD:tracked.txt'])).trim();
+  await f.write('tracked.txt', 'forged replacement\n'); const replacement = (await f.git(['hash-object', '-w', 'tracked.txt'])).trim();
+  await f.git(['replace', original, replacement]);
+  await fs.mkdir(path.join(f.root, '.git/objects/info'), { recursive: true });
+  await fs.writeFile(path.join(f.root, '.git/objects/info/alternates'), f.sourceRoot.replaceAll('\\', '/') + '\n');
+  const marker = path.join(f.directory, 'host-hook-ran').replaceAll('\\', '/');
+  for (const [key, value] of [['core.fsmonitor', 'touch "' + marker + '"'], ['filter.hostile.smudge', 'touch "' + marker + '"'], ['diff.hostile.textconv', 'touch "' + marker + '"'], ['remote.origin.promisor', 'true'], ['remote.origin.url', 'ext::sh -c touch% ' + marker]]) await f.git(['config', key, value]);
+  await f.write('.gitattributes', '*.txt filter=hostile diff=hostile\n');
+  // Deleting the original object makes any accidental Git read fail even if
+  // replacement objects were ignored; private historical bytes still exist.
+  await fs.unlink(path.join(f.root, '.git/objects', original.slice(0, 2), original.slice(2)));
+  for (const tracker of [f.tracker, f.open()]) {
+    t.mock.method(tracker, 'git', () => { throw Error('HOST_GIT_AFTER_PUBLICATION'); });
+    const result = await tracker.list('one', f.project, { path: 'tracked.txt' });
+    assert.equal(result.baseline.storage, 'private-objects-v1');
+    assert.ok(lines(result.diff).includes('-committed')); assert.ok(lines(result.diff).includes('+forged replacement'));
+    assert.ok(!lines(result.diff).includes('-forged replacement'));
+  }
+  await assert.rejects(fs.stat(marker), { code: 'ENOENT' });
+});
+
+test('initial Git capture ignores replacement refs and verifies SHA256 repository blob identities', async t => {
+  const f = await gitFixture(t, {}, 'sha256');
+  const original = (await f.git(['rev-parse', 'HEAD:tracked.txt'])).trim();
+  await f.write('tracked.txt', 'replacement\n'); const replacement = (await f.git(['hash-object', '-w', 'tracked.txt'])).trim();
+  await f.git(['replace', original, replacement]);
+  await f.capture(); t.mock.method(f.tracker, 'git', () => { throw Error('HOST_GIT_AFTER_CAPTURE'); });
+  const diff = await f.tracker.diff('one', f.project, { path: 'tracked.txt' });
+  assert.ok(lines(diff).includes('-committed')); assert.ok(lines(diff).includes('+replacement'));
+});
+
+test('legacy Git baselines and already published projects fail unavailable without reading their Git state', async t => {
+  const f = await gitFixture(t), captureGit = f.tracker.git.bind(f.tracker);
+  const forbidden = t.mock.method(f.tracker, 'git', () => { throw Error('UNTRUSTED_GIT'); });
+  await assert.rejects(f.tracker.initialize('one', f.project), { code: 'DIFF_BASELINE_UNAVAILABLE' });
+  await assert.rejects(f.tracker.initialize('one', { ...f.project, independentRepository: false, nativeWorktree: true }, { projectCreated: true }), { code: 'DIFF_BASELINE_UNAVAILABLE' });
+  assert.equal(forbidden.mock.callCount(), 0); forbidden.mock.restore(); f.tracker.git = captureGit;
+  await f.capture(); const metadata = await baselineFile(f), saved = JSON.parse(await fs.readFile(metadata, 'utf8'));
+  delete saved.baseline.storage; await fs.writeFile(metadata, JSON.stringify(saved));
+  const reopened = f.open(), noGit = t.mock.method(reopened, 'git', () => { throw Error('LEGACY_GIT'); });
+  await assert.rejects(reopened.list('one', f.project), { code: 'DIFF_BASELINE_UNAVAILABLE' });
+  assert.equal(noGit.mock.callCount(), 0); assert.equal(JSON.parse(await fs.readFile(metadata, 'utf8')).baseline.storage, undefined);
+});
+
+test('Git capture bounds aggregate bytes, preserves binary and oversized classification, and checks batch content hash', async t => {
+  const f = await gitFixture(t, { maxBytes: 16, maxFileBytes: 12 });
+  await f.write('a.txt', '123456789\n'); await f.write('binary.bin', Buffer.from([0, 1, 2])); await f.write('large.txt', 'x'.repeat(20));
+  await f.git(['add', '.']); await f.git(['-c', 'user.name=Synthetic', '-c', 'user.email=test@example.invalid', 'commit', '-m', 'bounded']); f.project.baseCommit = (await f.git(['rev-parse', 'HEAD'])).trim();
+  await f.capture();
+  await f.write('a.txt', 'changed\n'); await f.write('binary.bin', Buffer.from([0, 1, 3])); await f.write('large.txt', 'y'.repeat(20));
+  const entry = await f.tracker.initialize('one', f.project);
+  assert.ok(entry.saved.warnings.includes('SOURCE_BYTE_LIMIT')); assert.ok(entry.saved.excludedPaths.includes('tracked.txt'));
+  assert.equal(entry.saved.files['binary.bin'].kind, 'binary'); assert.equal(entry.saved.files['large.txt'].kind, 'oversized');
+  const objects = await fs.readdir(path.join(entry.directory, 'objects')); assert.equal(objects.length, 1);
+  const forged = await gitFixture(t); const realGit = forged.tracker.git.bind(forged.tracker);
+  t.mock.method(forged.tracker, 'git', async (...args) => {
+    const data = await realGit(...args);
+    if (args[1][0] === 'cat-file') data[data.indexOf(10) + 1] ^= 1;
+    return data;
+  });
+  await assert.rejects(forged.capture(), { code: 'DIFF_BASELINE_UNAVAILABLE' });
+  await assert.rejects(fs.stat(await baselineFile(forged)), { code: 'ENOENT' });
+});
+
+test('missing or replaced private Git baseline objects never fall back to the project repository', async t => {
+  const f = await gitFixture(t); const entry = await f.capture(), file = entry.saved.files['tracked.txt'];
+  await f.write('tracked.txt', 'edited\n'); t.mock.method(f.tracker, 'git', () => { throw Error('HOST_GIT_FALLBACK'); });
+  const object = path.join(entry.directory, 'objects', file.hash);
+  await fs.writeFile(object, 'forged\n'); await assert.rejects(f.tracker.diff('one', f.project, { path: 'tracked.txt' }), { code: 'DIFF_BASELINE_UNAVAILABLE' });
+  await fs.unlink(object); await assert.rejects(f.tracker.diff('one', f.project, { path: 'tracked.txt' }), { code: 'DIFF_BASELINE_UNAVAILABLE' });
 });
 
 test('secrets and generated dependency files are excluded and cannot be fetched directly', async t => {

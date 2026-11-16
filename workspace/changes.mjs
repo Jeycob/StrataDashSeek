@@ -52,10 +52,12 @@ export class LiveChanges {
     this.entries = new Map(); this.lifetime = new AbortController();
   }
   dispose() { this.lifetime.abort(); this.entries.clear(); }
-  async git(root, args, maxBuffer = 2 * MIB) {
-    const env = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null', GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat', PAGER: 'cat', GIT_EXTERNAL_DIFF: '' };
+  async git(root, args, maxBuffer = 2 * MIB, input = '') {
+    const env = { PATH: process.env.PATH, LANG: 'C.UTF-8', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_SYSTEM: '/dev/null', GIT_CONFIG_GLOBAL: '/dev/null', GIT_NO_LAZY_FETCH: '1', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0', GIT_ATTR_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0', GIT_PAGER: 'cat', PAGER: 'cat', GIT_EXTERNAL_DIFF: '' };
     if (process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
-    const result = await execute('git', ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=' + (process.platform === 'win32' ? 'NUL' : '/dev/null'), '-c', 'protocol.allow=never', '--no-pager', ...args], { cwd: root, env, encoding: 'buffer', timeout: 8000, maxBuffer, signal: this.lifetime.signal });
+    const pending = execute('git', ['--no-replace-objects', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'core.attributesFile=/dev/null', '-c', 'credential.helper=', '-c', 'protocol.allow=never', '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '--no-pager', ...args], { cwd: root, env, encoding: 'buffer', timeout: 8000, maxBuffer, signal: this.lifetime.signal, windowsHide: true });
+    pending.child.stdin.on('error', () => {}); pending.child.stdin.end(input);
+    const result = await pending;
     return result.stdout;
   }
   async scan(root, algorithm = 'sha1') {
@@ -107,6 +109,9 @@ export class LiveChanges {
     try { stored = JSON.parse((await readStable(entry.directory, 'baseline.json', 2 * MIB)).toString('utf8')); } catch (error) { if (error.code !== 'ENOENT') throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The saved comparison baseline is unavailable.'); }
     if (stored) {
       if (stored.version !== 1 || stored.sessionId !== entry.sessionId || stored.root !== entry.root || !['empty', 'git-base', 'snapshot'].includes(stored.baseline?.kind) || !stored.files || typeof stored.files !== 'object' || Array.isArray(stored.files) || Object.keys(stored.files).length > this.maxFiles || Object.entries(stored.files).some(([name, file]) => !(allowed(name) || isPrivateSourcePath(name)) || !file || !/^[a-f0-9]{40,64}$/u.test(file.hash ?? '') || !['text', 'binary', 'oversized', 'unknown'].includes(file.kind))) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The saved comparison baseline is invalid.');
+      // Older Git baselines borrowed the mutable project's object store. Do
+      // not upgrade them by running Git after the project has been published.
+      if (stored.baseline.kind === 'git-base' && (stored.baseline.storage !== 'private-objects-v1' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(stored.baseline.commit ?? '') || Object.values(stored.files).some(file => !new RegExp('^[a-f0-9]{' + stored.baseline.commit.length + '}$').test(file.gitHash ?? '') || file.kind === 'unknown' || file.kind === 'text' && !/^[a-f0-9]{64}$/u.test(file.hash)))) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The historical Git comparison was not retained privately.');
       stored.files = Object.assign(Object.create(null), stored.files);
       const removed = Object.entries(stored.files).filter(([name]) => isPrivateSourcePath(name));
       if (removed.length) {
@@ -117,16 +122,43 @@ export class LiveChanges {
       entry.saved = stored; return;
     }
     const at = Date.now(); let baseline, files = Object.create(null), warnings = [], complete = true, excludedPaths = [];
-    if (project.baseCommit && /^[a-f0-9]{40,64}$/iu.test(project.baseCommit)) {
+    if (project.baseCommit) {
+      if (!projectCreated || project.independentRepository !== true || project.nativeWorktree || project.legacy || project.settings?.projectMode === 'continue' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(project.baseCommit)) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'Git comparison can only be captured before a new independent project is published.');
       const data = (await this.git(entry.root, ['ls-tree', '-r', '-l', '-z', project.baseCommit, '--'])).toString('utf8');
+      const captures = []; let bytes = 0;
       for (const row of data.split('\0').filter(Boolean)) {
         const match = /^(\d+) (\w+) ([a-f0-9]{40,64}) +(-|\d+)\t([\s\S]+)$/u.exec(row); if (!match) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'Invalid Git baseline listing.');
         const [, mode, type, hash, size, name] = match; if (!allowed(name)) continue;
         if (mode === '120000' || type !== 'blob') { warnings.push('GIT_LINKS_EXCLUDED'); continue; }
         if (Object.keys(files).length >= this.maxFiles) { warnings.push('SOURCE_FILE_LIMIT'); complete = false; break; }
-        files[name] = { hash, gitHash: hash, bytes: Number(size), kind: Number(size) > this.maxFileBytes ? 'oversized' : 'unknown' };
+        const length = Number(size);
+        if (hash.length !== project.baseCommit.length || !Number.isSafeInteger(length) || length < 0) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'Invalid Git baseline object.');
+        if (length <= this.maxFileBytes && bytes + length > this.maxBytes) { warnings.push('SOURCE_BYTE_LIMIT'); excludedPaths.push(name); continue; }
+        files[name] = { hash, gitHash: hash, bytes: length, kind: length > this.maxFileBytes ? 'oversized' : 'unknown' };
+        if (length <= this.maxFileBytes) { bytes += length; captures.push(name); }
       }
-      baseline = { kind: 'git-base', label: 'project-start', at: project.at ?? at, commit: project.baseCommit };
+      const space = await fs.statfs(entry.directory);
+      if (Number(space.bavail) * Number(space.bsize) - bytes < this.minimumFreeBytes) throw new WorkbenchError('DIFF_DISK_RESERVE', 'Insufficient space to retain a safe comparison baseline.', 507);
+      await fs.mkdir(path.join(entry.directory, 'objects'), { recursive: true, mode: 0o700 });
+      if (captures.length) {
+        // Exactly one bounded binary batch, addressed by validated blob IDs;
+        // neither pathspecs, textconv nor checkout filters interpret the data.
+        const contents = await this.git(entry.root, ['cat-file', '--batch'], bytes + captures.length * 100, captures.map(name => files[name].gitHash).join('\n') + '\n');
+        let offset = 0;
+        for (const name of captures) {
+          const file = files[name], end = contents.indexOf(10, offset), header = file.gitHash + ' blob ' + file.bytes;
+          if (end < 0 || contents.subarray(offset, end).toString('ascii') !== header) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The Git baseline object is unavailable.');
+          const next = end + 1 + file.bytes, content = contents.subarray(end + 1, next);
+          if (contents[next] !== 10 || blobHash(content, project.baseCommit.length === 64 ? 'sha256' : 'sha1') !== file.gitHash) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The Git baseline object failed verification.');
+          offset = next + 1; file.hash = digest(content); file.kind = textOf(content) === null ? 'binary' : 'text';
+          if (file.kind === 'text') await fs.writeFile(path.join(entry.directory, 'objects', file.hash), content, { mode: 0o600, flag: 'wx' }).catch(async error => {
+            if (error.code !== 'EEXIST') throw error;
+            if (digest(await readStable(entry.directory, 'objects/' + file.hash, this.maxFileBytes)) !== file.hash) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The retained comparison file has changed.');
+          });
+        }
+        if (offset !== contents.length) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'Unexpected Git baseline data.');
+      }
+      baseline = { kind: 'git-base', storage: 'private-objects-v1', label: 'project-start', at: project.at ?? at, commit: project.baseCommit };
     } else if (!project.nativeWorktree && project.sourceRoot && path.resolve(project.sourceRoot) !== path.resolve(project.root) && project.settings?.projectMode !== 'continue') {
       baseline = { kind: 'empty', label: 'project-start', at: project.at ?? at };
     } else {
@@ -185,10 +217,10 @@ export class LiveChanges {
   async before(entry, name) {
     const file = entry.saved.files[name]; if (!file) return null;
     if (file.kind === 'binary' || file.kind === 'oversized') return undefined;
-    const data = entry.saved.baseline.kind === 'git-base'
-      ? await this.git(entry.root, ['show', '--no-ext-diff', '--no-textconv', entry.saved.baseline.commit + ':' + name], this.maxFileBytes + 1024)
-      : await readStable(entry.directory, 'objects/' + file.hash, this.maxFileBytes);
-    if (entry.saved.baseline.kind !== 'git-base' && digest(data) !== file.hash) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The retained comparison file has changed.');
+    let data;
+    try { data = await readStable(entry.directory, 'objects/' + file.hash, this.maxFileBytes); }
+    catch { throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The retained comparison file is unavailable.'); }
+    if (digest(data) !== file.hash || entry.saved.baseline.kind === 'git-base' && blobHash(data, entry.saved.baseline.commit.length === 64 ? 'sha256' : 'sha1') !== file.gitHash) throw new WorkbenchError('DIFF_BASELINE_UNAVAILABLE', 'The retained comparison file has changed.');
     return textOf(data);
   }
   compare(before, after) {

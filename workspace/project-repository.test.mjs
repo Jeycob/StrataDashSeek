@@ -86,3 +86,36 @@ test('manager enrolls fresh independent projects, retains existing shared record
   const continued = { id: 'continued', session: { id: 'continued', header: { ...agent.session.header } } };
   const previous = await manager.ensureProject(continued); assert.equal(previous.root, await fs.realpath(f.sourceRoot)); assert.equal(previous.independentRepository, false);
 });
+
+test('manager captures the private baseline before any publication and never retries failed capture against an exposed project', async t => {
+  const f = await fixture(t), directories = new Map(), grants = [], captured = new Set(), warnings = [];
+  const ctx = { agents: { list: () => [] }, workspaceRegistry: { list: () => [] }, workingDirectory: {
+    get: session => directories.get(session.id) ?? f.sourceRoot,
+    set: async (agent, root) => { assert(captured.has(agent.id)); directories.set(agent.id, root); }
+  }, sandboxPolicy: { registerWritableRoot: (session, root) => { assert(captured.has(session.id)); grants.push({ id: session.id, root }); return { dispose() {} }; } }, logger: { warn: message => warnings.push(message) } };
+  const manager = new WorkspaceManager(ctx, { stateRoot: path.join(f.directory, 'state'), projectsRoot: f.projectsRoot, changes: { minimumFreeBytes: 0 } });
+  await manager.initialize(); manager.data.installedAt = 0; manager.settings = () => ({ projectMode: 'fresh', maxStageSteps: 60 }); t.after(() => manager.changes.dispose());
+  const initialize = manager.changes.initialize.bind(manager.changes), git = manager.changes.git.bind(manager.changes); let failedGitCalls = 0;
+  t.mock.method(manager.changes, 'initialize', async (id, record, options) => {
+    if (options?.projectCreated) {
+      assert.equal(manager.data.sessions[id], undefined); assert.equal(directories.has(id), false); assert.equal(grants.some(g => g.id === id), false);
+      assert.equal(JSON.parse(await fs.readFile(manager.file, 'utf8')).sessions[id], undefined);
+      try { return await initialize(id, record, options); } finally { captured.add(id); }
+    }
+    return initialize(id, record, options);
+  });
+  t.mock.method(manager.changes, 'git', async (root, ...args) => {
+    if (path.basename(root) === 'failed') { failedGitCalls++; throw Object.assign(Error('synthetic capture failure'), { code: 'DIFF_BASELINE_UNAVAILABLE' }); }
+    return git(root, ...args);
+  });
+  for (const id of ['successful', 'failed']) {
+    const agent = { id, session: { id, header: { cwd: f.sourceRoot, createdAt: Date.now(), origin: 'user' } } };
+    const record = await manager.ensureProject(agent); assert.equal(record.independentRepository, true); assert.equal(directories.get(id), record.root);
+    if (id === 'successful') assert.equal((await manager.changes.list(id, record)).baseline.storage, 'private-objects-v1');
+    else {
+      assert.equal(failedGitCalls, 1); await assert.rejects(manager.changes.list(id, record), { code: 'DIFF_BASELINE_UNAVAILABLE' }); assert.equal(failedGitCalls, 1);
+      assert.equal(await manager.ensureProject(agent), record); assert.equal(failedGitCalls, 1);
+    }
+  }
+  assert.equal(warnings.length, 1); assert.match(warnings[0], /DIFF_BASELINE_UNAVAILABLE/);
+});
