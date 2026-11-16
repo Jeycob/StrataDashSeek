@@ -9,3 +9,13 @@ test('structured status reads the existing job registry without waking Docker or
   manager.store.jobs[0].status = 'passed'; manager.store.jobs[0].deploymentPhase = 'recovery_required'; assert.equal(jobStatus(manager, id).job.passed, false);
   assert.throws(() => jobStatus(manager, 'b'.repeat(16)), { code: 'JOB_NOT_FOUND' });
 });
+
+test('terminal rows do not settle heavy work while controller or resource outcomes remain uncertain',()=>{
+ const job={id,action:'verify',status:'passed'},manager={store:{jobs:[job]}};
+ assert.equal(jobStatus(manager,id).job.workSettled,true);
+ for(const patch of [{status:'interrupted'},{status:'recovery_required'},{deploymentPhase:'recovery_required'},{projectRuntime:{state:'ready'}},{creations:[{state:'unknown'}]},{creations:[{state:'confirmed',resourceStart:{state:'pending'}}]},{dataOperations:{operations:{copy:{state:'pending'}}}}]){
+  manager.store.jobs=[{...job,...patch}];assert.equal(jobStatus(manager,id).job.workSettled,false);
+ }
+ manager.store.jobs=[job];manager.busy=id;assert.equal(jobStatus(manager,id).job.workSettled,false);
+ manager.busy=null;job.status='failed';assert.equal(jobStatus(manager,id).job.workSettled,true);
+});

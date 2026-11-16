@@ -9,6 +9,9 @@ async function guardAppsTarget(manager,route,data={}){
  if(expected===undefined)return;
  if(typeof expected!=='string'||!/^[a-f0-9]{16}$/.test(expected))throw reject('Invalid project binding.',400);
  if(route==='/state')return;
+ if(route==='/project-request'){
+  require('./apps-project-request.cjs').requestStatus(manager,expected,data.requestId);return;
+ }
  if(route==='/register'||route==='/scaffold'){
   if(typeof data.path!=='string'||!data.path||path.isAbsolute(data.path)||data.path.split(/[\\/]/).some(part=>!part||part==='.'||part==='..'))throw reject('Invalid project path.',400);
   const root=await fs.realpath(manager.cfg.workspaceRoot),directory=await fs.realpath(path.join(root,data.path)),relative=path.relative(root,directory);

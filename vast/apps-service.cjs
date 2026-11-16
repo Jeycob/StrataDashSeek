@@ -20,6 +20,7 @@ function createAppsService(cfg={},injected){
   if(req.method==='GET')await guardAppsTarget(manager,u.pathname,Object.fromEntries(u.searchParams));
   if(req.method==='GET'&&u.pathname==='/state')return json(res,200,await manager.state());
   if(req.method==='GET'&&u.pathname==='/job-status')return json(res,200,require('./apps-job-status.cjs').jobStatus(manager,u.searchParams.get('id')));
+  if(req.method==='GET'&&u.pathname==='/project-request')return json(res,200,require('./apps-project-request.cjs').requestStatus(manager,u.searchParams.get('_contextProjectId'),u.searchParams.get('requestId')));
   if(req.method==='GET'&&u.pathname==='/resource-export-download'){
    const e=manager.archivedCleanup.resourceDownload({...Object.fromEntries(u.searchParams),token:req.headers['x-harness-resource-authority']});let release;try{release=manager.beginTransfer();}catch(error){fs.closeSync(e.descriptor);throw error;}res.once('close',release);res.setTimeout(120000,()=>res.destroy());
    res.writeHead(200,{'Content-Type':'application/x-tar','Content-Length':e.bytes,'Content-Disposition':'attachment; filename="'+e.filename+'"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
@@ -52,7 +53,7 @@ function createAppsService(cfg={},injected){
   if(u.pathname==='/prepare-sleep')return json(res,200,await manager.prepareSleep());
   if(u.pathname==='/confirm-sleep')return json(res,200,manager.confirmSleep(data.token));
   if(u.pathname==='/cancel-sleep')return json(res,200,manager.cancelSleep(data.token));
-  if(u.pathname==='/project-action')return json(res,202,manager.enqueue(data.id,data.action,{releaseId:data.releaseId,targetId:data.targetId}));
+  if(u.pathname==='/project-action')return json(res,202,require('./apps-project-request.cjs').enqueueProjectAction(manager,data));
   if(u.pathname==='/container-action')return json(res,200,await manager.containerAction(data.id,data.action));
   return json(res,404,{error:'Not found'});
  }catch(e){const resourceDiagnostic=diagnosticFor(e);if(!res.headersSent)json(res,e.status||400,{error:e.message,...(/^(?:CLEANUP|RESOURCE|PROJECT_RUNTIME)_[A-Z_]+$/.test(e.code||'')?{code:e.code}:{}),...(/^[a-f0-9]{32}$/.test(e.operationId||'')?{operationId:e.operationId}:{}),...(/^[a-f0-9]{16}$/.test(e.jobId||'')?{jobId:e.jobId}:{}),...(resourceDiagnostic?{code:e.code,resourceDiagnostic}:{})});else res.destroy();}});
