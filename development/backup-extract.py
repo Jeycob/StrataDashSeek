@@ -22,6 +22,7 @@ def extract(root, budget):
     if not root.is_absolute() or root.is_symlink() or root.resolve() != root or any(root.iterdir()):
         raise ValueError("RESTORE_TARGET_NOT_EMPTY")
     seen = set()
+    spellings = {}
     count = 0
     size = 0
     headers = 0
@@ -65,20 +66,34 @@ def extract(root, budget):
             if folded in seen or len(seen) >= 100000:
                 raise ValueError("RESTORE_ENTRY_LIMIT_OR_ALIAS")
             seen.add(folded)
+            # Archive members can create parents implicitly. Compare every
+            # component prefix before touching disk, even on case-sensitive
+            # hosts, so a Windows restore never silently merges source trees.
+            for length in range(1, len(parts) + 1):
+                prefix = "/".join(parts[:length])
+                key = prefix.casefold()
+                if key in spellings and spellings[key] != prefix:
+                    raise ValueError("RESTORE_PARENT_ALIAS")
+                spellings[key] = prefix
+                if len(spellings) > 100000:
+                    raise ValueError("RESTORE_PATH_NODE_LIMIT")
             if not (member.isfile() or member.isdir()) or member.issparse():
                 raise ValueError("RESTORE_TYPE_REFUSED")
             target = root.joinpath(*parts)
+            for length in range(1, len(parts)):
+                parent = root.joinpath(*parts[:length])
+                if not parent.exists():
+                    parent.mkdir(mode=0o700)
             for parent in target.parents:
                 if parent == root:
                     break
                 if parent.exists() and (parent.is_symlink() or not parent.is_dir()):
                     raise ValueError("RESTORE_PARENT_REFUSED")
             if member.isdir():
-                target.mkdir(mode=0o700, parents=True, exist_ok=True)
+                target.mkdir(mode=0o700, exist_ok=True)
                 continue
             if member.size < 0 or member.size > 1024 ** 3 or size + member.size > budget:
                 raise ValueError("RESTORE_SIZE_LIMIT")
-            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             source = archive.extractfile(member)
             if source is None:
                 raise ValueError("RESTORE_CONTENT_MISSING")

@@ -50,3 +50,19 @@ test('authenticated hostile archives cannot escape, restore security state, foll
     await f.encrypt(tar(entries)); await assert.rejects(f.restore({ maxExtractedBytes: 100 })); assert.equal((await fsp.readdir(f.dir)).some(name => name.includes('restore-')), false); await fsp.unlink(f.destination);
   }
 });
+test('implicit and explicit parent aliases fail before publication on every platform, while identical parents preserve separate files', async t => {
+  const f = await fixture(t);
+  for (const entries of [
+    [{ name: 'projects/demo/Config/one.txt', content: 'one' }, { name: 'projects/demo/config/two.txt', content: 'two' }],
+    [{ name: 'projects/Demo/a/one.txt', content: 'one' }, { name: 'projects/demo/b/two.txt', content: 'two' }],
+    [{ name: 'projects/demo/Config/one.txt', content: 'one' }, { name: 'projects/demo/config', type: '5' }],
+    [{ name: 'projects/demo/Config', type: '5' }, { name: 'projects/demo/config/two.txt', content: 'two' }],
+  ]) {
+    await f.encrypt(tar(entries)); await assert.rejects(f.restore());
+    assert.equal((await fsp.readdir(f.dir)).some(name => name.includes('restore-')), false); await fsp.unlink(f.destination);
+  }
+  await f.encrypt(tar([{ name: 'projects/demo/Config/one.txt', content: 'one' }, { name: 'projects/demo/Config', type: '5' }, { name: 'projects/demo/Config/two.txt', content: 'two' }]));
+  const restored = await f.restore(); assert.equal(restored.files, 2);
+  assert.equal(await fsp.readFile(path.join(restored.destination, 'projects/demo/Config/one.txt'), 'utf8'), 'one');
+  assert.equal(await fsp.readFile(path.join(restored.destination, 'projects/demo/Config/two.txt'), 'utf8'), 'two');
+});
