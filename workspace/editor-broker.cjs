@@ -19,7 +19,7 @@ function incoming(req,host,websocket=false){
 }
 function outgoing(headers,ownerOrigin){
  const out={};for(const[k,v]of Object.entries(headers))if(!hop.has(k)&&k!=='set-cookie'&&!k.startsWith('access-control-')&&k!=='service-worker-allowed')out[k]=v;
- out['cache-control']='no-store';out['referrer-policy']='no-referrer';out['origin-agent-cluster']='?1';out['x-content-type-options']='nosniff';
+ out['cache-control']='no-store';out['referrer-policy']='no-referrer';out['origin-agent-cluster']='?1';out['x-content-type-options']='nosniff';out['cross-origin-resource-policy']='same-origin';
  const csp=String(out['content-security-policy']||'').split(';').map(x=>x.trim()).filter(x=>x&&!/^frame-ancestors(?:\s|$)/i.test(x));csp.push('frame-ancestors '+ownerOrigin);out['content-security-policy']=csp.join('; ');out['permissions-policy']='document-domain=()';
  return out;
 }
@@ -29,7 +29,16 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
  const cookieName='__Secure-homeai-editor-'+digest(origin).slice(0,20),grants=new Map(),sessions=new Map(),sockets=new Set();let closed=false;
  const sweep=()=>{for(const map of[grants,sessions])for(const[k,v]of map)if(v<=now())map.delete(k);};
  const denied=(res,status=403,code='EDITOR_ACCESS_DENIED')=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify({code}));};
- const authority=req=>req.headers.host===u.host&&(!req.headers.origin||req.headers.origin===origin)&&req.headers['sec-fetch-site']!=='cross-site';
+ // SameSite cookies do not separate ports: a sibling editor can send this
+ // editor's cookie on a no-cors script/image request with no Origin header.
+ // Permit authenticated subresources only from this exact origin. Native may
+ // navigate an iframe here; CSP independently restricts its ancestor origin.
+ const authority=req=>{
+  const h=req.headers,site=h['sec-fetch-site'];
+  if(h.host!==u.host||h.origin&&h.origin!==origin||site==='cross-site')return false;
+  if(site==='same-origin'||h.origin===origin)return true;
+  return req.method==='GET'&&h['sec-fetch-mode']==='navigate'&&['document','iframe'].includes(h['sec-fetch-dest'])&&['none','same-site'].includes(site);
+ };
  function authorized(req){
   if(closed||!authority(req))return false;sweep();const values=String(req.headers.cookie||'').split(';').map(x=>x.trim()).filter(x=>x.startsWith(cookieName+'='));
   if(values.length!==1)return false;const value=values[0].slice(cookieName.length+1);return validToken(value)&&sessions.get(digest(value));
