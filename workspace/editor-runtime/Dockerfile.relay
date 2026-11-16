@@ -15,12 +15,16 @@ RUN apt-get update \
     && test "$EDITOR_UID" -ge 1000 && test "$EDITOR_GID" -ge 1000 \
     && groupadd -g "$EDITOR_GID" relay \
     && useradd --uid "$EDITOR_UID" --gid "$EDITOR_GID" --no-create-home --shell /usr/sbin/nologin relay \
-    && mkdir -p /run/homeai-editor /opt/homeai
+    && mkdir -p /run/homeai-editor /run/homeai-transport /opt/homeai
 COPY --from=unpack --chown=0:0 /node/node /usr/local/bin/node
 COPY --chown=0:0 socket-relay.cjs /opt/homeai/socket-relay.cjs
 USER ${EDITOR_UID}:${EDITOR_GID}
 # A supplies --port <assigned>; runtime must enforce hostnetwork only in the
 # trusted guest relay, read-only root, cap-drop ALL, no-new-privileges, 64MiB
-# RAM/zero swap, 0.25 CPU, 64 PIDs and ONE read-only private socket directory.
-# No workspace, editor home, Docker socket, control credentials or other binds.
+# RAM/zero swap, 0.25 CPU, 64 PIDs, own socket directory RO and dedicated
+# transport certificate directory RO at /run/homeai-transport containing only
+# server.crt/server.key/ca.crt. CA must be unique to scope+generation; only the
+# trusted host broker receives the signed client key. No CA private key here.
+# TLSv1.3 mTLS is mandatory before opening the editor's UNIX socket.
+# No workspace, editor home, Docker socket, owner credentials or other binds.
 ENTRYPOINT ["/usr/local/bin/node", "/opt/homeai/socket-relay.cjs"]

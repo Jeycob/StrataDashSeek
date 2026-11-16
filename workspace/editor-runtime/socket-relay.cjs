@@ -3,8 +3,11 @@
 // The untrusted editor has network=none and owns only its private socket directory.
 // HTTP authentication, cookies and origin policy belong to the root broker.
 const net = require('node:net');
+const tls = require('node:tls');
+const fs = require('node:fs');
 const HOST = '10.0.2.15';
 const SOCKET = '/run/homeai-editor/code.sock';
+const TRANSPORT = '/run/homeai-transport/';
 const LIMITS = Object.freeze({connections:32, connectMs:5000, idleMs:120000,
   lifetimeMs:3600000, bytes:256*1024*1024, highWaterMark:64*1024, shutdownMs:5000});
 
@@ -18,19 +21,25 @@ function parseArguments(argv) {
 
 // Dependency injection is for local transport/clock tests. The CLI always uses
 // the frozen policy and Node's network API; no env/request can select a target.
-async function startRelay(port, {network=net, limits=LIMITS}={}) {
+async function startRelay(port, {network={createConnection:net.createConnection,createServer:tls.createServer}, limits=LIMITS,
+  readFile=fs.readFileSync}={}) {
   if (!validPort(port)) throw Error('RELAY_PORT_INVALID');
+  // Missing/invalid credentials fail startup. No target, cert or CA override in
+  // CLI/env. Provision a dedicated CA per scope+generation, never a shared Apps CA.
+  const credentials={key:readFile(TRANSPORT+'server.key'),cert:readFile(TRANSPORT+'server.crt'),ca:readFile(TRANSPORT+'ca.crt')};
   const connections = new Set();
+  const rawSockets = new Set();
   let stopping=false, serverClosed=false, shutdownTimer, finishClosed;
   let closeReason='closed';
   const closed = new Promise(resolve => { finishClosed=resolve; });
   function finish() {
-    if (serverClosed && connections.size === 0) {
+    if (serverClosed && connections.size === 0 && rawSockets.size === 0) {
       clearTimeout(shutdownTimer);
       finishClosed({reason:closeReason});
     }
   }
   function accept(client) {
+    if (client.authorized !== true) { client.destroy(); return; }
     if (stopping || connections.size >= limits.connections) { client.destroy(); return; }
     client.pause();
     client.setNoDelay(true);
@@ -100,15 +109,28 @@ async function startRelay(port, {network=net, limits=LIMITS}={}) {
       destroy();
     }
   }
-  const server=network.createServer({allowHalfOpen:true, pauseOnConnect:true, highWaterMark:limits.highWaterMark}, accept);
+  const server=network.createServer({...credentials,requestCert:true,rejectUnauthorized:true,
+    minVersion:'TLSv1.3',handshakeTimeout:limits.connectMs,
+    allowHalfOpen:true, highWaterMark:limits.highWaterMark}, accept);
+  // Include unauthenticated handshakes in the connection/shutdown budget.
+  server.on('connection', socket => {
+    if (stopping || rawSockets.size >= limits.connections) { socket.destroy(); return; }
+    rawSockets.add(socket);
+    socket.on('error', () => {});
+    socket.once('close', () => { rawSockets.delete(socket); finish(); });
+  });
+  // A listener replaces Node's default destruction, so explicitly close errors
+  // including silent handshake timeout. Never log certificates or peer traffic.
+  server.on('tlsClientError', (_error,socket) => socket.destroy());
   function stop(immediate=false) {
     if (stopping) return closed;
     stopping=true;
     server.close(() => { serverClosed=true; finish(); });
-    if (connections.size) {
-      if (immediate) for (const connection of connections) connection.destroy();
+    if (connections.size || rawSockets.size) {
+      const destroyAll=()=>{for (const connection of connections) connection.destroy();for(const socket of rawSockets)socket.destroy();};
+      if (immediate) destroyAll();
       else {
-        shutdownTimer=setTimeout(() => { for (const connection of connections) connection.destroy(); }, limits.shutdownMs);
+        shutdownTimer=setTimeout(destroyAll, limits.shutdownMs);
         shutdownTimer.unref();
       }
     }
@@ -137,7 +159,7 @@ async function main(argv=process.argv.slice(2)) {
   if (result.reason !== 'closed') { process.stderr.write('RELAY_LISTENER_FAILED\n'); return 1; }
   return 0;
 }
-module.exports={startRelay, parseArguments, HOST, SOCKET, LIMITS};
+module.exports={startRelay, parseArguments, HOST, SOCKET, TRANSPORT, LIMITS};
 if (require.main === module) main().then(code => { process.exitCode=code; }, () => {
   process.stderr.write('RELAY_FAILED\n'); process.exitCode=1;
 });

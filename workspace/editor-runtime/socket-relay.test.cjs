@@ -1,15 +1,30 @@
 'use strict';
 const test=require('node:test'), assert=require('node:assert/strict');
 const net=require('node:net'), fs=require('node:fs/promises'), os=require('node:os'), path=require('node:path');
+const tls=require('node:tls');
 const {once}=require('node:events'), {createHash}=require('node:crypto'), {spawnSync,fork}=require('node:child_process');
-const {startRelay,parseArguments,HOST,SOCKET,LIMITS}=require('./socket-relay.cjs');
+const {startRelay,parseArguments,HOST,SOCKET,TRANSPORT,LIMITS}=require('./socket-relay.cjs');
+const SERVER_NAME='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.editor.homeai.invalid';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const closed=socket=>socket.destroyed ? Promise.resolve() : new Promise(resolve=>socket.once('close',resolve));
 const hash=value=>createHash('sha256').update(value).digest('hex');
 async function until(predicate) { for(let n=0;n<200;n++){if(predicate())return;await delay(5);}throw Error('test condition timed out'); }
 
+async function certificates(directory) {
+  function openssl(...args) {const r=spawnSync('openssl',args,{cwd:directory,stdio:'ignore'});assert.equal(r.status,0,'synthetic cert generation');}
+  openssl('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-days','1','-subj','/CN=Synthetic CA','-keyout','ca.key','-out','ca.crt');
+  for(const role of ['server','client']) {
+    openssl('req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-subj','/CN=Synthetic '+role,'-keyout',role+'.key','-out',role+'.csr');
+    await fs.writeFile(path.join(directory,role+'.ext'),role==='server' ? 'subjectAltName=DNS:'+SERVER_NAME+'\nextendedKeyUsage=serverAuth\n' : 'extendedKeyUsage=clientAuth\n');
+    openssl('x509','-req','-in',role+'.csr','-CA','ca.crt','-CAkey','ca.key','-CAcreateserial','-days','1','-extfile',role+'.ext','-out',role+'.crt');
+  }
+  const values={};for(const name of ['server.key','server.crt','ca.crt','client.key','client.crt'])values[name]=await fs.readFile(path.join(directory,name));
+  return values;
+}
+
 async function fixture(t,{limits={},onUnix=socket=>socket.on('end',()=>socket.end()),hangConnect=false,missingTarget=false}={}) {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'homeai-relay-test-'));
+  const credentials=await certificates(directory);
   const socketPath=path.join(directory,'synthetic.sock'), peers=new Set(), clients=new Set();
   const observed={connects:0,backpressure:0,maxQueued:0};
   const unix=net.createServer({allowHalfOpen:true},socket=>{
@@ -24,8 +39,8 @@ async function fixture(t,{limits={},onUnix=socket=>socket.on('end',()=>socket.en
   }
   const network={
     createServer(options,accept) {
-      assert.equal(options.pauseOnConnect,true);assert.equal(options.highWaterMark,64*1024);
-      const server=net.createServer(options,socket=>accept(track(socket))),listen=server.listen;
+      assert.equal(options.requestCert,true);assert.equal(options.rejectUnauthorized,true);assert.equal(options.highWaterMark,64*1024);
+      const server=tls.createServer(options,socket=>accept(track(socket))),listen=server.listen;
       server.listen=function(options,callback){
         assert.equal(options.host,HOST);assert.equal(options.port,29000);assert.equal(options.exclusive,true);
         return listen.call(this,{...options,host:'127.0.0.1',port:0},callback);
@@ -37,11 +52,12 @@ async function fixture(t,{limits={},onUnix=socket=>socket.on('end',()=>socket.en
       return track(hangConnect ? new net.Socket({allowHalfOpen:true}) : net.createConnection({...options,path:missingTarget ? socketPath+'.absent' : socketPath}));
     }
   };
-  const relay=await startRelay(29000,{network,limits:{...LIMITS,shutdownMs:50,...limits}});
+  const relay=await startRelay(29000,{network,readFile:name=>{assert(name.startsWith(TRANSPORT));return credentials[name.slice(TRANSPORT.length)];},limits:{...LIMITS,shutdownMs:50,...limits}});
+  const clientOptions={ca:credentials['ca.crt'],key:credentials['client.key'],cert:credentials['client.crt'],servername:SERVER_NAME};
   async function connect() {
-    const client=net.createConnection({host:'127.0.0.1',port:relay.address().port});
+    const client=tls.connect({host:'127.0.0.1',port:relay.address().port,...clientOptions});
     clients.add(client);client.on('error',()=>{});client.on('close',()=>clients.delete(client));
-    await once(client,'connect');return client;
+    await once(client,'secureConnect');return client;
   }
   t.after(async()=>{
     for(const socket of clients)socket.destroy();
@@ -51,7 +67,7 @@ async function fixture(t,{limits={},onUnix=socket=>socket.on('end',()=>socket.en
     // Only the exclusively created synthetic fixture directory is removed.
     await fs.rm(directory,{recursive:true,force:true});
   });
-  return {relay,connect,observed,directory,socketPath};
+  return {relay,connect,observed,directory,socketPath,credentials,clientOptions};
 }
 
 test('opaque binary stream preserves half-close response with actual backpressure',{timeout:5000,skip:process.platform==='win32'},async t=>{
@@ -75,7 +91,7 @@ test('connection cap rejects overflow before opening another UNIX stream',{timeo
   const f=await fixture(t,{limits:{connections:2}});
   const first=await f.connect(),second=await f.connect();
   await until(()=>f.observed.connects===2);
-  const extra=await f.connect();extra.resume();await closed(extra);
+  const extra=net.createConnection({host:'127.0.0.1',port:f.relay.address().port});extra.on('error',()=>{});extra.resume();await closed(extra);
   assert.equal(f.observed.connects,2);assert.equal(f.relay.activeConnections(),2);
   first.destroy();second.destroy();await until(()=>f.relay.activeConnections()===0);
 });
@@ -130,14 +146,57 @@ test('missing UNIX endpoint closes cleanly without a fallback target',{timeout:3
   assert.equal(f.observed.connects,0);
 });
 
+test('sibling connections require mTLS and exact generation hostname before any UNIX access',{timeout:5000,skip:process.platform==='win32'},async t=>{
+  let bytes=0;
+  const f=await fixture(t,{limits:{connectMs:100},onUnix(socket){socket.on('data',chunk=>{bytes+=chunk.length;socket.end('authenticated');});}});
+  const foreignDirectory=path.join(f.directory,'foreign');await fs.mkdir(foreignDirectory);
+  const foreign=await certificates(foreignDirectory);
+  async function rejected(label,options,raw=false,expectedError) {
+    await t.test(label,async()=>{
+      const before=f.observed.connects;
+      const client=raw ? net.createConnection({host:'127.0.0.1',port:f.relay.address().port}) : tls.connect({host:'127.0.0.1',port:f.relay.address().port,...options});
+      let error;client.on('error',value=>{error=value.code;});client.resume();
+      let forced=false;
+      const safety=setTimeout(()=>{forced=true;client.destroy();},1500);
+      try {
+        if(raw)client.write('GET / HTTP/1.1\r\nHost: sibling\r\n\r\n');
+        await closed(client);await delay(20);
+        assert.equal(forced,false,'relay must reject without the test safety timer');
+        if(expectedError)assert.equal(error,expectedError);
+        assert.equal(f.observed.connects,before,'rejected peer never opens UNIX upstream');
+        assert.equal(bytes,0,'rejected peer never forwards application bytes');
+      } finally {clearTimeout(safety);client.destroy();}
+    });
+  }
+  await rejected('raw TCP',null,true);
+  await t.test('silent handshake is bounded',async()=>{
+    const client=net.createConnection({host:'127.0.0.1',port:f.relay.address().port});client.on('error',()=>{});client.resume();
+    const began=Date.now();await closed(client);assert(Date.now()-began<1000);assert.equal(f.observed.connects,0);
+  });
+  await rejected('no client certificate',{ca:f.credentials['ca.crt'],servername:SERVER_NAME});
+  await rejected('foreign CA client',{...f.clientOptions,key:foreign['client.key'],cert:foreign['client.crt']});
+  await rejected('wrong server hostname',{...f.clientOptions,servername:'cccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddd.editor.homeai.invalid'},false,'ERR_TLS_CERT_ALTNAME_INVALID');
+  await rejected('TLS 1.2 is refused',{...f.clientOptions,maxVersion:'TLSv1.2'});
+  const client=await f.connect(),chunks=[];assert.equal(client.authorized,true);assert.equal(client.getProtocol(),'TLSv1.3');
+  client.on('data',chunk=>chunks.push(chunk));client.write('allowed');await once(client,'end');
+  assert.equal(Buffer.concat(chunks).toString(),'authenticated');assert.equal(bytes,7);assert.equal(f.observed.connects,1);
+});
+
+test('missing credentials fail closed before listener construction',async()=>{
+  let called=false;
+  await assert.rejects(startRelay(29000,{readFile(){throw Error('synthetic missing key');},network:{createServer(){called=true;}}}));
+  assert.equal(called,false);
+});
+
 test('actual CLI SIGTERM stops accepting and closes an active stream after five seconds',{timeout:8000,skip:process.platform==='win32'},async t=>{
   const f=await fixture(t),preload=path.join(f.directory,'synthetic-network-preload.cjs');
   // Test-process preload only. The actual CLI remains fixed-target and receives
   // no path/host/limit options. Remap Node transport to our private local fixture.
   await fs.writeFile(preload,`'use strict';
-const net=require('node:net'),assert=require('node:assert/strict');
-const createServer=net.createServer,createConnection=net.createConnection;
-net.createServer=function(options,accept){const server=createServer(options,accept),listen=server.listen;
+const net=require('node:net'),tls=require('node:tls'),fs=require('node:fs'),assert=require('node:assert/strict');
+const createServer=tls.createServer,createConnection=net.createConnection,readFile=fs.readFileSync;
+fs.readFileSync=function(name,...args){if(typeof name==='string'&&name.startsWith('/run/homeai-transport/'))return readFile(${JSON.stringify(f.directory)}+'/'+name.split('/').pop(),...args);return readFile(name,...args);};
+tls.createServer=function(options,accept){const server=createServer(options,accept),listen=server.listen;
 server.listen=function(options,callback){assert.equal(options.host,'10.0.2.15');assert.equal(options.port,29000);
 return listen.call(server,{...options,host:'127.0.0.1',port:0},()=>{callback();setImmediate(()=>process.send({port:server.address().port}));});};return server;};
 net.createConnection=function(options){assert.equal(options.path,'/run/homeai-editor/code.sock');return createConnection({...options,path:${JSON.stringify(f.socketPath)}});};
@@ -146,8 +205,8 @@ net.createConnection=function(options){assert.equal(options.path,'/run/homeai-ed
   let stdout='',stderr='';child.stdout.on('data',chunk=>{stdout+=chunk;});child.stderr.on('data',chunk=>{stderr+=chunk;});
   t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');});
   const completion=once(child,'exit'),[message]=await once(child,'message');
-  const client=net.createConnection({host:'127.0.0.1',port:message.port});client.on('error',()=>{});client.resume();
-  t.after(()=>client.destroy());await once(client,'connect');await until(()=>f.observed.connects===1);
+  const client=tls.connect({host:'127.0.0.1',port:message.port,...f.clientOptions});client.on('error',()=>{});client.resume();
+  t.after(()=>client.destroy());await once(client,'secureConnect');await until(()=>f.observed.connects===1);
   const began=Date.now();child.kill('SIGTERM');
   const [code,signal]=await completion;await closed(client);
   assert.equal(code,0);assert.equal(signal,null);assert(Date.now()-began>=4500);assert(Date.now()-began<7000);
