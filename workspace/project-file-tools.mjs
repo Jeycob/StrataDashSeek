@@ -41,7 +41,7 @@ export function createProjectFileTools(ctx, manager, handlers = {}) {
       // Copy only input schema, never callbacks/metadata retaining host services.
       const definition = {
         name, parameters: original.parameters,
-        description: original.description + ' Managed project: this operation requires the isolated file backend. Unsupported operations fail closed. No host filesystem fallback or permission escalation.',
+        description: original.description + ' Managed project: this operation requires the isolated file backend. Unsupported operations fail closed. No host filesystem fallback or permission escalation.' + (name === 'apply_patch' ? ' Isolated patch subset: one relative file per call; Add, Delete, or Update with literal @@ hunks and unique exact context. Move, multi-file, anchor text and files without a final newline are unsupported; use write/edit instead.' : ''),
         isConcurrencySafe: () => false,
         output: {
           schema: { type: 'object', properties: { text: { type: 'string' }, truncated: { type: 'boolean' } }, required: ['text', 'truncated'], additionalProperties: false },

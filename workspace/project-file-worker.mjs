@@ -7,6 +7,61 @@ export async function projectFileWorker(input, root = '/workspace') {
   const fail = code => { throw Error(code); };
   const MAX = 1024 * 1024;
   const fingerprint = s => [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs,s.mode,s.nlink].join(':');
+  if(input.name==='apply_patch') {
+    const patch=input.arguments.patch;
+    if(typeof patch!=='string'||Buffer.byteLength(patch)>32768||patch.includes('\r'))fail('PATCH_FORMAT_OR_LIMIT');
+    const lines=patch.split('\n');if(lines.at(-1)==='')lines.pop();
+    if(lines.shift()!=='*** Begin Patch'||lines.pop()!=='*** End Patch')fail('PATCH_FORMAT');
+    const header=lines.shift()?.match(/^\*\*\* (Add|Update|Delete) File: (.+)$/);
+    if(!header||lines.some(line=>line.startsWith('*** ')&&line!=='*** End of File'))fail('PATCH_SINGLE_FILE_ONLY');
+    const operation=header[1],relative=header[2];
+    if(!relative||relative.includes('\\')||relative.includes('\0')||path.isAbsolute(relative)||relative.split('/').some(p=>!p||p==='..'||p==='.'))fail('INVALID_PATCH_PATH');
+    const full=path.join(root,relative);let at=root;
+    for(const part of relative.split('/').slice(0,-1)){
+      at=path.join(at,part);let info;try{info=await fs.lstat(at);}catch(error){if(error.code==='ENOENT'&&operation==='Add')break;throw error;}
+      if(!info.isDirectory()||info.isSymbolicLink())fail('PATCH_LINK_REFUSED');
+    }
+    let before=null,stamp=null;
+    if(operation!=='Add'){
+      const fd=await fs.open(full,C.O_RDONLY|C.O_NOFOLLOW|C.O_NONBLOCK);
+      try {
+        const info=await fd.stat({bigint:true});if(!info.isFile()||info.nlink!==1n||info.size>BigInt(MAX))fail('PATCH_FILE_UNSUPPORTED');
+        const bytes=Buffer.alloc(MAX+1);let count=0;
+        while(count<bytes.length){const value=await fd.read(bytes,count,bytes.length-count,null);if(!value.bytesRead)break;count+=value.bytesRead;}
+        if(count>MAX||fingerprint(await fd.stat({bigint:true}))!==fingerprint(info))fail('PATCH_SOURCE_CHANGED');
+        before=new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,count));if(before.includes('\0'))fail('PATCH_BINARY');stamp=fingerprint(info);
+      }finally{await fd.close();}
+    }else{try{await fs.lstat(full);fail('PATCH_ADD_EXISTS');}catch(error){if(error.code!=='ENOENT')throw error;}}
+    if(operation==='Delete') {
+      if(lines.length)fail('PATCH_DELETE_BODY');
+      if(fingerprint(await fs.lstat(full,{bigint:true}))!==stamp)fail('PATCH_SOURCE_CHANGED');
+      await fs.unlink(full);return{text:'Deleted project file.',truncated:false};
+    }
+    let content;
+    if(operation==='Add') {
+      if(!lines.every(line=>line.startsWith('+')))fail('PATCH_ADD_BODY');content=lines.map(line=>line.slice(1)).join('\n')+(lines.length?'\n':'');
+    }else{
+      if(!lines.length||before&&!before.endsWith('\n'))fail('PATCH_UPDATE_REQUIRES_HUNKS_AND_FINAL_NEWLINE');
+      let output=before.split('\n'),cursor=0;
+      if(output.at(-1)==='')output.pop();
+      while(lines.length){
+        if(lines.shift()!=='@@')fail('PATCH_ONLY_LITERAL_UNANCHORED_HUNKS');
+        const old=[],replacement=[];let eof=false;
+        while(lines.length&&lines[0]!=='@@'){
+          const line=lines.shift();if(line==='*** End of File'){eof=true;if(lines.length)fail('PATCH_EOF_MARKER');break;}
+          if(![' ','+','-'].includes(line[0]))fail('PATCH_HUNK_FORMAT');
+          if(line[0]!=='+' )old.push(line.slice(1));if(line[0]!=='-')replacement.push(line.slice(1));
+        }
+        if(!old.length)fail('PATCH_EMPTY_CONTEXT');
+        const matches=[];for(let i=cursor;i+old.length<=output.length;i++){if(old.every((text,n)=>text===output[i+n])&&(!eof||i+old.length===output.length))matches.push(i);}
+        if(matches.length!==1)fail('PATCH_CONTEXT_NOT_UNIQUE_OR_MISSING');
+        output.splice(matches[0],old.length,...replacement);cursor=matches[0]+replacement.length;
+        if(Buffer.byteLength(output.join('\n'))>MAX)fail('PATCH_RESULT_LIMIT');
+      }
+      content=output.join('\n')+(output.length?'\n':'');
+    }
+    return projectFileWorker({name:'write',arguments:{file_path:relative,content},expectedStamp:stamp,expectAbsent:operation==='Add'},root);
+  }
   if (['glob','grep'].includes(input.name)) {
     const args=input.arguments,target=args.path??'.';
     if(typeof target!=='string'||!target||target.includes('\\')||target.includes('\0')||path.isAbsolute(target)||target.split('/').includes('..'))fail('INVALID_SEARCH_PATH');
@@ -76,6 +131,7 @@ export async function projectFileWorker(input, root = '/workspace') {
     return {text:text||'(empty read window)',truncated};
   }
   const before=await snapshot(input.name==='write');
+  if(input.expectAbsent&&before||input.expectedStamp!==undefined&&input.expectedStamp!==null&&before?.stamp!==input.expectedStamp)fail('PROJECT_FILE_CHANGED');
   let content=args.content;
   if(input.name==='edit') {
     if(typeof args.old_string!=='string'||!args.old_string||typeof args.new_string!=='string'||args.replace_all!==undefined&&typeof args.replace_all!=='boolean')fail('INVALID_EDIT');

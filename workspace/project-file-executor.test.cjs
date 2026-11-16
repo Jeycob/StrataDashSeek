@@ -31,7 +31,19 @@ test('prepared guest commands preserve UTF8 read windows, writes, exact edits an
 test('outside absolute paths and traversal fail before dispatch; missing operations have no handler',{skip:process.platform==='win32'},async t=>{
  const f=await fixture(t);
  for(const file_path of ['/etc/passwd','/trusted/projects/other/a','/workspace/../secret','../other','a/../../x'])await assert.rejects(f.call('read',{file_path}));
- assert.equal(f.calls.length,0);for(const name of ['apply_patch','read_image','str_replace_editor'])assert.equal(f.handlers[name],undefined);
+ assert.equal(f.calls.length,0);for(const name of ['read_image','str_replace_editor'])assert.equal(f.handlers[name],undefined);
+});
+test('strict single-file patches add/update/delete with full preflight and reject unsupported/ambiguous input',{skip:process.platform==='win32'},async t=>{
+ const f=await fixture(t);
+ const patch=body=>f.call('apply_patch',{patch:'*** Begin Patch\n'+body+'*** End Patch\n'});
+ await patch('*** Add File: src/new.txt\n+first\n+middle\n+last\n');assert.equal(await fs.readFile(path.join(f.root,'src/new.txt'),'utf8'),'first\nmiddle\nlast\n');
+ await patch('*** Update File: src/new.txt\n@@\n first\n-middle\n+changed\n last\n');assert.equal(await fs.readFile(path.join(f.root,'src/new.txt'),'utf8'),'first\nchanged\nlast\n');
+ await assert.rejects(patch('*** Update File: src/new.txt\n@@\n-not present\n+changed\n'));
+ await assert.rejects(patch('*** Add File: a\n+x\n*** Add File: b\n+y\n'));await assert.rejects(fs.stat(path.join(f.root,'a')));
+ await assert.rejects(patch('*** Add File: ../outside\n+x\n'));
+ await assert.rejects(patch('*** Update File: src/new.txt\n*** Move to: other\n@@\n-first\n+x\n'));
+ assert.equal(await fs.readFile(path.join(f.root,'src/new.txt'),'utf8'),'first\nchanged\nlast\n');
+ await patch('*** Delete File: src/new.txt\n');await assert.rejects(fs.stat(path.join(f.root,'src/new.txt')));
 });
 test('actual guest ripgrep preserves regex/glob syntax, ignores VCS for glob and bounds inline results',{skip:process.platform==='win32'},async t=>{
  const f=await fixture(t);await fs.mkdir(path.join(f.root,'src'));await fs.mkdir(path.join(f.root,'.git'));
