@@ -35,6 +35,50 @@ test('installer refuses an unrecognized startup command without changing it',t=>
  const root=temporary(t),onstart=path.join(root,'onstart.sh'),keyring=path.join(root,'public.gpg');fs.writeFileSync(onstart,'custom-launch --options\n',{mode:0o755});fs.writeFileSync(keyring,'public');assert.throws(()=>install({root,keyring,signers:['A'.repeat(40)],onstart}),/recognized/);assert.equal(fs.readFileSync(onstart,'utf8'),'custom-launch --options\n');assert.equal(fs.existsSync(path.join(root,'bootstrap/start.sh')),false);
 });
 
+test('fresh bootstrap installs the offline helper before its consumer and coldstarts without purge config',async t=>{
+ const root=temporary(t),onstart=path.join(root,'onstart.sh'),keyring=path.join(root,'public.gpg'),bootstrap=path.join(root,'bootstrap');
+ fs.writeFileSync(onstart,'bash '+root+'/app/vast/start.sh &\n',{mode:0o755});fs.writeFileSync(keyring,'public fixture');
+ const published=[],rename=fs.renameSync;
+ fs.renameSync=(from,to)=>{
+  if(path.dirname(to)===bootstrap){
+   const name=path.basename(to);
+   if(name==='runtime-launcher.cjs'||name==='start.sh')assert.deepEqual(fs.readFileSync(path.join(bootstrap,'offline-purge-maintenance.cjs')),fs.readFileSync(path.join(__dirname,'offline-purge-maintenance.cjs')));
+   published.push(name);
+  }
+  return rename(from,to);
+ };
+ try{install({root,onstart,keyring,signers:['A'.repeat(40)]});}finally{fs.renameSync=rename;}
+ assert.ok(published.indexOf('offline-purge-maintenance.cjs')<published.indexOf('runtime-launcher.cjs'));assert.equal(published.at(-1),'start.sh');
+ // Load only the installed bootstrap, with no access to app/workspace modules.
+ const result=cp.spawnSync(process.execPath,['-e',`const p=require('node:path'),b=process.argv[1];require(p.join(b,'runtime-launcher.cjs'));require(p.join(b,'offline-purge-maintenance.cjs')).beforeNativeStart({root:process.argv[2],uid:60056}).then(v=>console.log(JSON.stringify(v))).catch(e=>{console.error(e);process.exitCode=1;});`,bootstrap,root],{encoding:'utf8'});
+ assert.equal(result.status,0,result.stderr);assert.deepEqual(JSON.parse(result.stdout),{status:'not-configured'});
+});
+
+test('signed bootstrap inventory detects a missing or modified offline helper',t=>{
+ const root=temporary(t),onstart=path.join(root,'onstart.sh'),keyring=path.join(root,'public.gpg');
+ fs.writeFileSync(onstart,'bash '+root+'/app/vast/start.sh &\n',{mode:0o755});fs.writeFileSync(keyring,'public fixture');install({root,onstart,keyring,signers:['A'.repeat(40)]});
+ const commit='d'.repeat(40),release=path.join(root,'releases',commit);fs.renameSync(path.join(root,'app'),release);fs.symlinkSync(release,path.join(root,'app'),'dir');
+ fs.writeFileSync(path.join(root,'root-secrets/startup-update-applied.json'),JSON.stringify({commit,digest:releaseDigest(release)}));
+ const runtime=require('./runtime-paths.cjs'),helper=path.join(root,'bootstrap/offline-purge-maintenance.cjs'),bytes=fs.readFileSync(helper);
+ assert.equal(runtime.adoptSignedStatus(root).bootstrapUpgradeRequired,false);
+ fs.unlinkSync(helper);assert.equal(runtime.adoptSignedStatus(root).bootstrapUpgradeRequired,true);
+ fs.writeFileSync(helper,bytes,{mode:0o644});assert.equal(runtime.adoptSignedStatus(root).bootstrapUpgradeRequired,false);
+ fs.appendFileSync(helper,'\n// modified fixture\n');assert.equal(runtime.adoptSignedStatus(root).bootstrapUpgradeRequired,true);
+});
+
+test('actual offline maintenance CLI resolves service identity and refuses open admission for every mode',t=>{
+ const root=temporary(t),runtime=require('./runtime-paths.cjs');runtime.control(root);runtime.writePrivate(root,'runtime-admission-controller.json',{open:true,epoch:'fixture'});
+ // Keep the real CLI, identity function and OS lookup. Map only the service
+ // account name to an existing test account, without creating system users.
+ const preload=path.join(root,'fixture-service-account.cjs');
+ fs.writeFileSync(preload,`const cp=require('node:child_process'),original=cp.execFileSync;cp.execFileSync=function(file,args,...rest){if(file==='/usr/bin/id'&&args?.length===2&&['-u','-g'].includes(args[0])&&args[1]==='harness')args=[args[0],'nobody'];return original.call(this,file,args,...rest);};`);
+ for(const mode of ['plan','apply','recover']){
+  const result=cp.spawnSync(process.execPath,['--require',preload,path.join(__dirname,'offline-purge-maintenance.cjs'),mode,root],{encoding:'utf8'});
+  assert.equal(result.status,1,mode);assert.equal(result.stdout,'',mode);assert.equal(result.stderr.trim(),'PURGE_ADMISSION_NOT_CLOSED',mode);
+ }
+ assert.equal(fs.existsSync(path.join(runtime.paths(root).privateState,'offline-purge-journal.json')),false);
+});
+
 test('stable bootstrap changes require explicit upgrade and retain the previous bytes',t=>{
  const root=temporary(t),onstart=path.join(root,'onstart.sh'),keyring=path.join(root,'public.gpg');fs.writeFileSync(onstart,'bash '+root+'/app/vast/start.sh &\n',{mode:0o755});fs.writeFileSync(keyring,'public fixture');const options={root,onstart,keyring,signers:['A'.repeat(40)]};install(options);
  const file=path.join(root,'bootstrap/startup-update.cjs');fs.writeFileSync(file,'previous fixture bootstrap');assert.throws(()=>install(options),/explicit reviewed upgrade/);assert.equal(fs.readFileSync(file,'utf8'),'previous fixture bootstrap');

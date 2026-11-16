@@ -1,0 +1,39 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import crypto from 'node:crypto';
+import {pathToFileURL} from 'node:url';
+import {createSDKAdapter} from './offline-purge-sdk.mjs';
+import {plan,apply,COVERAGE,digest} from './offline-purge.mjs';
+const scope=process.env.HARNESS_PURGE_SDK_SCOPE?path.resolve(process.env.HARNESS_PURGE_SDK_SCOPE):process.env.HARNESS_NATIVE_CLI?path.resolve(path.dirname(process.env.HARNESS_NATIVE_CLI),'../..'):null;
+test('actual pinned rc.2 JSON and JSONL contracts: forget archive/workspace/cache/legacy without journaling conversation contents',{skip:!scope,timeout:30000},async t=>{
+ const load=name=>import(pathToFileURL(path.join(scope,name,'lib/index.js')).href),[{Context},persist,{JsonStorageBackend},{descriptorOf},ws,cache,schedule]=await Promise.all([load('cordis'),load('dsh-session-persistence-jsonl'),load('dsh-storage-json'),load('dsh-storage-domain'),load('dsh-workspace'),load('dsh-session-projection-cache'),load('dsh-schedule')]);
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'offline-purge-sdk-')),id='session-'+crypto.randomUUID(),project=path.join(root,'workspaces/projects',id),storageRoot=path.join(root,'home/.dsh/storages'),sessionRoot=path.join(root,'home/.dsh/sessions'),state=path.join(root,'state/workbench');let ctx,adapter;
+ t.after(async()=>{await adapter?.close();await ctx?.fiber.dispose();assert.equal(path.dirname(root),os.tmpdir());assert(path.basename(root).startsWith('offline-purge-sdk-'));await fs.rm(root,{recursive:true,force:true});});
+ for(const d of [path.join(project,'.harness'),storageRoot,sessionRoot,state,path.join(storageRoot,'session_projcache/sessions')])await fs.mkdir(d,{recursive:true});
+ await fs.writeFile(path.join(project,'.harness/project.json'),JSON.stringify({sessionId:id,root:project}));
+ const createdAt=Date.now();ctx=new Context();await persist.apply(ctx,{root:sessionRoot,compression:'zstd',listConcurrency:1});const handle=await ctx.sessionPersistence.create({id,version:4,createdAt,cwd:project,isSeeded:false});await handle.flush();await handle.close();await ctx.fiber.dispose();ctx=null;
+ const backend=new JsonStorageBackend(storageRoot),unit=await backend.kv.open(descriptorOf(ws.workspaceDomainSpec));await unit.setGlobal({initialized:true,defaultWorkspaceId:'w1',workspaceIds:['w1'],archivedSessionIds:[id],pinnedSessionIds:[]});await unit.putRecord('workspaces','w1',{path:project,title:'Disposable SDK fixture',sessionIds:[id],createdAt:new Date(createdAt).toISOString(),updatedAt:new Date(createdAt).toISOString()});await unit.close();
+ const value={identity:{formatVersion:4,createdAt,cwd:project,isSeeded:false,inheritedEventCount:0},rows:{fixture:{ver:1,seq:0,val:{text:'ARCHIVED_CONTENT_NOT_IN_JOURNAL'}}}};
+ const desc=descriptorOf(cache.projectionCacheDomainSpec),projection=await backend.kv.open(desc);await projection.putRecord('sessions',id,value);await projection.close();const legacy=await backend.kv.open({...desc,layout:'single'});await legacy.putRecord('sessions',id,value);await legacy.close();await backend.close();
+ await fs.writeFile(path.join(state,'registry.json'),JSON.stringify({version:1,sessions:{[id]:{root:project,sourceRoot:project,workspaceId:'w1'}},trash:{[id]:{at:createdAt,workspaceId:'w1'}},workspaces:{w1:{settings:{}}}}));
+ if(process.platform==='linux'&&process.getuid()===0)for(const file of [path.join(storageRoot,'workspace.json'),path.join(storageRoot,'session_projcache.json'),path.join(state,'registry.json')])await fs.chown(file,1001,1001);
+ let crashed=false;adapter=await createSDKAdapter({root,sdkScope:scope,storageRoot,sessionRoot,afterMetadataWrite:stage=>{if(process.platform==='linux'&&stage==='workspace-record'&&!crashed){crashed=true;throw Error('actual-sdk-metadata-interruption');}}});const before=await adapter.inspect();assert.equal(before.sessions.length,1);assert.equal(before.sessions[0].formatStatus,'current');assert.equal(JSON.stringify(before.baseline).includes('ARCHIVED_CONTENT_NOT_IN_JOURNAL'),false);
+ if(process.platform==='linux'){
+  const witness=path.join(root,'refs.json'),value={apps:[],jobs:[]};await fs.writeFile(witness,JSON.stringify(value));const graph={version:1,sdkVersion:'0.2.2-rc.2',metadataIdentity:before.identity,coverage:Object.fromEntries(COVERAGE.map(k=>[k,true])),unknown:[],references:[],witnesses:[{path:witness,sha256:digest(value)}]},guard=async()=>{},journalFile=path.join(root,'journal.json');
+  const schedules=new JsonStorageBackend(storageRoot),tasks=await schedules.kv.open(descriptorOf(schedule.scheduleDomain)),task={record:{id:'retained-task',kind:'at',title:'Fixture',prompt:'Private schedule prompt must not enter purge journal',scheduledAt:'2027-01-01T00:00:00.000Z'},target:{kind:'session',sessionId:id},status:'paused'};
+  await tasks.putRecord('tasks','retained-task',task);let bound=await adapter.inspect();graph.metadataIdentity=bound.identity;let kept=await plan({adapter,graph,guard});assert.equal(kept.rows[0].eligible,false);assert(kept.rows[0].reasons.includes('RETAINED_REFERENCE:schedule'));assert.equal(JSON.stringify(bound.baseline).includes(task.record.prompt),false);
+  await tasks.deleteRecords('tasks',['retained-task']);await tasks.close();await schedules.close();
+  const backup=path.join(storageRoot,'workspace.before-import.json');await fs.copyFile(path.join(storageRoot,'workspace.json'),backup);bound=await adapter.inspect();graph.metadataIdentity=bound.identity;kept=await plan({adapter,graph,guard});assert(kept.rows[0].reasons.includes('RETAINED_REFERENCE:workspace-before-import-restore-status-unknown'));
+  const historical=await createSDKAdapter({root,sdkScope:scope,storageRoot,sessionRoot,historicalWorkspaceBackupHash:digest(JSON.parse(await fs.readFile(backup,'utf8')))});try{graph.metadataIdentity=(await historical.inspect()).identity;const classified=await plan({adapter:historical,graph,guard});assert.equal(classified.rows[0].eligible,true,JSON.stringify(classified.rows[0].reasons));}finally{await historical.close();}await fs.unlink(backup);
+  bound=await adapter.inspect();graph.metadataIdentity=bound.identity;const scheduleBytes=await fs.readFile(path.join(storageRoot,'schedule.json'));const p=await plan({adapter,graph,guard});assert.equal(p.rows[0].eligible,true,JSON.stringify(p.rows[0].reasons));
+  await assert.rejects(apply({adapter,graph,guard,journalFile,expectedPlanHash:p.planHash}),/actual-sdk-metadata-interruption/);
+  adapter=await createSDKAdapter({root,sdkScope:scope,storageRoot,sessionRoot});const result=await apply({adapter,graph,guard,journalFile});assert.equal(result.status,'completed');assert.equal(await fs.stat(project).then(()=>true,()=>false),false);
+  adapter=await createSDKAdapter({root,sdkScope:scope,storageRoot,sessionRoot});await adapter.verifyForgotten([id]);
+  assert.deepEqual(await fs.readFile(path.join(storageRoot,'schedule.json')),scheduleBytes);
+  if(process.getuid()===0)for(const file of [path.join(storageRoot,'workspace.json'),path.join(storageRoot,'session_projcache.json'),path.join(state,'registry.json')])assert.equal((await fs.stat(file)).uid,1001);
+ }else{for(const name of before.sessions[0].logNames)await fs.unlink(path.join(before.sessions[0].artifactDir,name));await adapter.forget([id],before.baseline,['w1']);await adapter.forget([id],before.baseline,['w1']);await adapter.verifyForgotten([id]);}
+ const actual=JSON.parse(await fs.readFile(path.join(storageRoot,'workspace.json'),'utf8'));assert.deepEqual(actual.global.archivedSessionIds,[]);assert.deepEqual(actual.global.workspaceIds,[]);assert.deepEqual(actual.tables.workspaces,{});assert.equal(await fs.stat(path.join(storageRoot,'session_projcache/sessions',id+'.json')).then(()=>true,()=>false),false);assert.deepEqual(JSON.parse(await fs.readFile(path.join(storageRoot,'session_projcache.json'),'utf8')).tables.sessions,{});
+});

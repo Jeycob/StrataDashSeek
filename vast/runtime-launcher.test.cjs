@@ -9,3 +9,9 @@ test('a persisted healthy or rolled-back row cannot reopen a cold process before
 test('fresh matching Native health opens the recovered process while a cold model remains independent',async()=>{
  const f=fixture('healthy',{version:1,phase:'model_loading',sourceCommit:commit,sourceReady:true,runtimeReady:true,modelReady:false,observedAt:new Date().toISOString()});await f.owner.tick();assert.equal(f.calls.filter(c=>c.open).length,1);assert.equal(f.calls.some(c=>c.closed),false);
 });
+
+test('pending offline purge recovery blocks every Native spawn at launch boundary',async()=>{
+ const module={exports:{}},calls=[],dependencies={'node:fs':fs,'node:path':path,'node:child_process':{spawn(){calls.push('spawn');throw Error('must not spawn');}},'node:crypto':require('node:crypto'),'node:url':require('node:url'),'./runtime-paths.cjs':{},'./runtime-release.cjs':{currentCommit:()=>commit,verify:async()=>calls.push('verify')},'./startup-update.cjs':{},'./runtime-admission-server.cjs':{},'./runtime-recovery.cjs':{},'./offline-purge-maintenance.cjs':{beforeNativeStart:async()=>{calls.push('purge-recovery');throw Error('PURGE_RECOVERY_REQUIRED');}}};
+ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'runtime-launcher.cjs'),'utf8'),{module,exports:module.exports,require:name=>dependencies[name]??assert.fail(name),__dirname,process:{},Date,console,setTimeout,clearTimeout,setInterval,clearInterval,Promise});
+ const owner=new module.exports.RuntimeLauncher({root:'/fixture',uid:1001,gid:1001});await assert.rejects(owner.launchUi(),/PURGE_RECOVERY_REQUIRED/);assert.deepEqual(calls,['verify','purge-recovery']);
+});
