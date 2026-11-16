@@ -22,6 +22,7 @@ test('actual reviewer template composes one leaf daemon, scoped mounts and witne
  assert.doesNotMatch(script,/source=\/mnt\/combined-transport,target=/);
  assert.match(script,/test "\$status" -eq 1/);assert.match(script,/COMBINED_GUEST_WRITE_aaaaaaaaaaaaaaaa=ready/);
  assert.match(script,/COMBINED_HOST_WRITE_VISIBLE=passed/);assert.match(script,/ISOLATION_PROJECT_READONLY=passed/);
+ assert(script.startsWith("printf '\\n'\n"),'serial evidence must begin after the interactive prompt');
  assert.throws(()=>probe.guestScript('$(id)',proof),/NONCE/);
  assert.throws(()=>probe.guestScript('b'.repeat(16),{guestScript:()=>''}),/TEMPLATE_CHANGED/);
 });
@@ -30,6 +31,7 @@ test('acceptance requires every negative witness and independent positive marker
  assert(probe.evidence(markers.join('\r\n')));
  for(const marker of markers)assert.equal(probe.evidence(markers.filter(x=>x!==marker).join('\n')),false,marker);
  assert.equal(probe.evidence(markers.join('\n').replace('COMBINED_READ_NEGATIVE_1=1','COMBINED_READ_NEGATIVE_1=127')),false);
+ assert.equal(probe.evidence('localhost:~# '+markers.join('\n')),false,'a prompt-prefixed marker cannot silently pass');
 });
 test('own exclusive tmpfs fixture exposes only projects and synthetic transport; cleanup rejects arbitrary roots',{skip:process.platform!=='linux'},()=>{
  const nonce=require('node:crypto').randomBytes(8).toString('hex'),f=probe.fixture(nonce);

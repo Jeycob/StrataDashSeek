@@ -78,7 +78,9 @@ test "$(cat /mnt/combined-projects/project-b/host-sibling)" = HOST_SIBLING_${non
 echo COMBINED_RESULT=passed
 `;
  script=replaceOnce(script,'echo ISOLATION_RESULT=passed',transport+'\necho ISOLATION_RESULT=passed');
- return script;
+ // The interactive serial shell does not append a newline to its prompt.
+ // Start evidence on its own line so the exact-marker verifier stays strict.
+ return "printf '\\n'\n"+script;
 }
 function evidence(output){return ['CENSUS_OLD_DISK_READONLY=1','ISOLATION_REQUIRED_DAEMON_CAPABILITIES=passed','ISOLATION_UID_CAPS_NNP_CGROUP_READBACK=passed','ISOLATION_PROJECT_READONLY=passed','COMBINED_HOST_WRITE_VISIBLE=passed','COMBINED_TRANSPORT_POSITIVE=passed','COMBINED_TRANSPORT_READONLY=passed','COMBINED_RESULT=passed',
  ...[0,1,2,3].flatMap(i=>['COMBINED_READ_NEGATIVE_'+i+'=1','COMBINED_WRITE_NEGATIVE_'+i+'=1','COMBINED_TRANSPORT_NEGATIVE_'+i+'=1'])].every(marker=>output.split(/\r?\n/).includes(marker));}
