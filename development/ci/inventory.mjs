@@ -9,6 +9,7 @@ const helpers = new Map([
   ['vast/apps-browser-check.cjs', 'Owned-release browser verification adapter; requires a project, plan and release ID.']
 ]);
 const hostFixtures = new Map([
+  ['workspace/code-server.browser.test.cjs', 'Actual code-server acceptance against an explicitly prepared local WSL fixture and HOMEAI_EDITOR_URL; independently observed Chrome/WebKit evidence remains separate from portable Native panel fixtures.'],
   ['development/guest-capability-probe.cjs', 'Operator-only disposable QEMU guest using pinned installed boot artifacts after fresh host quiescence; no production host or installed ISO in CI. Plan tests run separately.'],
   ['deployments/apps-live-lifecycle-check.cjs', 'Explicit live demo lifecycle check reads the installed private worker key; operator-run acceptance only.'],
   ['deployments/apps-real-worker-check.cjs', 'Acceptance against an explicitly prepared dedicated Docker worker; no such host or credentials in CI.'],

@@ -52,6 +52,14 @@ test('sleeping inventory is explicitly stale and cannot authorize mutation or cl
   const value = await f.call({ op: 'inventory' }); assert.equal(value.availability, 'disabled'); assert.equal(value.stale, true); assert.ok(value.items.every(r => r.actions.length === 0));
 });
 
+test('failed census refresh retains stale rows without fresh actions even when the daemon stays ready', async t => {
+  const f = fixture(t), first = await f.call({ op: 'inventory', limit: 1 });
+  f.cleanup.data.resources.snapshots[first.inventoryId].observedAt -= 11000;
+  f.cleanup.capture = async () => ({ availability: 'unavailable', reasonCode: 'INVENTORY_INCOMPLETE', rows: [], binding: null });
+  const failed = await f.call({ op: 'inventory', limit: 1 }); assert.equal(failed.availability, 'unavailable'); assert.equal(failed.stale, true); assert.equal(failed.items.length, 1); assert.deepEqual(failed.items[0].actions, []);
+  const next = await f.call({ op: 'inventory', limit: 1, cursor: failed.nextCursor }); assert.equal(next.stale, true); assert.equal(next.availability, 'unavailable'); assert.deepEqual(next.items[0].actions, []);
+});
+
 test('export uses the existing job registry, authenticates download again and expires only its completed artifact', async t => {
   const f = fixture(t); let transfers = 0;
   const server = http.createServer((req, res) => { transfers++; assert.equal(req.url, '/images/' + encodeURIComponent(image) + '/get'); res.end('SYNTHETIC_IMAGE_ARCHIVE'); });

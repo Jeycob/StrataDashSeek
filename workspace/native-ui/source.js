@@ -1,3 +1,17 @@
+// Native also composes abort signals. Older Safari must have these helpers
+// before any of our panes creates a Native session or starts a request.
+if(typeof AbortSignal.any!=='function')AbortSignal.any=iterable=>{
+ const signals=Array.from(iterable);
+ const controller=new AbortController(),subscriptions=[];
+ const cleanup=()=>{for(const [signal,listener]of subscriptions)signal.removeEventListener('abort',listener);subscriptions.length=0;};
+ for(const signal of signals){if(!(signal instanceof AbortSignal)){cleanup();throw new TypeError('Expected AbortSignal');}if(signal.aborted){controller.abort(signal.reason);cleanup();return controller.signal;}}
+ for(const signal of signals){const listener=()=>{controller.abort(signal.reason);cleanup();};subscriptions.push([signal,listener]);signal.addEventListener('abort',listener,{once:true});}
+ return controller.signal;
+};
+if(typeof AbortSignal.timeout!=='function')AbortSignal.timeout=milliseconds=>{
+ if(!Number.isSafeInteger(milliseconds)||milliseconds<0)throw new RangeError('Invalid timeout');
+ const controller=new AbortController();setTimeout(()=>controller.abort(new DOMException('The operation timed out','TimeoutError')),Math.min(milliseconds,2147483647));return controller.signal;
+};
 const inject=['slots','sidebarRightTabs','sidebarRight','uiWorkspace','locale'];
 const h=React.createElement;
 const copy={en:{docker:'Applications and Docker',workspaces:'Workspace defaults',notifications:'Notifications',newDocker:'Prepare Docker from this project',noRoot:'Open a conversation with a project inside the application workspace.',outsideRoot:'This project is outside the application workspace. Choose a project from the configured workspace.',preparing:'Preparing…',language:'Language',files:'Workspace files',filesHelp:'Browse, edit, upload and delete files in this conversation’s isolated project.',dockerHelp:'Containers, logs and releases. Reading status does not wake Docker.',openPhone:'Open the installed Harness app to configure iPhone notifications.',workspace:'Workspace',noWorkspace:'Create a workspace first.',ready:'Docker project prepared.'},cs:{docker:'Aplikace a Docker',workspaces:'Výchozí nastavení projektů',notifications:'Oznámení',newDocker:'Připravit Docker z tohoto projektu',noRoot:'Otevři konverzaci s projektem ve složce aplikací.',outsideRoot:'Projekt je mimo složku aplikací. Vyber projekt v nastaveném pracovním prostoru.',preparing:'Připravuji…',language:'Jazyk',files:'Soubory projektu',filesHelp:'Procházení, úpravy, nahrávání a mazání souborů odděleného projektu této konverzace.',dockerHelp:'Kontejnery, logy a vydání. Čtení stavu Docker neprobouzí.',openPhone:'Pro nastavení oznámení na iPhonu otevři nainstalovanou aplikaci Harness.',workspace:'Pracovní prostor',noWorkspace:'Nejprve vytvoř pracovní prostor.',ready:'Docker projektu je připravený.'}};
@@ -28,8 +42,7 @@ function useLiveChanges(sessionId,visible){
    if(operation==='list'&&snapshot.current.summary?.revision)args.revision=snapshot.current.summary.revision;
    if(operation==='list'&&snapshot.current.diff?.revision)args.diffRevision=snapshot.current.diff.revision;
    try{
-    const response=await fetch('/api/workbench',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'changes',sessionId,operation,args}),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])});
-    const result=await response.json();if(!response.ok)throw Error(result.error||'HTTP '+response.status);
+    const result=await nativeJSON('/api/workbench',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'changes',sessionId,operation,args}),signal:controller.signal});
     if(!active()||current!==ticket)return;
     if(operation==='list'){
      if(result.version!==1||result.sessionId!==sessionId||(!result.unchanged&&!Array.isArray(result.files)))throw Error('Invalid changes response.');
@@ -96,7 +109,67 @@ function ChangesSession(props){
   files.length?h('div',{className:'hc-body'},h('nav',{className:'hc-list','aria-label':text('fileChanges')},...files.map(file=>h('button',{type:'button',key:file.path,className:'hc-file','data-change-path':file.path,'aria-pressed':changes.selected===file.path,onClick:()=>changes.select(file.path)},h('span',{className:'hc-path'},file.path),h('span',{className:'hc-counts'},h('span',null,text(file.status)),file.added!==null&&file.added!==undefined&&h('span',{className:'hc-plus'},'+'+file.added),file.deleted!==null&&file.deleted!==undefined&&h('span',{className:'hc-minus'},'−'+file.deleted))))),h('div',{className:'hc-diff'},h(ChangeDiff,{diff:changes.diff,selected:changes.selected}))):!(changes.error&&!summary)&&h('p',{className:'hc-empty',role:'status'},text(changes.loading?'loadingChanges':'noChanges')));
 }
 function Changes(props){return h(ChangesSession,{...props,key:props.sessionId});}
-async function state(){const r=await fetch('/api/workbench',{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error('HTTP '+r.status);return r.json();}
+// Safari versions without AbortSignal.any/timeout use the same explicit
+// controller lifetime as every other browser. Timers/listeners always detach.
+async function nativeJSON(url,options={},timeoutMs=15000){
+ const controller=new AbortController(),abort=()=>controller.abort(),signal=options.signal;
+ if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
+ const timer=setTimeout(abort,timeoutMs);
+ try{const response=await fetch(url,{credentials:'same-origin',cache:'no-store',...options,signal:controller.signal}),result=await response.json();if(controller.signal.aborted)throw new DOMException('Request cancelled or timed out','AbortError');if(!response.ok)throw Object.assign(Error(result.error||'HTTP '+response.status),{code:result.code});return result;}
+ finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+}
+async function state(){return nativeJSON('/api/workbench');}
+Object.assign(copy.en,{conversationModel:'Model for this conversation',workspaceModel:'Workspace default',modelScope:'This control changes only this conversation.',modelUsed:'Last request used',modelPending:'Saving model…',modelRetry:'Refresh models',editor:'Code editor',editorHelp:'Code OSS through code-server. Live project files and Git changes for this conversation.',editorOpen:'Open code-server',editorLoading:'Opening editor…',editorUnavailable:'The code-server editor is unavailable. Your project files remain on the server.',editorRetry:'Reconnect editor',editorClose:'Close editor',editorCloseHelp:'Save or resolve unsaved files in the editor before closing. Close this editor now?',editorLimit:'Three editors are retained to protect drafts. Close a saved editor before opening another.',editorDrafts:'Unsaved buffers stay in this editor when you switch conversations. Resolve save conflicts in code-server.',editorExpired:'Editor access has expired. Save your draft locally before reconnecting.',editorMobile:'For a wider view, open this editor in a separate tab.',editorNewTab:'Open editor in a new tab',editorUnknown:'Editor connected; verify files in the editor.',editorStarting:'The editor is starting. Retry shortly.'});
+Object.assign(copy.cs,{conversationModel:'Model této konverzace',workspaceModel:'Výchozí model prostoru',modelScope:'Tato volba mění pouze tuto konverzaci.',modelUsed:'Poslední požadavek použil',modelPending:'Ukládám model…',modelRetry:'Obnovit modely',editor:'Editor kódu',editorHelp:'Code OSS přes code-server. Živé soubory projektu a Git změny této konverzace.',editorOpen:'Otevřít code-server',editorLoading:'Otevírám editor…',editorUnavailable:'Editor code-server není dostupný. Soubory projektu zůstávají na serveru.',editorRetry:'Znovu připojit editor',editorClose:'Zavřít editor',editorCloseHelp:'Před zavřením ulož nebo vyřeš rozepsané soubory v editoru. Zavřít tento editor?',editorLimit:'Tři editory zůstávají otevřené kvůli draftům. Před dalším otevřením zavři uložený editor.',editorDrafts:'Při přepnutí konverzace zůstávají rozepsané soubory v tomto editoru. Konflikty ukládání vyřeš v code-serveru.',editorExpired:'Platnost připojení editoru skončila. Před opětovným připojením si ulož draft lokálně.',editorMobile:'Pro širší zobrazení otevři editor v samostatné kartě.',editorNewTab:'Otevřít editor v nové kartě',editorUnknown:'Editor je připojený; ověř soubory uvnitř editoru.',editorStarting:'Editor se spouští. Za chvíli zkus připojení znovu.'});
+
+function ConversationModel({sessionId,locked}){
+ useLanguage();const [value,setValue]=React.useState(null),[error,setError]=React.useState(''),[busy,setBusy]=React.useState(false),epoch=React.useRef(0);
+ const load=React.useCallback(async()=>{const ticket=++epoch.current;try{const result=await nativeJSON('/api/workbench/models?sessionId='+encodeURIComponent(sessionId));if(ticket!==epoch.current)return;if(result.version!==1||result.sessionId!==sessionId)throw Error('Invalid model response');setValue(result);setError('');}catch(e){if(ticket===epoch.current)setError(e.message);}},[sessionId]);
+ React.useEffect(()=>{void load();return()=>{epoch.current++;};},[load]);
+ const select=async event=>{const choice=event.target.value,ticket=++epoch.current;setBusy(true);setError('');try{const selection=choice==='workspace'?null:JSON.parse(choice),result=await nativeJSON('/api/workbench/models',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId,selection})});if(ticket!==epoch.current)return;if(result.sessionId!==sessionId)throw Error('Invalid model response');setValue(old=>({...old,...result}));}catch(e){if(ticket===epoch.current)setError(e.message);}finally{if(ticket===epoch.current)setBusy(false);}};
+ const selected=value?.source==='workspace'?'workspace':JSON.stringify({provider:value?.selection?.provider,model:value?.selection?.model});
+ return h('section',{className:'harness-conversation-model','data-model-session':sessionId},h('label',null,text('conversationModel'),h('select',{value:selected,onChange:select,disabled:locked||busy||!value,'aria-label':text('conversationModel')},h('option',{value:'workspace'},text('workspaceModel')),...(value?.groups||[]).map(group=>h('optgroup',{key:group.id,label:group.name},...group.models.map(model=>h('option',{key:model.id,value:JSON.stringify({provider:group.id,model:model.id})},model.name)))))),h('small',null,text('modelScope')),busy&&h('p',{role:'status'},text('modelPending')),value?.lastUsed&&h('small',null,text('modelUsed')+': '+value.lastUsed.provider+' / '+value.lastUsed.model),value?.selectionError&&h('p',{role:'alert'},text('modelUnavailable')+' '+value.selection?.provider+' / '+value.selection?.model),value?.workspaceDefaultError&&h('p',{role:'alert'},text('modelDefaultUnavailable')),error&&h('p',{role:'alert'},error),h('button',{type:'button',onClick:()=>void load(),disabled:busy},text('modelRetry')));
+}
+
+Object.assign(copy.en,{modelUnavailable:'This saved model is unavailable. Choose a model before continuing.',modelDefaultUnavailable:'The workspace default is unavailable. Choose an available model or update workspace defaults.',editorReadOnly:'This editor is read-only.',editorMobile:'A separate tab provides more room. Save drafts before switching editor windows.'});
+Object.assign(copy.cs,{modelUnavailable:'Uložený model není dostupný. Před pokračováním vyber model.',modelDefaultUnavailable:'Výchozí model prostoru není dostupný. Vyber dostupný model nebo oprav nastavení prostoru.',editorReadOnly:'Tento editor umožňuje pouze čtení.',editorMobile:'Samostatná karta nabízí více místa. Před přechodem mezi okny editoru ulož drafty.'});
+
+// Keep an editor's actual browsing context alive across chat/tab switches.
+// Never evict an editor with unknown dirty state to reclaim memory silently.
+const editorFrames=new Map();
+function parkEditor(entry){entry.frame.style.display='none';}
+function EditorSession({sessionId,useTabInfo}){
+ useLanguage();const host=React.useRef(null),epoch=React.useRef(0),[entry,setEntry]=React.useState(()=>editorFrames.get(sessionId)||null),[busy,setBusy]=React.useState(false),[error,setError]=React.useState(''),[confirm,setConfirm]=React.useState(false),[online,setOnline]=React.useState(navigator.onLine);
+ const info=useTabInfo?.(),[now,setNow]=React.useState(Date.now());
+ React.useEffect(()=>{const timer=setInterval(()=>setNow(Date.now()),30000);return()=>clearInterval(timer);},[]);
+ React.useEffect(()=>{const online=()=>setOnline(navigator.onLine);window.addEventListener('online',online);window.addEventListener('offline',online);return()=>{window.removeEventListener('online',online);window.removeEventListener('offline',online);};},[]);
+ React.useEffect(()=>{
+  if(!entry)return;const position=()=>{const rect=host.current?.getBoundingClientRect(),visible=info?.tab.visible!==false&&!document.hidden&&rect&&rect.width>0&&rect.height>0;Object.assign(entry.frame.style,visible?{display:'block',position:'fixed',left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px',zIndex:'40'}:{display:'none'});};
+  const observer=typeof ResizeObserver==='function'?new ResizeObserver(position):null;if(host.current)observer?.observe(host.current);
+  window.addEventListener('resize',position);window.addEventListener('scroll',position,true);document.addEventListener('visibilitychange',position);position();
+  return()=>{observer?.disconnect();window.removeEventListener('resize',position);window.removeEventListener('scroll',position,true);document.removeEventListener('visibilitychange',position);parkEditor(entry);};
+ },[entry,sessionId,info?.tab.visible]);
+ React.useEffect(()=>()=>{epoch.current++;},[sessionId]);
+ async function open(reconnect=false){
+  if(!sessionId)return;if(!entry&&editorFrames.size>=3){setError(text('editorLimit'));return;}
+  if(reconnect&&entry&&!window.confirm(text('editorCloseHelp')))return;
+  const ticket=++epoch.current;setBusy(true);setError('');
+  try{
+   const result=await nativeJSON('/api/workbench/editor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'open',sessionId})},30000);
+   if(ticket!==epoch.current)return;if(result.version!==1||result.sessionId!==sessionId)throw Error('Invalid editor response');
+   if(result.state!=='ready'){setError(text(result.state==='starting'?'editorStarting':'editorUnavailable')+(result.code?' ('+result.code+')':''));return;}
+   const url=new URL(result.url,location.href);
+   if(url.protocol!=='https:'||url.origin===location.origin||url.username||url.password||url.search)throw Error('Editor requires a separate secure origin');
+   // Different sessions must never share browser storage or a service worker.
+   if([...editorFrames].some(([id,e])=>id!==sessionId&&e.origin===url.origin))throw Error('Editor origin is already assigned to another conversation');
+   const frame=document.createElement('iframe');frame.title='Code OSS · '+sessionId;frame.referrerPolicy='no-referrer';frame.setAttribute('allow','clipboard-read; clipboard-write');frame.src=url.href;frame.className='harness-code-frame';frame.style.display='none';document.body.append(frame);
+   const next={frame,origin:url.origin,launchURL:url.origin+'/',expiresAt:result.expiresAt,readOnly:result.readOnly===true};const previous=editorFrames.get(sessionId);editorFrames.set(sessionId,next);setEntry(next);previous?.frame.remove();
+  }catch(e){if(ticket===epoch.current)setError(e.name==='AbortError'?text('editorUnavailable'):e.message);}finally{if(ticket===epoch.current)setBusy(false);}
+ }
+ async function close(){const current=entry,ticket=++epoch.current;setBusy(true);setError('');try{const result=await nativeJSON('/api/workbench/editor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'close',sessionId})});if(ticket!==epoch.current)return;if(result.version!==1||result.sessionId!==sessionId)throw Error('Invalid editor response');if(editorFrames.get(sessionId)===current){editorFrames.delete(sessionId);current.frame.remove();setEntry(null);}setConfirm(false);}catch(e){if(ticket===epoch.current)setError(e.message);}finally{if(ticket===epoch.current)setBusy(false);}}
+ return h('section',{className:'harness-native-surface harness-code-editor','data-editor-session':sessionId},h(ConversationModel,{sessionId}),h('header',null,h('h3',null,'Code OSS · code-server'),h('button',{type:'button',disabled:busy,onClick:()=>void open(Boolean(entry))},text(busy?'editorLoading':entry?'editorRetry':'editorOpen')),entry&&h('button',{type:'button',disabled:busy,onClick:()=>setConfirm(true)},text('editorClose'))),h('p',{className:'hc-meta'},text('editorDrafts')),entry&&h('p',{className:'hc-meta'},text('editorMobile')+' ',h('a',{href:entry.launchURL,target:'_blank',rel:'noopener noreferrer'},text('editorNewTab'))),entry?.readOnly&&h('p',{role:'status'},text('editorReadOnly')),entry?.expiresAt<=now&&h('p',{role:'status'},text('editorExpired')),!online&&h('p',{role:'status'},text('editorUnavailable')),error&&h('p',{role:'alert'},error),confirm&&h('div',{role:'group'},h('p',null,text('editorCloseHelp')),h('button',{type:'button',onClick:()=>void close(),disabled:busy},text('editorClose')),h('button',{type:'button',onClick:()=>setConfirm(false)},text('deviceCancel'))),h('div',{ref:host,className:'harness-code-host',hidden:info?.tab.visible===false}));
+}
+function Editor(props){return h(EditorSession,{...props,key:props.sessionId});}
 function relativeProject(root,base){
  if(typeof root!=='string'||typeof base!=='string')return null;
  base=base.replace(/\/+$/,'');
@@ -221,12 +294,12 @@ function apply(ctx,config={}){
   function LocalizedTitle(){useLanguage();return h('span',null,definition.title());}
   ctx.effect(()=>ctx.slots.inject('sidebar.right.pane.tab.title',()=>ctx.slots.register({name:'sidebar.right.pane.tab.title',key:definition.id},LocalizedTitle)),'native-workbench: '+definition.kind+' title');
  };
- const files={id:'stratadashseek/workspace-files',kind:'files',keepMounted:true,title:()=>text('files'),guide:[{id:'workspace',commandId:'workspace.files',order:10,title:()=>text('files'),description:()=>text('filesHelp')}]};
+ const files={id:'stratadashseek/workspace-files',kind:'files',keepMounted:true,title:()=>text('editor'),guide:[{id:'workspace',commandId:'workspace.files',order:10,title:()=>text('editor'),description:()=>text('editorHelp')}]};
  const changes={id:'stratadashseek/changes',kind:'harness-changes',keepMounted:true,title:()=>text('changes'),guide:[{id:'changes',order:15,title:()=>text('changes'),description:()=>text('changesHelp')}]};
  const docker={id:'stratadashseek/docker',kind:'harness-docker',keepMounted:true,title:()=>text('docker'),guide:[{id:'docker',order:20,title:()=>text('docker'),description:()=>text('dockerHelp')}]};
  // A compatibility switch also lets integration tests exercise the original
  // Native explorer against the server's effective-root resolver.
- if(config.enhancedFiles!==false){ctx.effect(()=>ctx.sidebarRightTabs.register(files),'native-workbench: files type');register(files,Files);
+ if(config.enhancedFiles!==false){ctx.effect(()=>ctx.sidebarRightTabs.register(files),'native-workbench: code-server type');register(files,Editor);
   // In rc.2 the preview's standard folder button toggles a separate legacy
   // navigator Factory instead of opening kind=files. Route that exact control
   // through the product's pane/session target API to the same corrected browser.
@@ -234,7 +307,7 @@ function apply(ctx,config={}){
   ctx.effect(()=>{const folder=e=>{const element=e.target instanceof Element?e.target:null;if(!element?.closest('[data-files-navigator-toggle]'))return;const target=ctx.sidebarRight.commandTarget(element);if(!target)return;e.preventDefault();e.stopImmediatePropagation();ctx.sidebarRight.openTabFromTarget('files',target);};document.addEventListener('click',folder,true);return()=>document.removeEventListener('click',folder,true);},'native-workbench: preview folder compatibility');
  }
  ctx.effect(()=>ctx.sidebarRightTabs.register(docker),'native-workbench: Docker type');register(docker,Docker);
- ctx.effect(()=>ctx.sidebarRightTabs.register(changes),'native-workbench: Changes type');register(changes,Changes);
+ // The real Code OSS workbench owns both editing and Git changes.
  // Registered guide definitions use the original SDK EntryBox, like Workspace files.
  let sections=[];
  const registerSettings=()=>{for(const dispose of sections)dispose();sections=[['harness-workspaces','workspaces',WorkspaceSettings],['harness-deployment','docker',()=>h(Mounted,{kind:'apps',section:'settings'})],['harness-notifications','notifications',Notifications],['harness-runtime','advanced',RuntimeSettings]].map(([id,label,Component],index)=>ctx.slots.register({name:'settings.section',id,order:210+index*10,label:()=>text(label)},Component));};
@@ -245,7 +318,7 @@ function apply(ctx,config={}){
  function openSettings(section){const shell=ctx.slots.entriesOfSlot('sidebar.settings')[0],actions=shell?.store?.create?.()?.actions;if(typeof actions?.openSection!=='function'||typeof actions?.open!=='function')return false;if(section)actions.openSection(section);else actions.open();return true;}
  let navigation=0;
  const openPanel=async(kind,sessionId)=>{const ticket=++navigation;if(sessionId)ctx.uiWorkspace.openSession(sessionId);const until=Date.now()+5000;while(Date.now()<until&&ticket===navigation){const mounted=ctx.sidebarRight.mounted.getSnapshot();if(mounted&&(!sessionId||mounted===sessionId)){try{ctx.sidebarRight.openTab(kind);return true;}catch(e){if(!String(e.message).includes('no session surface'))throw e;}}await new Promise(resolve=>setTimeout(resolve,50));}return false;};
- ctx.effect(()=>{const api={openSettings,openDocker:sessionId=>openPanel('harness-docker',sessionId),openFiles:sessionId=>openPanel('files',sessionId),openChanges:sessionId=>openPanel('harness-changes',sessionId)};window.HarnessNativeUI=api;try{window.parent.HarnessNativeUI=api;}catch{}return()=>{if(window.HarnessNativeUI===api)delete window.HarnessNativeUI;try{if(window.parent.HarnessNativeUI===api)delete window.parent.HarnessNativeUI;}catch{}};},'native-workbench: settings bridge');
+ ctx.effect(()=>{const api={openSettings,openDocker:sessionId=>openPanel('harness-docker',sessionId),openFiles:sessionId=>openPanel('files',sessionId),openChanges:sessionId=>openPanel('files',sessionId)};window.HarnessNativeUI=api;try{window.parent.HarnessNativeUI=api;}catch{}return()=>{if(window.HarnessNativeUI===api)delete window.HarnessNativeUI;try{if(window.parent.HarnessNativeUI===api)delete window.parent.HarnessNativeUI;}catch{}};},'native-workbench: settings bridge');
  ctx.inject(['contextMenus'],c=>c.effect(()=>c.contextMenus.register({id:'harness.workspace-settings',target:'workspace',order:120,resolve:({workspaceId})=>[{id:'settings',label:text('workspaces'),run:()=>{window.HarnessNativeWorkspaceSelection=workspaceId;window.dispatchEvent(new Event('harness-workspace-settings'));window.HarnessNativeUI?.openSettings('harness-workspaces');}}]}),'native-workbench: workspace menu'));
  ctx.effect(()=>()=>{for(const view of views)view.destroy();views.clear();},'native-workbench: cleanup');
 }

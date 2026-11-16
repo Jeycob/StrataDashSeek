@@ -11,6 +11,15 @@ function fixture(t){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'archived-cle
  const manager={cfg:{stateDir:state,workbenchStateRoot:wb,enabled:true},store:{projects:s.projects,jobs:s.jobs},busy:null,ticking:false,previewRequests:0,setBusy(v){this.busy=v;},engine:{async json(method,route){calls.push([method,route]);if(route==='/info')return{ID:s.daemonId,Containers:s.containers.length};if(route==='/containers/json?all=true')return s.containers.map(c=>({Id:c.Id,Image:c.Image,State:c.State.Status}));if(route==='/images/json?all=true')return s.images.map(i=>({...i,ParentId:i.Parent}));if(route.startsWith('/containers/')&&route.endsWith('/json')){const id=decodeURIComponent(route.slice(12,-5));const c=s.containers.find(c=>c.Id===id);if(c)return structuredClone(c);throw{dockerStatus:404};}if(route.startsWith('/images/')&&route.endsWith('/json')){const id=decodeURIComponent(route.slice(8,-5));const i=s.images.find(i=>i.Id===id);if(i)return i;throw{dockerStatus:404};}throw Error('Unexpected route '+route);},async request(method,route){calls.push([method,route]);if(deleteHook)await deleteHook(route);if(route.startsWith('/containers/'))s.containers=s.containers.filter(c=>!route.includes(c.Id));else s.images=s.images.filter(i=>!route.includes(encodeURIComponent(i.Id)));return{status:204};}}};const cleanup=new ArchivedDockerCleanup(manager);return{dir,s,manager,cleanup,authority,calls,setDeleteHook(fn){deleteHook=fn;}};}
 async function preview(f,automatic=false){return(await f.cleanup.handle({op:'preview',token,automatic})).plan;}
 
+test('unordered Docker census and tag sets preserve a plan while semantic changes still invalidate it',async t=>{
+ const f=fixture(t),foreign='sha256:'+'8'.repeat(64);f.s.images.push({Id:foreign,Parent:'',Size:500,RepoTags:['foreign:one'],Labels:{}});f.s.images[0].RepoTags.push(f.s.images[0].RepoTags[0]+'-extra');
+ f.s.containers.push({Id:'9'.repeat(64),Image:foreign,Name:'/foreign',Config:{Labels:{}},State:{Running:false,Status:'exited'},Mounts:[]});
+ const before=await f.cleanup.capture(token),plan=await preview(f);f.s.images.reverse();f.s.containers.reverse();for(const i of f.s.images)i.RepoTags.reverse();
+ const after=await f.cleanup.capture(token);assert.equal(after.binding,before.binding);assert.deepEqual(after.rows,before.rows);
+ const done=await f.cleanup.handle({op:'apply',token,planId:plan.id,planHash:plan.hash,selections:[{kind:'container',id:cid}]});assert.equal(done.operation.state,'completed');assert.equal(f.calls.filter(c=>c[0]==='DELETE').length,1);
+ const a=graph(f.s).binding;f.s.images.find(i=>i.Id===foreign).Size++;assert.notEqual(graph(f.s).binding,a);
+});
+
 test('consumed plan returns one durable receipt for canonical retries, across new plans, expiry and restart',async t=>{
  const f=fixture(t);f.setDeleteHook(()=>{throw{dockerStatus:409};});
  const p=await preview(f),apply={op:'apply',token,planId:p.id,planHash:p.hash,selections:p.selection};

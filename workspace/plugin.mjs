@@ -16,6 +16,7 @@ import { installRuntimeAdmission } from './runtime-admission-hooks.mjs';
 import { automaticReviewView } from './automatic-review.mjs';
 import { installDockerCleanup } from './docker-cleanup.mjs';
 import { installModelSelection } from './model-selection.mjs';
+import { installEditorSessions } from './editor-session.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -27,6 +28,9 @@ export async function apply(ctx, config = {}) {
   const admission = installRuntimeAdmission(ctx, { expectedCommit: sourceCommit });
   const manager = new WorkspaceManager(ctx, config); await manager.initialize();
   const models = installModelSelection(ctx, manager, { lifecycle: false });
+  // The endpoint stays explicitly unavailable until a verified OS adapter is
+  // installed. A project command or client cannot supply its own launcher.
+  installEditorSessions(ctx, manager);
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
   installDockerCleanup(ctx,manager,appsConfig,callApps);

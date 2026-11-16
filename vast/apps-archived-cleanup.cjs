@@ -50,9 +50,17 @@ function graph({authority,projects,jobs,releases,deployments,saved,containers,im
   if(refs.has(image.Id))r.reasonCodes.push('PUBLISHED');if(rollback.has(image.Id))r.reasonCodes.push('ROLLBACK_REFERENCE');if(inflight.has(image.Id)||pids.some(id=>inflight.has(id)))r.reasonCodes.push('INFLIGHT_REFERENCE');
   if(users.some(c=>!eligibleContainers.has(c.Id)))r.reasonCodes.push('IMAGE_IN_USE');else r.afterContainerIds=users.map(c=>c.Id).sort();
   if(images.some(other=>other.Parent===image.Id))r.reasonCodes.push('IMAGE_DESCENDANT');if(!Number.isSafeInteger(image.Size)||image.Size<0)r.sizeBytes=null;else r.sizeBytes=image.Size;
-  r.tags=(image.RepoTags||[]).filter(t=>t!=='<none>:<none>').slice(0,20).map(text);r.displayName=r.tags[0]||image.Id;r.reasonCodes=[...new Set(r.reasonCodes)].sort();r.eligible=!r.reasonCodes.length;r.automaticEligible=r.eligible&&!r.automaticReasonCodes.length&&users.every(c=>rows.find(r=>r.id===c.Id)?.automaticEligible);rows.push(r);
+  r.tags=(image.RepoTags||[]).filter(t=>t!=='<none>:<none>').sort().slice(0,20).map(text);r.displayName=r.tags[0]||image.Id;r.reasonCodes=[...new Set(r.reasonCodes)].sort();r.eligible=!r.reasonCodes.length;r.automaticEligible=r.eligible&&!r.automaticReasonCodes.length&&users.every(c=>rows.find(r=>r.id===c.Id)?.automaticEligible);rows.push(r);
  }
- rows.sort((a,b)=>key(a).localeCompare(key(b)));const {sessions,archivedIds,activeIds,pinnedIds,workspaceRefs}=authority;return{rows,binding:hash({authority:{sessions,archivedIds,activeIds,pinnedIds,workspaceRefs},projects,jobs,releases,deployments,saved,containers,images,daemonId,unknown})};
+ // Docker census order and RepoTags order are unspecified. Bind set-valued
+ // observations by immutable identity so an unchanged target remains usable;
+ // preserve order in jobs, resume plans, mounts and other semantic arrays.
+ const byIdentity=(items,identity)=>[...items].sort((a,b)=>identity(a).localeCompare(identity(b)));
+ const {sessions,archivedIds,activeIds,pinnedIds,workspaceRefs}=authority;
+ const inventoryImages=byIdentity(images.map(image=>({...image,RepoTags:[...(image.RepoTags||[])].sort()})),image=>image.Id);
+ const inventoryContainers=byIdentity(containers,container=>container.Id);
+ const authorityBinding={sessions:byIdentity(sessions,s=>s.id),archivedIds:[...archivedIds].sort(),activeIds:[...activeIds].sort(),pinnedIds:[...pinnedIds].sort(),workspaceRefs:workspaceRefs?.map(w=>({...w,sessionIds:[...w.sessionIds].sort()})).sort((a,b)=>a.id.localeCompare(b.id))};
+ rows.sort((a,b)=>key(a).localeCompare(key(b)));return{rows,binding:hash({authority:authorityBinding,projects,jobs,releases:byIdentity(releases,r=>String(r.projectId)+':'+String(r.id)),deployments:byIdentity(deployments,d=>String(d.projectId??d.project_id)+':'+String(d.releaseId??d.release_id)),saved,containers:inventoryContainers,images:inventoryImages,daemonId,unknown:[...unknown].sort()})};
 }
 class ArchivedDockerCleanup{
  constructor(manager){this.manager=manager;this.file=path.join(manager.cfg.stateDir,'archived-docker-cleanup.json');this.data=fs.existsSync(this.file)?read(this.file):{version:1,enabled:true,plans:{},operation:null};this.data.receipts??={};if(this.data.version!==1||typeof this.data.enabled!=='boolean'||!this.data.plans||typeof this.data.receipts!=='object'||Array.isArray(this.data.receipts))throw fail('CLEANUP_UNAVAILABLE');this.save();}

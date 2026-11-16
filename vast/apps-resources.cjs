@@ -44,14 +44,19 @@ async function locked(cleanup, action) {
 }
 async function snapshot(cleanup, token, paging = false) {
   const data = state(cleanup), cached = data.snapshots[data.latest];
-  if (cached && (paging || Date.now() - cached.observedAt < 10000)) return { ...cached, availability: available(cleanup) };
+  if (cached && (paging || Date.now() - cached.observedAt < 10000)) return { ...cached, availability: cached.availability === 'ready' ? available(cleanup) : cached.availability };
   const captured = await cleanup.capture(token);
   if (captured.availability === 'ready') {
     const value = { ...captured, observedAt: Date.now(), inventoryId: hash([captured.binding, Date.now(), crypto.randomBytes(8).toString('hex')]) };
     data.snapshots = { [value.inventoryId]: value }; data.latest = value.inventoryId; cleanup.save(); return value;
   }
-  const old = data.snapshots[data.latest];
-  return { ...(old ?? { rows: [], containers: [], inventoryId: null, observedAt: null }), availability: available(cleanup), binding: null, reasonCode: captured.reasonCode };
+  const old = data.snapshots[data.latest], current = available(cleanup);
+  const failed = { ...(old ?? { rows: [], containers: [], inventoryId: null, observedAt: null }), availability: current === 'ready' ? 'unavailable' : current, binding: null, reasonCode: captured.reasonCode };
+  // A reachable/configured daemon is not evidence of a complete census. Keep
+  // the prior observation explicitly stale after a failed refresh, including
+  // subsequent requests for its remaining pages.
+  if (old) { data.snapshots[data.latest] = failed; cleanup.save(); }
+  return failed;
 }
 function requireTarget(input) { if (!['container', 'image'].includes(input.kind) || !(input.kind === 'container' ? CID : IMAGE).test(input.id || '') || !['stop', 'delete', 'export'].includes(input.action) || !TOKEN.test(input.operationId || '')) throw fail('RESOURCE_REQUEST_INVALID', 400); }
 function initMethods(Controller) {

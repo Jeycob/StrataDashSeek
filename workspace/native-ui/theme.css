@@ -1,4 +1,5 @@
 /* Native-only surfaces: inherit the active Harness palette, font and scale. */
+.harness-code-editor p{margin:0}.harness-code-editor :where(button,select){border:1px solid var(--dsw-alias-border-l3,#ccd5df);border-radius:6px;padding:6px 9px;background:var(--dsw-alias-bg-layer-1,#f8f9fa)}.harness-code-editor button{cursor:pointer}.harness-code-editor a{color:var(--dsw-alias-state-business-primary,#235dd7)}
 .harness-native-surface {
   box-sizing: border-box;
   min-width: 0;
@@ -93,3 +94,4 @@
   .harness-native-changes header { flex-wrap: wrap; gap: 8px; }
   .harness-native-changes .hc-diff-table .hc-code { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
+.harness-code-editor{display:flex;flex-direction:column;height:100%;min-height:480px;padding:12px;box-sizing:border-box;gap:8px}.harness-code-editor header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.harness-code-editor h3{margin:0 auto 0 0}.harness-code-host{flex:1;min-height:380px}.harness-code-frame{border:1px solid var(--dsw-alias-border-l3,#ccd5df);border-radius:6px;background:#1f1f1f}.harness-conversation-model{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px}.harness-conversation-model label{display:flex;gap:8px;align-items:center}.harness-conversation-model select{max-width:250px;min-height:32px}.harness-conversation-model small{display:block;max-width:100%;overflow-wrap:anywhere}@media(max-width:680px){.harness-code-editor{padding:8px}.harness-conversation-model label{display:grid;width:100%}.harness-conversation-model select{max-width:100%;width:100%}}
