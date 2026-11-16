@@ -26,7 +26,7 @@ async function fixture(t,handlers={}){
  const pipeline=new S.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>S.executeToolBatch(input,pipeline,()=>1)});
  function agent(id,{legacy=false,record=true,existing=false,createdAt=2000,owner}={}){
   const a={id,owner,session:{id,header:{createdAt}}},scope=S.createScope(ctx,a);a.ctx=scope.ctx;scopes.push(scope);
-  if(record&&!owner)manager.data.sessions[id]={root:'/managed/'+id,legacy};if(existing)manager.existing.add(id);return a;
+  if(record&&!owner)manager.data.sessions[id]={root:'/managed/'+id,legacy,independentRepository:true};if(existing)manager.existing.add(id);return a;
  }
  const admit=a=>ctx.tools.resolve({agent:a,modelSelection:{provider:'fixture',model:'fixture'},signal:new AbortController().signal});
  async function call(a,name,options={}){const batch=await ctx.tools.execute({agent:a,signal:options.signal??new AbortController().signal,...(options.toolSet?{toolSet:options.toolSet}:{}),calls:[{id:'file-call',name,arguments:JSON.stringify(options.args??args[name])}]});return batch.results[0].result;}
@@ -69,9 +69,15 @@ test('abort before dispatch and after mutation start preserve SDK quiescence sem
  const controller=new AbortController();let settled=false;const pending=f.call(a,'write',{signal:controller.signal}).then(r=>{settled=true;return r;});
  await started;controller.abort();await new Promise(r=>setImmediate(r));assert.equal(settled,false);release();const after=await pending;assert.equal(after.error.info.code,f.TOOL_ABORTED);assert.equal(count,1);
 });
-test('new unprovisioned sessions block and legacy scopes remain untouched',async t=>{
+test('old, legacy and unprovisioned sessions all fail closed, including pre-install snapshots',async t=>{
  const f=await fixture(t),future=f.agent('future',{record:false}),legacy=f.agent('legacy',{legacy:true});
- const original=f.ctx.tools.get('read');f.adapter.install(future);f.adapter.install(legacy);assert.equal(f.ctx.tools.get('read',legacy),original);
+ const original=f.ctx.tools.get('read'),old=f.agent('old',{record:false,existing:true,createdAt:1}),continued=f.agent('continued');f.manager.data.sessions.continued.independentRepository=false;
+ const snapshots=await Promise.all([legacy,old,continued].map(a=>f.admit(a)));t.after(()=>snapshots.forEach(snapshot=>snapshot.dispose()));
+ for(const a of [future,legacy,old,continued])f.adapter.install(a);assert.notEqual(f.ctx.tools.get('read',legacy),original);
+ for(const [index,a] of [legacy,old,continued].entries()){
+  const stale=await f.call(a,'read',{toolSet:snapshots[index]});assert.equal(stale.isError,true);assert.match(JSON.stringify(stale),/Unisolated/);
+  for(const name of f.projectFileToolNames){const denied=await f.call(a,name);assert.equal(denied.isError,true);assert.match(JSON.stringify(denied),/NO_MANAGED_PROJECT/,name);}
+ }
  const result=await f.call(future,'read');assert.equal(result.isError,true);assert.match(JSON.stringify(result),/NO_MANAGED_PROJECT/);
  f.adapter.install(future);f.adapter.dispose();f.adapter.dispose();assert.equal(f.ctx.tools.get('read',future),original);
 });

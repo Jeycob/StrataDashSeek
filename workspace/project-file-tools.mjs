@@ -18,17 +18,12 @@ export function createProjectFileTools(ctx, manager, handlers = {}) {
   const implementations = new Map(projectFileToolNames.filter(name => Object.hasOwn(handlers, name) && typeof handlers[name] === 'function').map(name => [name, handlers[name]]));
   const registrations = new Map(), definitions = new WeakSet();
   function candidate(agent) {
-    const owner = manager.ownerAgent(agent);
-    if (!owner) return false;
-    const record = manager.data.sessions[owner.id];
-    if (record) return !record.legacy;
-    const created = typeof owner.session.header.createdAt === 'number' ? owner.session.header.createdAt : Date.parse(owner.session.header.createdAt);
-    return !manager.existing.has(owner.id) && Number.isFinite(created) && created >= manager.data.installedAt;
+    return Boolean(agent && manager.ownerAgent(agent));
   }
   function handles(exec) {
     return names.has(exec.name) && Boolean(exec.agent) && definitions.has(ctx.tools.get(exec.name, exec.agent, exec.toolSet));
   }
-  const removeGuard = ctx.tools.guard(exec => names.has(exec.name) && candidate(exec.agent) && !handles(exec)
+  const removeGuard = ctx.tools.guard(exec => names.has(exec.name) && Boolean(exec.agent) && !handles(exec)
     ? { reason: 'Unisolated project file tool refused; refresh the scoped tool registration.' } : undefined);
   function install(agent) {
     if (!candidate(agent)) return;
@@ -50,7 +45,7 @@ export function createProjectFileTools(ctx, manager, handlers = {}) {
         async execute(args, execution) {
           execution.signal.throwIfAborted();
           const owner = manager.ownerAgent(execution.agent), project = manager.data.sessions[owner?.id];
-          if (!project || project.legacy || !candidate(execution.agent)) throw failure('NO_MANAGED_PROJECT');
+          if (!project || project.legacy || project.independentRepository !== true || project.nativeWorktree || !candidate(execution.agent)) throw failure('NO_MANAGED_PROJECT');
           if (args.sandbox_permissions !== undefined || args.justification !== undefined) throw failure('PROJECT_FILE_ESCALATION_REFUSED');
           const handler = implementations.get(name);
           if (!handler) throw failure('ISOLATED_FILE_OPERATION_UNAVAILABLE');
