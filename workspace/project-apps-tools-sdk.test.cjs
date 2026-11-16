@@ -7,7 +7,7 @@ function sdk(){return modules??=(async()=>{
  return{...cordis,SystemPrompt:prompt.default,Tools:tools.default,...pipeline,...scope,LocalJobs:jobs.default,applyJobTools:jobTools.apply,...adapter};
 })();}
 async function eventually(check){for(let i=0;i<200;i++){if(check())return;await new Promise(r=>setTimeout(r,5));}assert.fail('bounded wait');}
-async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=false,enqueueUncertain=false,recoverEnqueue=false}={}){
+async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=false,enqueueUncertain=false,recoverEnqueue=false,settlementFailureOnce=false}={}){
  const S=await sdk(),ctx=new S.Context();new S.SystemPrompt(ctx,{});new S.Tools(ctx);
  const agents=new Map(),scopes=[],calls=[],epochs=[],receipts=new Map();let inEpoch=false,polls=0,retained=0;
  const workspaceRoot=path.resolve('synthetic-apps-workspaces'),root=path.join(workspaceRoot,'owner'),projectId=crypto.createHash('sha256').update(root).digest('hex').slice(0,16),appsId='a'.repeat(16);
@@ -22,7 +22,7 @@ async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=fals
   if(route==='/project-action'){assert.match(data.requestId,/^[a-f0-9]{32}$/);assert(receipts.has(data.requestId),'receipt durable before POST');if(enqueueUncertain)throw Error('synthetic uncertain response');return{id:appsId,projectId,status:'queued',environment:{SECRET:'drop'}};}
   const u=new URL(route,'http://local');assert.equal(u.searchParams.get('_contextProjectId'),projectId);
   if(u.pathname==='/state')return{enabled:true,available:true,busy:hold?appsId:null,vault:{SECRET:'drop'},projects:[{id:projectId,name:'own',applicationUrl:'https://preview.example/?appPort=18080',environment:{SECRET:'drop'}},{id:'b'.repeat(16),name:'FOREIGN_PROJECT_SECRET'}],jobs:enqueueUncertain?[]:[{id:appsId,projectId,action:'verify',status:'passed'},{id:'c'.repeat(16),projectId:'b'.repeat(16),action:'verify',status:'passed',error:'FOREIGN_JOB_SECRET'}]};
-  if(u.pathname==='/job-status'){assert.equal(u.searchParams.get('id'),appsId);polls++;const status=hold||polls<2?'running':passed?'passed':'failed';return{version:1,job:{id:appsId,action:'verify',status,terminal:!['running'].includes(status),passed:status==='passed',workSettled:['passed','failed'].includes(status),PRIVATE_SECRET:'drop'}};}
+  if(u.pathname==='/job-status'){assert.equal(u.searchParams.get('id'),appsId);polls++;if(settlementFailureOnce){settlementFailureOnce=false;throw Error('synthetic network interruption');}const status=hold||polls<2?'running':passed?'passed':'failed';return{version:1,job:{id:appsId,action:'verify',status,terminal:!['running'].includes(status),passed:status==='passed',workSettled:['passed','failed'].includes(status),PRIVATE_SECRET:'drop'}};}
   if(u.pathname==='/project-request')return{version:1,requestId:u.searchParams.get('requestId'),state:recoverEnqueue?'recorded':'unknown',...(recoverEnqueue?{job:{id:appsId,action:'verify',status:'running'}}:{})};
   if(u.pathname==='/job-log'){assert.equal(u.searchParams.get('id'),appsId);return{text:'synthetic build error\n'.repeat(2000)};}
   assert.fail('unexpected route '+route);
@@ -107,4 +107,9 @@ test('restart guard skips currently owned retained receipts so normal heavy queu
  const f=await fixture(t,{hold:true}),a=f.agent('owner'),result=await f.call(a,{operation:'verify_deploy'}),id=result.value.sdkJobId;
  await eventually(()=>f.calls.some(c=>c.route.startsWith('/job-status')));const report=await f.module.reconcileStored();assert.equal(report.reconciliationRequired,false);assert.equal(report.pending[0].liveOwned,true);assert.equal(f.retained(),1);
  f.setHold(false);await eventually(()=>f.ctx.jobs.get(id,a.id).status==='completed');assert.equal(f.retained(),0);
+});
+test('ordinary status reconciles a failed monitor and releases only known settled original job',async t=>{
+ const f=await fixture(t,{settlementFailureOnce:true}),a=f.agent('owner'),result=await f.call(a,{operation:'verify_deploy'}),id=result.value.sdkJobId;
+ await eventually(()=>f.ctx.jobs.get(id,a.id).status==='failed');assert.equal(f.retained(),1);assert.equal(f.receipts.size,1);
+ const status=await f.call(a,{operation:'status'});assert.equal(status.isError,false,JSON.stringify(status));assert.equal(f.retained(),0);assert.equal(f.receipts.size,0);assert.equal(status.value.admissionsRequiringReconciliation.length,0);assert.equal(f.calls.filter(c=>c.route==='/project-action').length,1);
 });

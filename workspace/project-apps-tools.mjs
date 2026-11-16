@@ -89,6 +89,20 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
   const view=remaining.map(row=>({...row,liveOwned:currentLiveIds.has(row.requestId)}));
   return{version:1,checked,pending:view,reconciliationRequired:view.some(row=>!row.liveOwned)};
  }
+ async function reconcilePending(execution){
+  const controller=new AbortController(),abort=()=>controller.abort();
+  if(execution.signal.aborted)controller.abort();else execution.signal.addEventListener('abort',abort,{once:true});
+  const timer=setTimeout(abort,8000);timer.unref?.();let checked=0;
+  const liveMonitors=new Set([...active].map(entry=>entry.id)),ownerId=owner(execution).id;
+  try{
+   for(const[id,p]of pending){
+    if(p.ownerId!==ownerId||liveMonitors.has(id))continue;
+    if(checked>=32||controller.signal.aborted)break;checked++;
+    try{const current=await settlement(p,controller.signal);if(current.terminal&&current.workSettled){p.lifetime.terminal(current);pending.delete(id);await receiptStore.remove(p.requestId);}}catch{/* Unknown/unavailable remains held; status never retries enqueue. */}
+   }
+  }finally{clearTimeout(timer);execution.signal.removeEventListener('abort',abort);}
+  return{checked,pending:[...pending.values()].filter(p=>p.ownerId===ownerId).map(p=>({requestId:p.requestId,...p.lifetime.snapshot()}))};
+ }
  function jobs(){const value=typeof ctx.get==='function'?ctx.get('jobs'):ctx.jobs;if(!value||typeof value.start!=='function')throw fail('PROJECT_APPS_SDK_JOBS_UNAVAILABLE');return value;}
  async function deploy(execution){
   // SDK admission occurs BEFORE any Apps mutation. The existing Apps controller
@@ -149,7 +163,7 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
  async function execute(args,execution){
   execution.signal.throwIfAborted();owner(execution);
   if(disposed||closing||!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(k=>!['operation','jobId'].includes(k))||!['register','verify_deploy','status','job_status','job_log'].includes(args.operation)||(['job_status','job_log'].includes(args.operation)?!HEX.test(args.jobId??''):args.jobId!==undefined))throw fail('PROJECT_APPS_ARGUMENT_INVALID');
-  if(args.operation==='status')return state(execution,execution.signal);
+  if(args.operation==='status'){await reconcilePending(execution);execution.signal.throwIfAborted();return state(execution,execution.signal);}
   if(args.operation==='job_status')return status(args.jobId,execution,execution.signal);
   if(args.operation==='job_log'){const {response,projectId}=await rpc('/job-log',{id:args.jobId},execution,execution.signal);if(typeof response?.text!=='string')throw fail('PROJECT_APPS_LOG_INVALID');return{projectId,appsJobId:args.jobId,text:response.text.slice(-16384),truncated:response.text.length>16384};}
   if(args.operation==='register'){const result=await rpc('/register',null,execution,execution.signal,{write:true});if(result.response?.id!==result.projectId)throw fail('PROJECT_APPS_REGISTRATION_INVALID');return{projectId:result.projectId,project:projectView(result.response)};}
@@ -157,5 +171,5 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
  }
  const definition={name:'project_apps',description:'Manage the current isolated project application through the authenticated Apps controller, without guest credentials or arbitrary CLI. Prepare .harness-app.json (version:1, name, port1024..65535, testCommand, healthPath and the existing Dockerfile/Compose declaration) and real health/browser checks; register reads that manifest. verify_deploy registers and starts the existing verify-and-deploy workflow as an owned SDK monitoring job. Inspect progress using job_output/job_list; status returns this project only and its real applicationUrl. job_status/job_log take an owned Apps job ID; job_log returns bounded existing controller-redacted diagnostics. Apps cannot be canceled here: SDK kill/timeout retains admission until exact Apps settlement, or requires reconciliation after uncertainty. Status contains only own rows among the last 30 global jobs; absence never proves enqueue failed. No global power, settings, delete, export, rollback or arbitrary target operations.',parameters:projectAppsParameters,isConcurrencySafe:()=>false,output:{schema:{type:'object'},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]},execute};
  const disposeRegistration=ctx.tools.register(definition,{when:({agent})=>{const a=manager.ownerAgent(agent),p=manager.data.sessions[a?.id];return Boolean(p&&!p.legacy);}});
- return{execute,reconcileStored,async beforeHeavy(){const report=await reconcileStored();if(report.reconciliationRequired)throw fail('PROJECT_APPS_RECONCILIATION_REQUIRED');},pendingAdmissions:()=>[...pending.values()].map(p=>({ownerId:p.ownerId,projectId:p.projectId,requestId:p.requestId,...p.lifetime.snapshot()})),async reconcilePending(execution){for(const[id,p]of pending){if(p.ownerId!==owner(execution).id)continue;const current=await settlement(p,execution.signal);if(current.terminal&&current.workSettled){p.lifetime.terminal(current);pending.delete(id);await receiptStore.remove(p.requestId);}}},async dispose(){if(disposed)return;closing=true;disposeRegistration();for(const entry of active){try{entry.registry.kill(entry.id,entry.owner,'Apps monitor disposed');}catch{entry.cancel();}}await Promise.all([...active].map(entry=>entry.done));disposed=true;}};
+ return{execute,reconcileStored,reconcilePending,async beforeHeavy(){const report=await reconcileStored();if(report.reconciliationRequired)throw fail('PROJECT_APPS_RECONCILIATION_REQUIRED');},pendingAdmissions:()=>[...pending.values()].map(p=>({ownerId:p.ownerId,projectId:p.projectId,requestId:p.requestId,...p.lifetime.snapshot()})),async dispose(){if(disposed)return;closing=true;disposeRegistration();for(const entry of active){try{entry.registry.kill(entry.id,entry.owner,'Apps monitor disposed');}catch{entry.cancel();}}await Promise.all([...active].map(entry=>entry.done));disposed=true;}};
 }
