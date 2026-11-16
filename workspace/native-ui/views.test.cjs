@@ -83,6 +83,22 @@ test('Apps reference drafts and request lifetimes survive real Chromium races in
   const editor=id=>page.locator('[data-apps-credentials="'+id+'"]');
   const changeJobs=()=>{apps.jobs=[{id:'fixture-job-'+stateCalls,action:'build',status:'running',stage:'state-'+stateCalls}];};
   const releaseStates=()=>{holdState=false;for(const release of heldStates.splice(0))release();};
+  const destroyAndObserveLateWrites=async()=>{
+   const cleanup=await page.evaluate(()=>{
+    window.detached=view.element;window.detachedMutations=0;window.detachedRecords=[];
+    window.detachedObserver=new MutationObserver(rows=>{detachedMutations+=rows.length;detachedRecords.push(...rows.map(row=>({type:row.type,target:row.target.className,removed:[...row.removedNodes].map(node=>node.className)})))});
+    detachedObserver.observe(detached,{childList:true,subtree:true,characterData:true});
+    const resourcePanels=detached.querySelectorAll('.apps-resource-inventory').length;
+    view.destroy();
+    // Drain only records made synchronously by destroy, in this same JS stack.
+    // Abort/HTTP promise continuations have not run yet and stay observed.
+    const records=detachedObserver.takeRecords().map(row=>({type:row.type,added:row.addedNodes.length,removed:[...row.removedNodes].map(node=>node.className)}));
+    return{resourcePanels,resourcesAfter:detached.querySelectorAll('.apps-resource-inventory').length,records};
+   });
+   assert.equal(cleanup.resourcesAfter,0,'destroy synchronously removes its owned resource inventory');
+   assert.equal(cleanup.records.length,cleanup.resourcePanels,'only the owned resource panels mutate during synchronous teardown');
+   for(const record of cleanup.records)assert.deepEqual(record,{type:'childList',added:0,removed:['apps-resource-inventory']});
+  };
   try{
    await page.goto('http://127.0.0.1:'+server.address().port);
    await page.evaluate(()=>{window.view=HarnessApps.mount(document.querySelector('#host'),{scope:'global',visible:()=>true});});
@@ -131,18 +147,18 @@ test('Apps reference drafts and request lifetimes survive real Chromium races in
    assert.equal((await context.cookies()).length,0);
    await page.evaluate(()=>savedObserver.disconnect());
    // Real fetch cancellation closes its HTTP connection on destroy.
-   holdState=true;await page.evaluate(()=>{window.detached=view.element;window.detachedMutations=0;window.detachedObserver=new MutationObserver(rows=>detachedMutations+=rows.length);detachedObserver.observe(detached,{childList:true,subtree:true,characterData:true});void view.refresh();});
+   holdState=true;await page.evaluate(()=>{void view.refresh();});
    await wait(()=>heldStates.length>0,'state request held before destroy');
-   const abortedBefore=abortedResponses;await page.evaluate(()=>view.destroy());
+   const abortedBefore=abortedResponses;await destroyAndObserveLateWrites();
    await page.waitForFunction(()=>fetchRecords.some(r=>r.url.includes('/state?')&&r.aborted));await wait(()=>abortedResponses>abortedBefore,'browser fetch abort closes held response');
    releaseStates();await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-   assert.equal(await page.evaluate(()=>detachedMutations),0);await page.evaluate(()=>detachedObserver.disconnect());
+   assert.equal(await page.evaluate(()=>detachedMutations),0,JSON.stringify(await page.evaluate(()=>detachedRecords)));await page.evaluate(()=>detachedObserver.disconnect());
    // Even a transport deliberately ignoring cancellation cannot publish late data/errors.
    for(const responseStatus of [200,503]){
     await page.evaluate(()=>{window.ignoreLogAbort=true;window.view=HarnessApps.mount(document.querySelector('#host'),{scope:'global',visible:()=>true});});
     await page.locator('#host').getByRole('button',{name:'Logs',exact:true}).waitFor();holdLog=true;
     await page.locator('#host').getByRole('button',{name:'Logs',exact:true}).click();await wait(()=>heldLogs.length>0,'late log request must start');
-    await page.evaluate(()=>{window.detached=view.element;window.detachedMutations=0;window.detachedObserver=new MutationObserver(rows=>detachedMutations+=rows.length);detachedObserver.observe(detached,{childList:true,subtree:true,characterData:true});view.destroy();});
+    await destroyAndObserveLateWrites();
     await page.waitForFunction(()=>fetchRecords.filter(r=>r.url.includes('container-log')).at(-1)?.aborted);
     const release=heldLogs.shift();holdLog=false;release(responseStatus);
     await page.waitForFunction(()=>fetchRecords.filter(r=>r.url.includes('container-log')).at(-1)?.bodyRead);
