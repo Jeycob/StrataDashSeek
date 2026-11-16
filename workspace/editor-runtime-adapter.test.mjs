@@ -2,20 +2,25 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import {createProjectEditorAdapter,validateEditorProof} from './editor-runtime-adapter.mjs';
-function fixture(){
+function memoryReceipts(){
+ const rows=new Map(),live=new Map();
+ return{async list(){return [...rows.values()].map(r=>({...r}));},async save(row){rows.set(row.generation,{...row});},async remove(generation){rows.delete(generation);},claim(generation,{reconciling=false}={}){if(live.has(generation))throw Object.assign(Error('ALREADY_LIVE'),{code:'PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED'});live.set(generation,{reconciling});return()=>live.delete(generation);},isLive:generation=>live.has(generation)&&!live.get(generation).reconciling,simulateRestart(){live.clear();}};
+}
+function fixture({receiptStore=memoryReceipts()}={}){
  let clock=100000,failStop=false,failTouch=false,abortAfterEnsure,ensureFault,stopFault;
  const calls=[],bridges=[],proofs=new Map(),input={sessionId:'project-A',projectRoot:'/projects/A',readOnly:false},grants=[];
  const manager={async withProjectRuntimeAuthority(context,action){grants.push(context);return action('private-authority');}};
- const adapter=createProjectEditorAdapter(manager,{appsConfig:{projectRuntime:{enabled:true}},callApps:async(route,data)=>{
+ const adapter=createProjectEditorAdapter(manager,{appsConfig:{projectRuntime:{enabled:true}},receiptStore,callApps:async(route,data)=>{
   assert.equal(route,'/project-runtime');calls.push(data);
   if(data.op==='stop'){if(failStop)throw Error('OFFLINE');return{version:1,state:'stopped',sessionId:data.sessionId,generation:data.generation,operationId:'c'.repeat(32),...stopFault};}
   if(data.op==='touch'){if(failTouch)throw Error('POLICY_DENIED');const proof=proofs.get(data.generation);assert.equal(data.stopToken,proof.stopToken);return{...proof,expiresAt:Math.min(clock+300000,proof.hardDeadline)};}
   const scopeId=crypto.createHash('sha256').update(input.sessionId+'\0'+input.projectRoot).digest('hex').slice(0,32);
   assert.match(data.stopToken,/^[A-Za-z0-9_-]{43}$/);
+  assert.equal((await receiptStore.list()).find(r=>r.generation===data.generation)?.stopToken,data.stopToken,'durable receipt precedes admission');
   const proof={version:1,state:'ready',...input,generation:data.generation,scopeId,isolation:{enforced:true,...input},transport:{host:'127.0.0.1',guestAddress:'10.0.2.15',hostPort:19180,guestPort:19180,bootPid:42,mtls:true,serverName:scopeId+'.'+data.generation+'.editor.homeai.invalid'},containerIds:{editor:'a'.repeat(64),relay:'b'.repeat(64)},operationId:'c'.repeat(32),stopToken:data.stopToken,expiresAt:clock+300000,hardDeadline:clock+1800000};
   proofs.set(data.generation,proof);abortAfterEnsure?.abort(Error('CANCELLED'));if(ensureFault==='lost')throw Error('RESPONSE_LOST');return ensureFault==='swapped'?{...proof,stopToken:'x'.repeat(43)}:proof;
  },socketDirectory:'/private',transportIdentity:async({scopeId,generation})=>({serverName:scopeId+'.'+generation+'.editor.homeai.invalid'}),bridgeFactory:async()=>{const bridge={socketPath:'/private/fixture.sock',closed:false,async close(){this.closed=true;}};bridges.push(bridge);return bridge;},now:()=>clock});
- return{adapter,input,calls,bridges,proofs,grants,advance:ms=>clock+=ms,setFailStop:value=>failStop=value,setFailTouch:value=>failTouch=value,abortWith:controller=>abortAfterEnsure=controller,setEnsureFault:value=>ensureFault=value,setStopFault:value=>stopFault=value};
+ return{adapter,input,calls,bridges,proofs,grants,receiptStore,advance:ms=>clock+=ms,setFailStop:value=>failStop=value,setFailTouch:value=>failTouch=value,abortWith:controller=>abortAfterEnsure=controller,setEnsureFault:value=>ensureFault=value,setStopFault:value=>stopFault=value};
 }
 test('reopening reuses the bridge with fresh touch authority and never repeats admission',async()=>{
  const f=fixture(),first=await f.adapter.ensureEditor(f.input),again=await f.adapter.ensureEditor(f.input);
@@ -71,4 +76,27 @@ test('malformed or wrong-operation stop acknowledgement retains ownership',async
  }
  assert.equal(f.calls.filter(c=>c.op==='ensure').length,1);
  f.setStopFault(null);await f.adapter.dispose();assert.equal(f.calls.at(-1).op,'stop');
+});
+test('restart reconciles the persisted generation before admitting a new editor',async()=>{
+ const receipts=memoryReceipts(),old=fixture({receiptStore:receipts});old.setEnsureFault('lost');old.setFailStop(true);
+ await assert.rejects(old.adapter.ensureEditor(old.input),/RESPONSE_LOST/);
+ const abandoned=(await receipts.list())[0];assert.ok(receipts.isLive(abandoned.generation));
+ receipts.simulateRestart();const next=fixture({receiptStore:receipts});
+ const ready=await next.adapter.ensureEditor(next.input);
+ assert.deepEqual(next.calls.map(c=>c.op),['stop','ensure']);
+ assert.equal(next.calls[0].generation,abandoned.generation);assert.equal(next.calls[0].stopToken,abandoned.stopToken);
+ assert.notEqual(ready.generation,abandoned.generation);assert.equal((await receipts.list()).length,1);
+ await next.adapter.dispose();assert.deepEqual(await receipts.list(),[]);
+});
+test('unconfirmed restart cleanup blocks new admission and retains the private receipt',async()=>{
+ const receipts=memoryReceipts();await receipts.save({kind:'editor',sessionId:'project-A',accessSessionId:'project-A',generation:'a'.repeat(32),stopToken:'z'.repeat(43),startedAt:1,operationId:null,jobId:null});
+ const f=fixture({receiptStore:receipts});f.setFailStop(true);
+ await assert.rejects(f.adapter.ensureEditor(f.input),{code:'EDITOR_RECONCILIATION_REQUIRED'});
+ assert.equal(f.calls.some(c=>c.op==='ensure'),false);assert.equal((await receipts.list()).length,1);
+ f.setFailStop(false);await f.adapter.ensureEditor(f.input);await f.adapter.dispose();
+});
+test('live editor claims survive unrelated heavy-admission reconciliation',async()=>{
+ const f=fixture(),ready=await f.adapter.ensureEditor(f.input);
+ await f.adapter.beforeHeavy();assert.deepEqual(f.calls.map(c=>c.op),['ensure']);
+ assert.ok(f.receiptStore.isLive(ready.generation));await f.adapter.dispose();
 });

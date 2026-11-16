@@ -22,6 +22,11 @@ import { installDockerCleanup } from './docker-cleanup.mjs';
 import { installModelSelection } from './model-selection.mjs';
 import { installEditorSessions } from './editor-session.mjs';
 import { createProjectEditorAdapter } from './editor-runtime-adapter.mjs';
+import { createProjectAppsTools } from './project-apps-tools.mjs';
+import { createProjectAppsReceiptStore } from './project-apps-receipts.mjs';
+import { createProjectRuntimeReceiptStore } from './project-runtime-receipts.mjs';
+import { retainHeavyToolLease } from '../efficiency/heavy-tool-lease.mjs';
+import { registerWorkspaceHeavyAdmission } from '../efficiency/heavy-admission.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 const { EditorOrigins } = createRequire(import.meta.url)('./editor-origins.cjs');
 const { EditorTransportStore } = createRequire(import.meta.url)('./editor-transport.cjs');
@@ -37,6 +42,9 @@ export async function apply(ctx, config = {}) {
   const models = installModelSelection(ctx, manager, { lifecycle: false });
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
+  const runtimeReceipts = createProjectRuntimeReceiptStore(manager.root);
+  const projectApps = createProjectAppsTools(ctx, manager, { appsConfig, callApps, retainHeavyToolLease, receiptStore: createProjectAppsReceiptStore(manager.root) });
+  ctx.effect(() => () => projectApps.dispose());
   installDockerCleanup(ctx,manager,appsConfig,callApps);
   const editorBrowser = appsConfig?.projectRuntime?.editorBrowser;
   let editorOptions;
@@ -45,7 +53,7 @@ export async function apply(ctx, config = {}) {
     editorOptions = {
       ownerOrigin: editorBrowser.ownerOrigin,
       origins: new EditorOrigins(path.join(manager.root, 'editor-origins.json'), editorBrowser),
-      adapter: createProjectEditorAdapter(manager, { appsConfig, callApps, socketDirectory: path.join(manager.root, 'editor-sockets'), transportIdentity: ({scopeId,generation}) => transport.clientIdentity(scopeId,generation) }),
+      adapter: createProjectEditorAdapter(manager, { appsConfig, callApps, receiptStore: runtimeReceipts, socketDirectory: path.join(manager.root, 'editor-sockets'), transportIdentity: ({scopeId,generation}) => transport.clientIdentity(scopeId,generation) }),
     };
   }
   installEditorSessions(ctx, manager, editorOptions);
@@ -68,7 +76,13 @@ export async function apply(ctx, config = {}) {
   const environmentReport = config.environmentReport ?? '/data/harness/state/development.json';
   const preflight = doctor({ output: environmentReport, directory: path.join(path.dirname(environmentReport), 'development') }).catch(error => ({ browser: { ok: false, error: error.message }, dotnet: { available: false } }));
   manager.environmentReady = preflight;
-  const runProjectCommand = createGuestProjectCommandRunner(ctx, manager, { appsConfig, callApps });
+  const runProjectCommand = createGuestProjectCommandRunner(ctx, manager, { appsConfig, callApps, receiptStore: runtimeReceipts });
+  const removeHeavyAdmission = registerWorkspaceHeavyAdmission(ctx, async execution => {
+    execution.signal?.throwIfAborted();
+    await projectApps.beforeHeavy();
+    await runProjectCommand.beforeHeavy(execution.signal);
+  });
+  ctx.effect(() => () => removeHeavyAdmission());
   installProjectVerification(ctx, manager, runProjectCommand);
   registerProjectTool(ctx, manager, runProjectCommand);
   const managedShell = createManagedShell(ctx, manager, runProjectCommand);
