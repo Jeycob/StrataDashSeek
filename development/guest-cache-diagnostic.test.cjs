@@ -8,7 +8,7 @@ test('cache diagnostic bounds independent RAM copy and never falls back to netwo
   assert.equal(script.match(/apk --cache-dir[^\n]+--no-network add docker/g).length, 2);
   assert.match(script, /set -- \/tmp\/census-cache\/\*\.apk/);
   assert.match(script, /timeout 45 apk --no-network --no-cache add "\$@"/);
-  assert.doesNotMatch(script, /--allow-untrusted|apk update|https?:|curl|wget|apk\.log"?\s*$/m);
+  assert.doesNotMatch(script, /--allow-untrusted|apk update|https?:|curl|wget|(?:cat|tail|head)\s+[^\n]*census-apk\.log/m);
   assert.match(script, /CENSUS_APK_REASON=OTHER_REDACTED/); assert.throws(() => guestScript('invalid'));
 });
 test('both daemon probes use separate empty RAM roots and do not create, start or delete application objects', () => {
