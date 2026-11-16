@@ -10,6 +10,7 @@ const validToken=v=>typeof v==='string'&&/^[A-Za-z0-9_-]{43}$/.test(v);
 const hop=new Set(['connection','keep-alive','proxy-authenticate','proxy-authorization','te','trailer','transfer-encoding','upgrade']);
 const deniedPath=p=>/^\/(?:proxy|absproxy)(?:\/|$)/i.test(p)||p.startsWith('/__editor/');
 function safePath(raw){try{const u=new URL(raw,'http://local');if(!raw.startsWith('/')||raw.startsWith('//')||u.origin!=='http://local'||/%(?:2f|5c|00|0d|0a)/i.test(u.pathname)||raw.includes('\\')||deniedPath(decodeURIComponent(u.pathname)))return null;return u.pathname+u.search;}catch{return null;}}
+function safeRedirect(location,origin,route){try{const target=new URL(location,origin+route);if(target.origin!==origin||target.username||target.password)return null;const pathname=safePath(target.pathname+target.search);return pathname?pathname+target.hash:null;}catch{return null;}}
 function incoming(req,host,websocket=false){
  const out={host};for(const[k,v]of Object.entries(req.headers))if(!hop.has(k)&&!['host','cookie','authorization','origin','referer','forwarded'].includes(k)&&!k.startsWith('x-forwarded-')&&!k.startsWith('tailscale-')&&!k.startsWith('x-harness-'))out[k]=v;
  // Do not negotiate compression through this byte-forwarding boundary. This
@@ -58,7 +59,7 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
   if(!authorized(req))return denied(res,401);const route=safePath(req.url);if(!route)return denied(res,404);
   if(!['GET','HEAD','OPTIONS'].includes(req.method)&&req.headers.origin!==origin)return denied(res);
   const upstream=http.request({socketPath,path:route,method:req.method,headers:incoming(req,u.host)},reply=>{
-   const location=reply.headers.location;if(location&&(!location.startsWith('/')||location.startsWith('//'))){reply.destroy();return denied(res,502,'EDITOR_REDIRECT_REFUSED');}
+   const location=reply.headers.location;if(location){const normalized=safeRedirect(location,origin,route);if(!normalized){reply.destroy();return denied(res,502,'EDITOR_REDIRECT_REFUSED');}reply.headers.location=normalized;}
    res.writeHead(reply.statusCode,outgoing(reply.headers,ownerOrigin));reply.on('error',()=>res.destroy());reply.pipe(res);
   });upstream.setTimeout(requestMs,()=>upstream.destroy());upstream.on('error',()=>{if(res.headersSent)res.destroy();else denied(res,502,'EDITOR_UPSTREAM_UNAVAILABLE');});req.on('aborted',()=>upstream.destroy());res.on('close',()=>upstream.destroy());req.pipe(upstream);
  });
@@ -75,4 +76,4 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
  });
  return{server,sessionId,generation,origin,cookieName,issue(){if(closed)throw Error('EDITOR_CLOSED');sweep();if(grants.size>=maxGrants)throw Error('EDITOR_GRANT_LIMIT');const v=token(),grantExpiresAt=now()+grantMs;grants.set(digest(v),grantExpiresAt);return{version:1,sessionId,generation,state:'ready',url:origin+'/__editor/bootstrap#'+v,grantExpiresAt,expiresAt:now()+sessionMs};},close(){closed=true;grants.clear();sessions.clear();for(const s of sockets)s.destroy();server.closeAllConnections();server.close();}};
 }
-module.exports={createEditorBroker,safePath,incoming,outgoing};
+module.exports={createEditorBroker,safePath,safeRedirect,incoming,outgoing};

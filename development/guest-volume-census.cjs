@@ -50,7 +50,8 @@ echo CENSUS_OLD_SCOPE=offline_metadata_not_live_census
 for category in apk-cache docker/vfs docker/buildkit docker/image docker/containers docker/volumes docker/network docker/tmp; do
   target=/mnt/old-volume/$category
   if test -d "$target" && test ! -L "$target" && test "$(readlink -f "$target")" = "$target"; then
-    size=$(timeout 20 du -skx "$target" 2>/dev/null | awk '{print $1}')
+    if ! timeout 20 du -skx "$target" > /tmp/census-du 2>/dev/null; then echo CENSUS_DU_INCOMPLETE; exit 1; fi
+    size=$(awk '{print $1}' /tmp/census-du)
     case "$size" in ''|*[!0-9]*) echo CENSUS_DU_INCOMPLETE; exit 1;; esac
     printf 'CENSUS_DU_KIB %s %s\\n' "$category" "$size"
   else printf 'CENSUS_CATEGORY_UNAVAILABLE %s\\n' "$category"; fi
@@ -58,7 +59,8 @@ done
 for category in docker/containers docker/image/vfs/imagedb/content/sha256 docker/volumes; do
   target=/mnt/old-volume/$category
   if test -d "$target" && test ! -L "$target" && test "$(readlink -f "$target")" = "$target"; then
-    count=$(timeout 10 find "$target" -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l)
+    if ! timeout 10 find "$target" -mindepth 1 -maxdepth 1 -print > /tmp/census-count 2>/dev/null; then echo CENSUS_COUNT_INCOMPLETE; exit 1; fi
+    count=$(wc -l < /tmp/census-count)
     printf 'CENSUS_OFFLINE_ENTRY_COUNT %s %s\\n' "$category" "$count"
   fi
 done

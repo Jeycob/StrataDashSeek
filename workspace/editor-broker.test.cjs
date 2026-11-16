@@ -1,7 +1,11 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),http=require('node:http'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
-const{createEditorBroker}=require('./editor-broker.cjs');
+const{createEditorBroker,safeRedirect}=require('./editor-broker.cjs');
 const origin='https://owner.test:19443',ownerOrigin='https://owner.test';
+test('editor relative redirects resolve within their exact origin and cannot enter broker or proxy routes',()=>{
+ for(const value of ['?folder=%2Fworkspace','./?folder=%2Fworkspace',origin+'/?folder=%2Fworkspace'])assert.equal(safeRedirect(value,origin,'/'),'/?folder=%2Fworkspace');
+ for(const value of ['https://evil.test/','//owner.test:19444/','javascript:alert(1)','/proxy/3090/','/__editor/claim','https://user@owner.test:19443/'])assert.equal(safeRedirect(value,origin,'/'),null,value);
+});
 async function fixture(t){
  const dir=await fs.mkdtemp(path.join(os.tmpdir(),'editor-broker-')),socketPath=process.platform==='win32'?'\\\\.\\pipe\\homeai-editor-'+crypto.randomUUID():path.join(dir,'code.sock'),seen=[];let clock=1000;
  const upstream=http.createServer((req,res)=>{seen.push(req.headers);if(req.url==='/redirect')res.writeHead(302,{'Location':'https://evil.test/','Set-Cookie':'dsh-auth-fixation=evil'});else res.writeHead(200,{'Content-Type':'application/json','Set-Cookie':'dsh-auth-fixation=evil','Access-Control-Allow-Origin':'*'});res.end('{"editor":true}');});
