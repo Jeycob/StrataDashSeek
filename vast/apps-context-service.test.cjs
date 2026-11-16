@@ -9,4 +9,8 @@ test('actual loopback service rejects mismatched project before invoking a modif
  for(const route of ['/scaffold','/register'])assert.equal((await post(route,{path:'b',_contextProjectId:id})).status,409);
  assert.equal((await post('/project-action',{id:'0'.repeat(16),action:'verify',_contextProjectId:id})).status,403);assert.deepEqual(calls,[]);
  assert.equal((await post('/scaffold',{path:'a',_contextProjectId:id})).status,200);assert.equal((await post('/register',{path:'a',_contextProjectId:id})).status,200);assert.equal((await post('/project-action',{id,action:'verify',_contextProjectId:id})).status,202);assert.deepEqual(calls.map(row=>row[0]),['scaffold','register','enqueue']);assert.equal(calls[0][3],id);assert.equal(calls[1][2],id);assert.equal((await post('/register',[])).status,400);
+ const ownJob='a'.repeat(16),foreignJob='b'.repeat(16);manager.store.jobs.push({id:ownJob,projectId:id,action:'verify',status:'passed',output:'PRIVATE_CANARY'},{id:foreignJob,projectId:'0'.repeat(16),status:'running'});
+ const get=job=>fetch(base+'/job-status?id='+job+'&_contextProjectId='+id,{headers:{'X-Harness-Apps-Key':'context-fixture-authentication'}});
+ assert.equal((await fetch(base+'/job-status?id='+ownJob)).status,401);assert.equal((await get(foreignJob)).status,403);
+ const status=await(await get(ownJob)).json();assert.equal(status.job.passed,true);assert.equal(status.job.id,ownJob);assert.doesNotMatch(JSON.stringify(status),/PRIVATE_CANARY/);assert.deepEqual(calls.map(row=>row[0]),['scaffold','register','enqueue']);
 });

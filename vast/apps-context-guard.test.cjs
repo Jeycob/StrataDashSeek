@@ -7,7 +7,7 @@ test('root Apps service checks actual canonical target and resource ownership be
  const manager={cfg:{workspaceRoot:directory},project:id=>({id,directory:a}),store:{jobs:[{id:'own-job',projectId:expected},{id:'other-job',projectId:'0'.repeat(16)}]},state:async()=>({containers:[{id:'own-container',projectId:expected},{id:'other-container',projectId:'0'.repeat(16)}]})},binding={_contextProjectId:expected};
  for(const route of ['/scaffold','/register']){await guardAppsTarget(manager,route,{...binding,path:'a'});await assert.rejects(guardAppsTarget(manager,route,{...binding,path:'b'}));await assert.rejects(guardAppsTarget(manager,route,{...binding,path:'../outside'}));}
  for(const route of ['/project-settings','/project-action','/releases','/release']){await guardAppsTarget(manager,route,{...binding,id:expected});await assert.rejects(guardAppsTarget(manager,route,{...binding,id:'0'.repeat(16)}));}
- for(const route of ['/job-log','/export-download']){await guardAppsTarget(manager,route,{...binding,id:'own-job'});await assert.rejects(guardAppsTarget(manager,route,{...binding,id:'other-job'}));}
+ for(const route of ['/job-status','/job-log','/export-download']){await guardAppsTarget(manager,route,{...binding,id:'own-job'});await assert.rejects(guardAppsTarget(manager,route,{...binding,id:'other-job'}));}
  for(const route of ['/container-action','/container-log']){await guardAppsTarget(manager,route,{...binding,id:'own-container'});await assert.rejects(guardAppsTarget(manager,route,{...binding,id:'other-container'}));}
  await assert.rejects(guardAppsTarget(manager,'/worker-action',binding));await assert.rejects(guardAppsTarget(manager,'/register',{_contextProjectId:'invalid',path:'a'}));
  await guardAppsTarget(manager,'/worker-action',{});

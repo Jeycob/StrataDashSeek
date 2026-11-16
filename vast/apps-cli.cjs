@@ -19,6 +19,7 @@ if(require.main===module){const [action,id,option]=process.argv.slice(2);let rou
  else if(action==='hold'){route='/hold';data={minutes:Number(id)};}
  else if(['start','stop'].includes(action)){route='/container-action';data={id,action};}
  else if(action==='job-log')route='/job-log?id='+encodeURIComponent(id);
+ else if(action==='job-status')route='/job-status?id='+encodeURIComponent(id);
  else if(action==='logs')route='/container-log?id='+encodeURIComponent(id);
- else{console.error('Usage: apps-cli.cjs state | scaffold-plan|scaffold|register PATH | verify|build|deploy|check|compose|export PROJECT_ID | rollback PROJECT_ID RELEASE_ID | releases PROJECT_ID | release PROJECT_ID RELEASE_ID | remote-preflight|remote-verify PROJECT_ID TARGET_ID | wake|sleep | hold MINUTES | start|stop|logs CONTAINER_ID | job-log JOB_ID');process.exitCode=2;}
+ else{console.error('Usage: apps-cli.cjs state | scaffold-plan|scaffold|register PATH | verify|build|deploy|check|compose|export PROJECT_ID | rollback PROJECT_ID RELEASE_ID | releases PROJECT_ID | release PROJECT_ID RELEASE_ID | remote-preflight|remote-verify PROJECT_ID TARGET_ID | wake|sleep | hold MINUTES | start|stop|logs CONTAINER_ID | job-status|job-log JOB_ID');process.exitCode=2;}
  if(route)callApps(route,data).then(d=>console.log(JSON.stringify(d,null,2))).catch(e=>{console.error(e.message);process.exitCode=1;});}

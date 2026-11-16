@@ -57,6 +57,9 @@ test('does not disclose another project, secret, URL, job text, port or raw conf
   assert.equal(s.apps.jobs.length, 1); assert.equal(s.apps.containers.length, 1);
   assert.deepEqual(Object.keys(s.apps.jobs[0]), ['id', 'action', 'status', 'startedAt', 'endedAt']);
   assert.deepEqual(Object.keys(s.apps.containers[0]), ['id', 'state']);
+  assert.deepEqual(s.jobTracking.jobs, [{ id, status: ['/data/harness/node/bin/node', '/data/harness/app/vast/apps-cli.cjs', 'job-status', id], logs: ['/data/harness/node/bin/node', '/data/harness/app/vast/apps-cli.cjs', 'job-log', id] }]);
+  assert.deepEqual(s.verificationRecipes.browser, { tool: 'verify_project', arguments: { kind: 'browser' } });
+  assert.equal(s.jobTracking.repeatSubmission, false);
 });
 
 test('requires full registered path and valid id; missing or ambiguous association reveals no jobs', async () => {

@@ -20,7 +20,7 @@ async function guardAppsTarget(manager,route,data={}){
   const record=manager.project(data.id),directory=await fs.realpath(record.directory||path.join(manager.cfg.workspaceRoot,record.path));
   if(idFor(directory)!==expected)throw reject('The registered project directory changed.');return;
  }
- if(['/job-log','/export-download'].includes(route)){
+ if(['/job-status','/job-log','/export-download'].includes(route)){
   if(!manager.store.jobs.some(job=>job.id===data.id&&job.projectId===expected))throw reject('The operation does not match this conversation.',403);return;
  }
  if(['/container-action','/container-log'].includes(route)){

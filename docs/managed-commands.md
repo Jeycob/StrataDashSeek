@@ -36,6 +36,28 @@ A background acknowledgement is neither completed verification nor a failed
 test. Run milestones in the foreground with `verify_project` so that the
 completed result is recorded.
 
+The acknowledgement includes an exact `job_output` call using `job_id`, `wait`
+and `timeout_ms`. A wait deadline returns the same running job; it does not
+authorize another launch. The public SDK result exposes `job.status` and
+`job.detail`; process results also appear in its returned text. A `completed`
+status with a nonzero exit code is a failed command. Source-bound acceptance
+still belongs to `verify_project`, not a terminal status inferred from logs.
+
+`runtime_capabilities` supplies `verificationRecipes` for `test`, `browser` and
+`all`, with the installed quality schema and artifact directory. Adapt real
+assertions to the requested behavior. Browser checks use the project's assigned
+port, a positive visible expectation and a screenshot checkpoint. Require
+`passed: true`, `complete: true`, and `stale: false` for full declared acceptance.
+
+Apps jobs use the existing Apps registry. Retain the ID returned by the original
+submission and call `apps-cli.cjs job-status JOB_ID` for bounded structured state,
+then `job-log JOB_ID` when diagnosis is needed. These reads never wake Docker.
+`runtime_capabilities.jobTracking` provides the exact argv for current owned jobs.
+`queued` and `running` remain pending; `failed`, `interrupted`, `unknown` or
+`recovery_required` never become a pass. Do not resubmit after a lost response or
+wait deadline. Inspect the original receipt and resolve any recovery requirement.
+A passed build still needs application and browser verification before delivery.
+
 The working directory and its real filesystem target must remain in the project.
 The runner exports the project's assigned ports, database and prepared tool paths
 through `development/project-run.cjs`, then invokes the actual filesystem-confined

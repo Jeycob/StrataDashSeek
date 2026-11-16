@@ -12,7 +12,7 @@ const deepFreeze = value => { if (value && typeof value === 'object') { for (con
 const safeTime = value => Number.isFinite(value) && value >= 0 ? value : null;
 const pickEnum = (value, allowed) => allowed.includes(value) ? value : 'unknown';
 const jobStates = ['queued', 'running', 'passed', 'failed', 'interrupted', 'recovery_required'];
-const actions = ['verify', 'build', 'deploy', 'check', 'compose', 'export', 'rollback', 'remote-verify', 'remote-preflight'];
+const actions = ['verify', 'build', 'deploy', 'check', 'compose', 'export', 'rollback', 'remote-verify', 'remote-preflight', 'resource-export'];
 function workerProfile(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const bounded = (n, max) => Number.isSafeInteger(n) && n > 0 && n <= max ? n : null;
@@ -97,8 +97,14 @@ export function createRuntimeCapabilities({ workspaceRoot, capacityPath = '/data
     }
     const argv = (...args) => [...CLI, ...args];
     const recipes = { register: argv('register', relative), ...(apps.project && !apps.recoveryRequired ? Object.fromEntries(['verify', 'build', ...(apps.project.built ? ['deploy'] : []), ...(apps.project.deployed ? ['check'] : [])].map(action => [action, argv(action, apps.project.id)])) : {}) };
+    const jobTracking = { source: 'existing-apps-registry', pollIntervalMs: 5000, repeatSubmission: false, waitDeadlineMs: 300000,
+      jobs: apps.jobs.map(job => ({ id: job.id, status: argv('job-status', job.id), logs: argv('job-log', job.id) })),
+      completion: 'Require job.passed=true from the original job-status receipt. A wait deadline or unknown outcome stays unverified; inspect logs and recovery state instead of submitting again.' };
+    const verificationRecipes = { documentation: '/data/harness/app/quality/README.md', contract: '.harness-quality.json', browserPlan: '.harness-browser.json', artifacts: '.harness/quality/',
+      test: { tool: 'verify_project', arguments: { kind: 'test' } }, browser: { tool: 'verify_project', arguments: { kind: 'browser' } }, all: { tool: 'verify_project', arguments: { kind: 'all' } },
+      completion: 'Use real project assertions and a running owned server on its assigned port. Browser flows require a visible expectation and screenshot checkpoint. Require passed=true, complete=true and stale=false for all required kinds; a screenshot or build alone is insufficient.' };
     if(apps.recoveryRequired)capacity={...capacity,canBuild:false,canVerify:false};
-    return deepFreeze({ version: 1, timestamp, sampledAt, ttlMs, project: { relativePath: relative }, existingFiles, unavailableFiles, capacity, apps, recipes, guidance: { reuseExistingFiles: true, managedDockerOnly: true, httpIsNotApplicationVerification: true, workerDiskRequiredBytes: 512 * MIB, capacityIsAdvisory: true, finalImageSizeIsNotPeakBuildUsage: true, driverChangesRequireDataPreservationPlan: true, enforceCapacityAgainAtExecution: true, stateReadHasNoWake: true, resourceAdmissionFailureRequiresSupportedWorkerOrOperator: true, unknownStartsMustNotBeReplayed: true } });
+    return deepFreeze({ version: 1, timestamp, sampledAt, ttlMs, project: { relativePath: relative }, existingFiles, unavailableFiles, capacity, apps, recipes, jobTracking, verificationRecipes, guidance: { reuseExistingFiles: true, managedDockerOnly: true, httpIsNotApplicationVerification: true, workerDiskRequiredBytes: 512 * MIB, capacityIsAdvisory: true, finalImageSizeIsNotPeakBuildUsage: true, driverChangesRequireDataPreservationPlan: true, enforceCapacityAgainAtExecution: true, stateReadHasNoWake: true, resourceAdmissionFailureRequiresSupportedWorkerOrOperator: true, unknownStartsMustNotBeReplayed: true } });
   }
   function snapshot(canonicalProjectDirectory) {
     const key = keyFor(canonicalProjectDirectory);

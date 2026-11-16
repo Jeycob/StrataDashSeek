@@ -6,7 +6,7 @@ export const MAX_PROJECT_JOB_LIFETIME_MS = 600000;
 export const projectJobLifetime = timeoutMs => Math.min(MAX_PROJECT_JOB_LIFETIME_MS, Math.max(1000, timeoutMs ?? DEFAULT_PROJECT_JOB_LIFETIME_MS));
 export const projectBackgroundSchema = { type: 'object', properties: { kind: { type: 'string', const: 'background' }, jobId: { type: 'string' }, cwd: { type: 'string' } }, required: ['kind', 'jobId', 'cwd'], additionalProperties: false };
 export function renderProjectBackground(args, value) {
-  return [{ type: 'text', text: `Started background job ${value.jobId}. Maximum lifetime: ${projectJobLifetime(args.timeoutMs)}ms. Read status/logs with job_output or job_list; stop this owned job with job_kill. Do not use nohup, setsid or process-name kills.` }];
+  return [{ type: 'text', text: `Started background job ${value.jobId}. Maximum lifetime: ${projectJobLifetime(args.timeoutMs)}ms. Read status/logs with job_output ${JSON.stringify({ job_id: value.jobId, wait: true, timeout_ms: 30000 })} or job_list. A wait timeout leaves this same job running: inspect job.status and retain its ID; do not start a duplicate. Stop this owned job with job_kill. Process completion requires job.status=completed and an observed exit code 0 in job.detail or the returned final result text; use verify_project for source-bound verification. Do not use nohup, setsid or process-name kills.` }];
 }
 
 // Only SDK-owned handles are retained. Never discover/adopt arbitrary PIDs or

@@ -133,11 +133,14 @@ test('real SDK managed bash returns canonical background acknowledgement and nat
   assert.deepEqual(Object.keys(result.value).sort(), ['cwd', 'jobId', 'kind']);
   assert.equal(result.value.kind, 'background'); assert.equal(result.value.cwd, f.root); assert.equal(result.meta.cwd, f.root);
   assert.match(result.content[0].text, /300000ms/); assert.match(result.content[0].text, /job_kill/);
+  const followUp = JSON.parse(result.content[0].text.match(/job_output (\{[^\n]+?\}) or job_list/)[1]);
+  assert.equal(followUp.job_id, result.value.jobId); assert.equal(followUp.wait, true); assert.equal(followUp.timeout_ms, 30000);
   const id = result.value.jobId; assert.equal(f.ctx.jobs.get(id, owner.id).owner, owner.id);
   assert.equal([...f.timers][0].ms, 300000); assert.equal(f.calls[0].timeoutMs, 300000);
   await eventually(() => f.ctx.jobs.get(id, owner.id).output.total > 0);
-  const output = await f.call(owner, 'job_output', { job_id: id });
+  const output = await f.call(owner, 'job_output', { ...followUp, timeout_ms: 1 });
   assert.equal(output.isError, false, JSON.stringify(output)); assert.match(JSON.stringify(output), /preview-ready/);
+  assert.equal(output.value.job.status, 'running'); assert.equal(f.calls.length, 1);
   const stopped = await f.call(owner, 'job_kill', { job_id: id, reason: 'preview no longer needed' });
   assert.equal(stopped.isError, false, JSON.stringify(stopped));
   assert.equal((await f.ctx.jobs.wait(id, 1000, owner.id)).status, 'killed');

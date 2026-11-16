@@ -12,7 +12,9 @@ const deniedPath=p=>/^\/(?:proxy|absproxy)(?:\/|$)/i.test(p)||p.startsWith('/__e
 function safePath(raw){try{const u=new URL(raw,'http://local');if(!raw.startsWith('/')||raw.startsWith('//')||u.origin!=='http://local'||/%(?:2f|5c|00|0d|0a)/i.test(u.pathname)||raw.includes('\\')||deniedPath(decodeURIComponent(u.pathname)))return null;return u.pathname+u.search;}catch{return null;}}
 function incoming(req,host,websocket=false){
  const out={host};for(const[k,v]of Object.entries(req.headers))if(!hop.has(k)&&!['host','cookie','authorization','origin','referer','forwarded'].includes(k)&&!k.startsWith('x-forwarded-')&&!k.startsWith('tailscale-')&&!k.startsWith('x-harness-'))out[k]=v;
- if(websocket){out.connection='Upgrade';out.upgrade='websocket';}
+ // Do not negotiate compression through this byte-forwarding boundary. This
+ // also avoids code-server's invalid extension response in Safari/WebKit.
+ if(websocket){delete out['sec-websocket-extensions'];out.connection='Upgrade';out.upgrade='websocket';}
  return out;
 }
 function outgoing(headers,ownerOrigin){
@@ -57,6 +59,7 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
   const remove=()=>{clearTimeout(deadline);sockets.delete(socket);sockets.delete(peer);socket.destroy();peer?.destroy();request.destroy();};socket.on('error',remove);socket.on('close',remove);request.on('error',remove);request.setTimeout(5000,remove);
   request.on('response',reply=>{reply.resume();socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n');});
   request.on('upgrade',(reply,upstream,upstreamHead)=>{peer=upstream;sockets.add(peer);peer.on('error',remove);peer.on('close',remove);request.setTimeout(0);
+   if(reply.headers['sec-websocket-extensions'])return remove();
    const h=outgoing(reply.headers,ownerOrigin);h.connection='Upgrade';h.upgrade='websocket';delete h['content-length'];
    socket.write('HTTP/1.1 101 Switching Protocols\r\n'+Object.entries(h).map(([k,v])=>k+': '+v).join('\r\n')+'\r\n\r\n');if(upstreamHead.length)socket.write(upstreamHead);if(head.length)peer.write(head);socket.pipe(peer).pipe(socket);deadline=setTimeout(remove,Math.max(1,expires-now()));deadline.unref?.();
   });request.end();

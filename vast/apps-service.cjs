@@ -19,6 +19,7 @@ function createAppsService(cfg={},injected){
   if(req.method!=='GET'||u.pathname==='/export-download')try{await admission.admit('apps_enqueue');}catch{return json(res,503,{code:'RUNTIME_ADMISSION_CLOSED',error:'Harness is verifying its runtime. Retry shortly.'});}
   if(req.method==='GET')await guardAppsTarget(manager,u.pathname,Object.fromEntries(u.searchParams));
   if(req.method==='GET'&&u.pathname==='/state')return json(res,200,await manager.state());
+  if(req.method==='GET'&&u.pathname==='/job-status')return json(res,200,require('./apps-job-status.cjs').jobStatus(manager,u.searchParams.get('id')));
   if(req.method==='GET'&&u.pathname==='/resource-export-download'){
    const e=manager.archivedCleanup.resourceDownload({...Object.fromEntries(u.searchParams),token:req.headers['x-harness-resource-authority']});let release;try{release=manager.beginTransfer();}catch(error){fs.closeSync(e.descriptor);throw error;}res.once('close',release);res.setTimeout(120000,()=>res.destroy());
    res.writeHead(200,{'Content-Type':'application/x-tar','Content-Length':e.bytes,'Content-Disposition':'attachment; filename="'+e.filename+'"','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
