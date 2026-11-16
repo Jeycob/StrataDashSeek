@@ -54,11 +54,12 @@ function graph({authority,projects,jobs,releases,deployments,saved,containers,im
  }
  // Docker census order and RepoTags order are unspecified. Bind set-valued
  // observations by immutable identity so an unchanged target remains usable;
- // preserve order in jobs, resume plans, mounts and other semantic arrays.
+ // preserve order in jobs, resume plans and other semantic arrays. Observed
+ // Docker Mounts metadata is a set, unlike a requested mount instruction list.
  const byIdentity=(items,identity)=>[...items].sort((a,b)=>identity(a).localeCompare(identity(b)));
  const {sessions,archivedIds,activeIds,pinnedIds,workspaceRefs}=authority;
  const inventoryImages=byIdentity(images.map(image=>({...image,RepoTags:[...(image.RepoTags||[])].sort()})),image=>image.Id);
- const inventoryContainers=byIdentity(containers,container=>container.Id);
+ const inventoryContainers=byIdentity(containers.map(c=>({...c,...(Array.isArray(c.Mounts)?{Mounts:[...c.Mounts].sort((a,b)=>stable(a).localeCompare(stable(b)))}:{})})),container=>container.Id);
  const authorityBinding={sessions:byIdentity(sessions,s=>s.id),archivedIds:[...archivedIds].sort(),activeIds:[...activeIds].sort(),pinnedIds:[...pinnedIds].sort(),workspaceRefs:workspaceRefs?.map(w=>({...w,sessionIds:[...w.sessionIds].sort()})).sort((a,b)=>a.id.localeCompare(b.id))};
  rows.sort((a,b)=>key(a).localeCompare(key(b)));return{rows,binding:hash({authority:authorityBinding,projects,jobs,releases:byIdentity(releases,r=>String(r.projectId)+':'+String(r.id)),deployments:byIdentity(deployments,d=>String(d.projectId??d.project_id)+':'+String(d.releaseId??d.release_id)),saved,containers:inventoryContainers,images:inventoryImages,daemonId,unknown:[...unknown].sort()})};
 }

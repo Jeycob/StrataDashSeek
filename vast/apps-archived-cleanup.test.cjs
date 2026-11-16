@@ -13,11 +13,12 @@ async function preview(f,automatic=false){return(await f.cleanup.handle({op:'pre
 
 test('unordered Docker census and tag sets preserve a plan while semantic changes still invalidate it',async t=>{
  const f=fixture(t),foreign='sha256:'+'8'.repeat(64);f.s.images.push({Id:foreign,Parent:'',Size:500,RepoTags:['foreign:one'],Labels:{}});f.s.images[0].RepoTags.push(f.s.images[0].RepoTags[0]+'-extra');
- f.s.containers.push({Id:'9'.repeat(64),Image:foreign,Name:'/foreign',Config:{Labels:{}},State:{Running:false,Status:'exited'},Mounts:[]});
- const before=await f.cleanup.capture(token),plan=await preview(f);f.s.images.reverse();f.s.containers.reverse();for(const i of f.s.images)i.RepoTags.reverse();
+ f.s.containers.push({Id:'9'.repeat(64),Image:foreign,Name:'/foreign',Config:{Labels:{}},State:{Running:false,Status:'exited'},Mounts:[{Type:'volume',Source:'first',Destination:'/first'},{Type:'volume',Source:'second',Destination:'/second'}]});
+ const before=await f.cleanup.capture(token),plan=await preview(f);f.s.images.reverse();f.s.containers.reverse();for(const i of f.s.images)i.RepoTags.reverse();for(const c of f.s.containers)c.Mounts.reverse();
  const after=await f.cleanup.capture(token);assert.equal(after.binding,before.binding);assert.deepEqual(after.rows,before.rows);
  const done=await f.cleanup.handle({op:'apply',token,planId:plan.id,planHash:plan.hash,selections:[{kind:'container',id:cid}]});assert.equal(done.operation.state,'completed');assert.equal(f.calls.filter(c=>c[0]==='DELETE').length,1);
  const a=graph(f.s).binding;f.s.images.find(i=>i.Id===foreign).Size++;assert.notEqual(graph(f.s).binding,a);
+ const b=graph(f.s).binding;f.s.containers[0].Mounts[0].Source='changed';assert.notEqual(graph(f.s).binding,b);
 });
 
 test('consumed plan returns one durable receipt for canonical retries, across new plans, expiry and restart',async t=>{
