@@ -4,6 +4,7 @@ const {LABEL} = require('./apps-engine.cjs');
 const {atomicJson}=require('../mobile/private-json.cjs');
 const {PILOT_WORKER_PROFILE,validatePilot,workerProfile}=require('./apps-worker-profile.cjs');
 const {fixedguestOverlayProbe,parseOverlayProbe}=require('./apps-overlay-probe.cjs');
+const projectVM=require('./apps-project-vm.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function requireControl(vm){
  if(vm.cfg?.enabled===false||vm.cfg?.vm?.enabled===false||vm.quarantined)throw Object.assign(Error('Docker worker is not enabled; an existing guest remains quarantined for explicit reconciliation'),{code:'APPS_WORKER_DISABLED',status:409});
@@ -112,7 +113,7 @@ class DockerVM {
  }
  save(){atomicJson(this.stateFile,this.saved);}
  pid(){try{const pid=Number(fs.readFileSync(path.join(this.root,'qemu.pid'),'utf8')); const args=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0');return args.includes('stratadashseek-docker') && args.includes('file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback')?pid:null;}catch{return null;}}
- status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,totalBytes:this.totalBytes??null,usedBytes:this.usedBytes??null,totalInodes:this.totalInodes??null,storageCategories:this.storageCategories??null,storageCheckedAt:this.storageCheckedAt??null,diskCheckedAt:this.diskCheckedAt??null,profile:workerProfile(this.manifest,{driver:this.observedStorageDriver,at:this.storageObservedAt,ready:this.phase==='ready'}),initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
+ status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,totalBytes:this.totalBytes??null,usedBytes:this.usedBytes??null,totalInodes:this.totalInodes??null,storageCategories:this.storageCategories??null,storageCheckedAt:this.storageCheckedAt??null,diskCheckedAt:this.diskCheckedAt??null,profile:workerProfile(this.manifest,{driver:this.observedStorageDriver,at:this.storageObservedAt,ready:this.phase==='ready'}),initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1},projectRuntimeIsolation:this.phase==='ready'&&this.projectRuntimeIsolation?.bootPid===this.pid()?structuredClone(this.projectRuntimeIsolation):null};}
  touch(){this.lastUsed=Date.now();}
  async ensure(){
   requireControl(this);
@@ -141,7 +142,7 @@ class DockerVM {
  }
  async start(){
   requireControl(this);
-  if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1 && this.saved.resourceBootstrapVersion===2){await this.engine.available();return;}
+  if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1 && this.saved.resourceBootstrapVersion===2 && (!this.cfg?.projectRuntime?.enabled||this.projectRuntimeIsolation?.bootPid===this.pid())){await this.engine.available();return;}
   this.phase='starting';this.error=null;this.scriptSent=false;this.nonce=crypto.randomBytes(8).toString('hex');
   if(this.serial&&!this.serial.destroyed)this.serial.write('\n');
   if(!this.pid()){
@@ -149,11 +150,15 @@ class DockerVM {
    const stat=fs.statfsSync(this.root);if(stat.bavail*stat.bsize<2*1024**3)throw Error('Less than 2 GiB host reserve; worker not started');
    const forwards=['hostfwd=tcp:127.0.0.1:19075-:2375'];
    for(let n=0;n<this.cfg.portCount;n++)forwards.push('hostfwd=tcp:127.0.0.1:'+(this.cfg.firstPort+n)+'-:'+(this.cfg.firstPort+n));
+   if(this.cfg.projectRuntime?.enabled)forwards.push(...projectVM.forwards());
    const args=['-name','stratadashseek-docker','-accel',PILOT_WORKER_PROFILE.acceleration+',thread=single','-smp',String(PILOT_WORKER_PROFILE.vcpus),'-m',String(PILOT_WORKER_PROFILE.memoryMiB),'-cpu','max','-display','none','-monitor','none','-no-reboot',
     '-chardev','socket,id=console,path='+this.root+'/serial.sock,server=on,wait=off','-serial','chardev:console','-qmp','unix:'+this.root+'/qmp.sock,server=on,wait=off','-pidfile',this.root+'/qemu.pid',
     '-kernel',this.root+'/vmlinuz-virt','-initrd',this.root+'/initramfs-virt','-cdrom',this.root+'/alpine.iso','-drive','file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback',
     '-append','console=ttyS0 alpine_dev=cdrom:iso9660 modules=loop,squashfs,sd-mod,usb-storage,virtio_blk quiet cgroup_no_v1=all swapaccount=1','-netdev','user,id=net0,'+forwards.join(','),'-device','virtio-net-pci,netdev=net0'];
-   const log=fs.openSync(path.join(this.root,'qemu.log'),'a',0o600);this.child=cp.spawn('nice',['-n','19','qemu-system-x86_64',...args],{cwd:this.root,stdio:['ignore',log,log]});fs.closeSync(log);
+   this.projectRuntimeIsolation=null;this.projectExports=projectVM.openExports(this.cfg);
+   if(this.projectExports)args.push(...projectVM.qemuArguments());
+   const log=fs.openSync(path.join(this.root,'qemu.log'),'a',0o600);
+   try{this.child=cp.spawn('nice',['-n','19','qemu-system-x86_64',...args],{cwd:this.root,stdio:['ignore',log,log,...(this.projectExports?[this.projectExports.projects.fd,this.projectExports.transport.fd]:[])]});}finally{fs.closeSync(log);projectVM.closeExports(this.projectExports);}
    this.child.on('error',e=>{this.error=e.message;});this.child.on('exit',()=>{this.serial?.destroy();this.serial=null;if(!this.stopping){this.phase='asleep';this.error='Worker exited; next operation will recover it';}});
   }
   const deadline=Date.now()+(this.saved.initialized?300000:900000);
@@ -168,6 +173,7 @@ class DockerVM {
      if(info.CgroupVersion!=='2')throw Object.assign(Error('Unified cgroup v2 was not reported by the managed Docker worker; cold reconciliation is required'),{code:'APPS_CGROUP_V2_REQUIRED'});
      this.observedStorageDriver=info.Driver;this.storageObservedAt=Date.now();
      this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.saved.resourceBootstrapVersion=2;this.save();
+     if(this.cfg?.projectRuntime?.enabled)await projectVM.proveExports(this);
      const resumeIds=this.saved.resumeIds||[];
      if(resumeIds.length){if(typeof this.validateResume!=='function')throw Error('Published application resume identities require the application controller');await this.validateResume(resumeIds);}
      for(const id of resumeIds){if(typeof this.startManagedContainer!=='function')throw Error('Managed container resource admission requires the application controller');await this.startManagedContainer(id);}
@@ -197,7 +203,9 @@ class DockerVM {
    const deadline=Date.now()+70000;while(Date.now()<deadline){const done=this.buffer.match(new RegExp('(?:^|\\n)HARNESS_OVERLAY_DONE_'+nonce+'=(\\d+)(?:\\r?\\n|$)'));if(done){const result=parseOverlayProbe(this.buffer,nonce),rc=Number(done[1]);if(rc===124||rc===125)throw Error('Overlay probe wrapper cleanup or preparation failed');if(result.supported&&rc!==0)throw Error('Overlay probe success conflicts with its exit status');const report={...result,checkedAt:Date.now()};this.saved.overlayProbe={...report,volumeId:this.manifest.volumeId,alpineSHA256:this.manifest.alpineSHA256};this.save();return report;}await pause(100);}throw Error('Bounded overlay probe did not return a complete result');
   }finally{this.overlayProbePending=null;}
  }
- async remember(){requireControl(this);if(this.phase!=='ready')return;const rows=(await this.engine.list()).filter(c=>c.Labels?.[LABEL+'.role']!=='test');this.saved.containers=rows;this.saved.resumeIds=rows.filter(c=>c.State==='running').map(c=>c.Id);this.save();}
+ async remember(){requireControl(this);if(this.phase!=='ready')return;const rows=(await this.engine.list()).filter(c=>c.Labels?.[LABEL+'.role']!=='test');this.saved.containers=rows;this.saved.resumeIds=rows.filter(c=>c.State==='running'&&!/^project-(?:editor|relay|executor)$/.test(c.Labels?.[LABEL+'.role']||'')).map(c=>c.Id);this.save();}
+ async prepareProjectRuntime(input){requireControl(this);return projectVM.prepare(this,input);}
+ async projectRuntimeHealth(input){requireControl(this);return projectVM.health(this,input);}
  async stop(){
   requireControl(this);
   if(this.pending)throw Error('Docker worker is starting');if(this.stopping)throw Error('Docker worker is already stopping');
@@ -207,8 +215,9 @@ class DockerVM {
    if(this.phase!=='ready')throw Error('Worker is not in a verified state; refusing automatic poweroff');
    await this.remember();this.phase='saving';
    // Inspect before stopping: a stop can hold daemon locks for its full grace period.
-   await Promise.all(this.saved.resumeIds.map(id=>this.engine.owned(id)));
-   const stops=await Promise.allSettled(this.saved.resumeIds.map(id=>this.engine.request('POST','/containers/'+id+'/stop?t=15',{timeout:45000})));
+   const stopIds=this.saved.containers?this.saved.containers.filter(c=>c.State==='running').map(c=>c.Id):this.saved.resumeIds;
+   await Promise.all(stopIds.map(id=>this.engine.owned(id)));
+   const stops=await Promise.allSettled(stopIds.map(id=>this.engine.request('POST','/containers/'+id+'/stop?t=15',{timeout:45000})));
    const failed=stops.find(r=>r.status==='rejected');if(failed)throw failed.reason;
    if(!this.serial||this.serial.destroyed)await this.connectSerial();this.serial.write('\nkill -TERM $(pidof dockerd) 2>/dev/null || true; for n in $(seq 1 30); do pidof dockerd >/dev/null || break; sleep 1; done; if pidof dockerd >/dev/null; then echo HARNESS_DOCKER_SHUTDOWN_FAILED; else sync; poweroff; fi\n');
    const deadline=Date.now()+60000;while(this.pid()&&Date.now()<deadline)await pause(500);
