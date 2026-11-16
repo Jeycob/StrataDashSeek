@@ -13,8 +13,10 @@ test('actual pinned Native Host authenticates functional workspace health before
   if(model)await new Promise(resolve=>model.close(resolve));
   const real=fs.realpathSync(temp);assert.equal(path.dirname(real),fs.realpathSync(os.tmpdir()));assert(path.basename(real).startsWith('harness-health-native-'));fs.rmSync(real,{recursive:true,force:true});
  });
- const names=cp.execFileSync('git',['ls-files','--cached','--others','--exclude-standard','-z','--','workspace','development','runtime','vast','quality'],{cwd:repo,encoding:'utf8'}).split('\0').filter(Boolean);
- for(const name of names){const target=path.join(release,name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(repo,name),target);}
+ // A release fixture needs the same complete source inventory as release CI.
+ // An allowlist of directories silently drops new transitive plugin imports.
+ const names=cp.execFileSync('git',['ls-files','--cached','--others','--exclude-standard','-z'],{cwd:repo,encoding:'utf8'}).split('\0').filter(Boolean);
+ for(const name of names){const target=path.resolve(release,name),source=path.join(repo,name),info=fs.lstatSync(source);if(!target.startsWith(path.resolve(release)+path.sep)||!info.isFile()||info.isSymbolicLink())throw Error('Native fixture source must be a confined regular file');fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(source,target);}
  fs.writeFileSync(log,'',{mode:0o640});
  const sdkRequire=createRequire(path.resolve(process.env.HARNESS_NATIVE_CLI)),worktree=sdkRequire.resolve('@deepseek-ai/dsh-experimental-worktree');
  const overlay=path.join(temp,'patch.json');fs.writeFileSync(overlay,JSON.stringify([{insert:[{id:'cloud-native-worktrees',name:pathToFileURL(worktree).href,config:{retainOnArchive:true}},{id:'functional-workspace-health',name:pathToFileURL(path.join(release,'workspace/plugin.mjs')).href,config:{stateRoot:path.join(temp,'state'),projectsRoot:path.join(temp,'projects'),environmentReport:path.join(temp,'development.json'),appsConfigFile:path.join(temp,'absent-apps.json'),appsWorkspaceRoot:path.join(temp,'projects')}}]}]));
