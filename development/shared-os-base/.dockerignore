@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!install-offline.sh
+!os-packages.lock.tsv
+!code-server.yaml
+!packages/
+!packages/*.deb
