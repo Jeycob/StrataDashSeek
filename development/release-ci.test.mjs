@@ -67,6 +67,7 @@ test('discovery includes development, Python and new test directories while repo
   assert.equal(result.entries.find(row => row.file.endsWith('test_notification_watcher.py')).kind, 'python');
   assert.equal(classify('vast/apps-context-linux-check.cjs').lane, 'linux-root');
   assert.equal(classify('workspace/runtime-admission-native.test.cjs').minTests, 2);
+  const offlineApt=classify('development/shared-os-base/test_offline_apt.py');assert.equal(offlineApt.kind,'python');assert.equal(offlineApt.lane,'portable');assert.equal(offlineApt.required,true);assert.equal(offlineApt.minTests,4);
   for(const[file,min]of [['development/native-isolated-profile.test.mjs',12],['development/native-isolated-web.test.mjs',1]]){const row=classify(file);assert.equal(row.required,true);assert.equal(row.lane,'portable');assert.equal(row.timeoutMs,120000);assert.equal(row.minTests,min);}
   assert.equal(classify('deployments/test-worker-network.py').kind, 'helper');
   assert.equal(classify('deployments/worker-network-linux-check.cjs').lane, 'linux-root');

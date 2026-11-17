@@ -34,6 +34,7 @@ export function classify(name) {
   if (name === 'workspace/runtime-admission-native.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:180000,minTests:2};
   if (name === 'development/native-isolated-profile.test.mjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:12};
   if (name === 'development/native-isolated-web.test.mjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:1};
+  if (name === 'development/shared-os-base/test_offline_apt.py') return {file:name,kind:'python',lane:'portable',required:true,timeoutMs:120000,minTests:4};
   if (name === 'development/project-execution-floor-root.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_EXECUTION_FLOOR_ROOT_TEST:'1'},minTests:10};
   if (name === 'vast/startup-install-floor.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_EXECUTION_FLOOR_ROOT_TEST:'1'},minTests:6};
   if (name === 'vast/runtime-recovery.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_RECOVERY_ROOT_TEST:'1'},minTests:12};
