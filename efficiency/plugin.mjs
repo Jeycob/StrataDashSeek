@@ -8,6 +8,7 @@ import {POLICY,WorkCard,archiveLog,summarizeLog,rewriteRisk,patchRemovals,prefix
 import {EventLedger,uniqueEngineRecord} from './ledger.mjs';
 import {FairGate,heavyTool,normalizeCompaction} from './gate.mjs';
 import {resourceSnapshot} from './resources.mjs';
+import {bindHeavyToolLease} from './heavy-tool-lease.mjs';
 
 export const name='qwen-efficiency';
 export const inject=['agents','tools','systemPrompt','shell','shellEnv','llm','sessionQuery'];
@@ -107,9 +108,9 @@ export async function apply(ctx,config={}){
   ctx.tools.guard(exec=>rewriteDenials.get(exec.token));
 
   ctx.on('tools/execute',async(exec,next)=>{
-    if(!exec.agent)return next();const {id}=activeFor(exec.agent),queued=Date.now();let permit,started;
-    try{if(config.schedule!==false&&heavyTool(exec)){permit=await toolGate.acquire({rootId:id,signal:exec.signal});phase(id,'tool-queue',queued,Date.now());}started=Date.now();return await next();}
-    finally{phase(id,started===undefined?'tool-queue':'tools',started??queued,Date.now());permit?.release();}
+    if(!exec.agent)return next();const {id}=activeFor(exec.agent),queued=Date.now();let permit,started,release;
+    try{if(config.schedule!==false&&heavyTool(exec)){permit=await toolGate.acquire({rootId:id,sessionId:exec.agent.id,signal:exec.signal});phase(id,'tool-queue',queued,Date.now());started=Date.now();release=bindHeavyToolLease(exec,permit,()=>phase(id,'heavy-tools',started,Date.now()));}started??=Date.now();return await next();}
+    finally{phase(id,started===undefined?'tool-queue':'tools',started??queued,Date.now());if(release)release();else permit?.release();}
   },{global:true});
   ctx.on('tools/result',(exec,result)=>{
     rewriteDenials.delete(exec.token);

@@ -1,4 +1,5 @@
 import { WorkbenchError } from './policy.mjs';
+import { retainHeavyToolLease } from '../efficiency/heavy-tool-lease.mjs';
 
 export const DEFAULT_PROJECT_JOB_LIFETIME_MS = 300000;
 export const MAX_PROJECT_JOB_LIFETIME_MS = 600000;
@@ -32,6 +33,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     const jobs = typeof ctx.get === 'function' ? ctx.get('jobs') : ctx.jobs;
     if (!jobs || typeof jobs.start !== 'function') throw new WorkbenchError('PROJECT_JOBS_UNAVAILABLE', 'Background commands require the SDK job registry and job_output/job_kill controller. Use a bounded foreground command until they are available.', 503);
     const lifetimeMs = projectJobLifetime(args.timeoutMs);
+    const releaseAdmission = retainHeavyToolLease(execution);
     const controller = new AbortController(); let process, id, timer, done, settled = false, stopReason;
     const cancel = reason => {
       if (settled || controller.signal.aborted) return;
@@ -72,6 +74,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
             } finally {
               settled = true; if (timer !== undefined) clearTimer(timer);
               if (id !== undefined) active.delete(id);
+              releaseAdmission();
             }
           });
           return { done, cancel };
@@ -80,6 +83,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     } catch (error) {
       cancel('background registration did not commit');
       if (done) await done;
+      releaseAdmission();
       throw error;
     } finally { execution.signal.removeEventListener('abort', abortBeforeCommit); }
     if (execution.signal.aborted) {

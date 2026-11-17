@@ -24,7 +24,16 @@ export class FairGate {
   close(){this.closed=true;for(const t of this.waiting){t.signal?.removeEventListener('abort',t.abort);t.reject(Error('Scheduler unloaded'));}this.waiting=[];this.changed();}
 }
 
-export const heavyTool = exec => exec.name==='verify_project'||exec.name==='project_exec'&&/\b(?:npm|pnpm|yarn|dotnet|pytest|playwright|tsc|vite|cargo|make|cmake|gcc|clang|pip)\b/u.test(exec.arguments?.command??'');
+export function heavyTool(exec) {
+  if (exec.name === 'verify_project') return true;
+  if (!['project_exec', 'bash', 'terminal'].includes(exec.name)) return false;
+  if (exec.arguments?.run_in_background === true) return true;
+  const command = String(exec.arguments?.command ?? '').trim();
+  // Only simple inspection commands bypass admission. Unknown scripts, shell
+  // compounds and language runtimes can consume the same resources as a build.
+  if (!command || /[\n\r;&|<>`$()]/u.test(command)) return true;
+  return !/^(?:(?:pwd|ls|cat|head|tail|wc|stat|readlink|realpath|rg|grep|echo|printf)(?:\s|$)|git\s+(?:status|diff|log|show|ls-files)(?:\s|$))/u.test(command);
+}
 
 export const COMPACTION_HANDOFF='HomeAI handoff v2: Write a factual handoff in at most 600 words. Keep separate: original user goal and acceptance constraints; latest actual user correction and how it changes the goal; current files and verified changes; unsaved drafts, save conflicts and pending operations; unresolved errors with exact diagnostics or full-log paths; the next concrete action. Preserve any requested output draft already in progress. A status question or resume does not replace the original goal. Distinguish observed facts, assumptions, failed attempts and checks not run. Keep exact identifiers needed to continue. Omit repeated tool catalogs, environment boilerplate, chronological narration and superseded fixes. Do not invent progress or claim acceptance without evidence.';
 export function normalizeCompaction(options){
