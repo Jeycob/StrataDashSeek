@@ -13,6 +13,7 @@ import { guideFirstCheck, warnStageBudget } from './verification-guidance.mjs';
 import { verificationStatusMayBeMasked } from './shell-status.mjs';
 import { beginUserRequest } from './turn-budget.mjs';
 import { prepareAutomaticRequest, automaticReview, admitAutomaticStep } from './automatic-review.mjs';
+import { registeredSelection, validateWorkspaceModel } from './model-selection.mjs';
 import privateSource from './source-private.cjs';
 const { isPrivateSourcePath } = privateSource;
 const run = promisify(execFile);
@@ -45,7 +46,7 @@ export class WorkspaceManager {
   async updateSettings(workspaceId, input) {
     return this.inOrder(async () => {
       if (!this.ctx.workspaceRegistry.get(workspaceId)) throw new WorkbenchError('WORKSPACE_NOT_FOUND', 'Workspace not found.', 404);
-      const settings = validateSettings(input); await this.ctx.llm.resolveCallConfig({ provider: settings.provider, model: settings.model, reasoningEffort: settings.reasoningEffort, maxTokens: settings.maxTokens, temperature: settings.temperature });
+      const settings = validateSettings(input); await validateWorkspaceModel(this.ctx, input);
       const overrides = Object.fromEntries(Object.keys(input).map(key => [key, settings[key]]));
       const previous = this.data.workspaces[workspaceId];
       this.data.workspaces[workspaceId] = { settings: overrides, at: Date.now() };
@@ -54,11 +55,11 @@ export class WorkspaceManager {
     });
   }
   async applyDefaults(agent, source) {
-    if (source !== 'startup' || agent.session.header.origin === 'subagent' || agent.session.header.isSeeded) return;
+    if (source !== 'startup' || agent.session.header.origin === 'subagent' || agent.session.header.isSeeded || this.data.modelPreferences?.[agent.id]) return;
     const settings = this.settings(agent.session);
     // Deliberately do not save the selection as the account-wide last-used default.
-    await this.ctx.llm.resolveCallConfig({ provider: settings.provider, model: settings.model, reasoningEffort: settings.reasoningEffort });
-    agent.model.select({ provider: settings.provider, model: settings.model, reasoningEffort: settings.reasoningEffort });
+    const selection = await registeredSelection(this.ctx, settings, { defaultEffort: true });
+    agent.model.select(selection);
   }
   async allocatePorts() {
     const used = new Set(Object.values(this.data.sessions).flatMap(x => x.ports ?? []));

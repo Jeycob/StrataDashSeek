@@ -93,3 +93,10 @@
   .harness-native-changes header { flex-wrap: wrap; gap: 8px; }
   .harness-native-changes .hc-diff-table .hc-code { white-space: pre-wrap; overflow-wrap: anywhere; }
 }
+.harness-model-pane { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden; }
+.harness-model-pane-content { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.harness-conversation-model { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; border-bottom: 1px solid var(--dsw-alias-border-l3, #e2e4e8); color: var(--dsw-alias-label-primary, #24292f); background: var(--dsw-alias-bg-base, #fff); font: 13px system-ui, sans-serif; }
+.harness-conversation-model, .harness-conversation-model * { box-sizing: border-box; }
+.harness-conversation-model label { display: flex; flex: 1 1 180px; flex-direction: column; gap: 4px; min-width: 0; }
+.harness-conversation-model select { width: 100%; min-width: 0; max-width: 100%; color: inherit; background: var(--dsw-alias-bg-base, #fff); border: 1px solid var(--dsw-alias-border-l3, #e2e4e8); border-radius: 6px; padding: 6px; }
+.harness-conversation-model small, .harness-conversation-model p { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
