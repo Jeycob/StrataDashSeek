@@ -4,6 +4,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { WorkspaceManager } from './manager.mjs';
+import { bindProjectExecution } from './execution-mode.mjs';
+import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import { ProjectLocks, saveCheckpoint, sourceManifest } from './storage.mjs';
 async function fixture(t) {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), 'manager-restore-')); t.after(() => fs.rm(base, { recursive: true, force: true }));
@@ -12,6 +14,7 @@ async function fixture(t) {
   await fs.writeFile(path.join(root, 'app.js'), 'working');
   const session = { id: 'one', header: { cwd: root } }, agent = { id: 'one', status: 'idle', session };
   const manager = Object.create(WorkspaceManager.prototype); manager.root = state;
+  Object.defineProperty(manager, 'execution', { value: bindProjectExecution(hostExecutionBinding()), enumerable: true });
   manager.data = { sessions: { one: { root, checkpoints: { test: { path: checkpoint, sha256: manifest.sha256 } } } } };
   manager.locks = new ProjectLocks(path.join(state, 'leases')); manager.running = new Map(); manager.resultWork = new Map(); manager.save = async () => {};
   let mode = 'workspace-write'; manager.ctx = { sessions: { get: () => session }, agents: { get: () => agent }, sandboxPolicy: { resolve: () => ({ mode }) }, waterfall: async () => [] };
