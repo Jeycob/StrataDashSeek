@@ -37,6 +37,7 @@ export async function apply(ctx, config = {}) {
   registerRuntimeCapabilities(ctx, manager, capabilities);
   const composition=composeProjectExecution(ctx,manager,{appsConfig,callApps,capabilities}),managedShell=composition;
   ctx.effect(()=>()=>composition.dispose());
+  if(composition.isolated)await composition.ready;
   let lastCacheCleanup = 0, cacheCleanupPending;
   const cleanupCaches = () => {
     if (composition.isolated) return;

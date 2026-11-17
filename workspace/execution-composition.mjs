@@ -7,6 +7,7 @@ import {createProjectFileTools} from './project-file-tools.mjs';
 import {createProjectFileHandlers,projectRelativePath} from './project-file-executor.mjs';
 import {createGuestContext} from './guest-context.mjs';
 import {createGuestHelperTools,createGuestJobTools} from './guest-helper-tools.mjs';
+import {createConversationTools} from './conversation-tools.mjs';
 import {installProjectVerification} from './project-verification.mjs';
 import {createProjectAppsTools} from './project-apps-tools.mjs';
 import {createProjectAppsReceiptStore} from './project-apps-receipts.mjs';
@@ -31,7 +32,7 @@ export function composeProjectExecution(ctx,manager,{appsConfig,callApps,capabil
  const run=factories.guestRunner(ctx,manager,{appsConfig,callApps,receiptStore:runtimeReceipts},execution);
  const project=registerProjectTool(ctx,manager,run,execution),managedShell=createManagedShell(ctx,manager,run,execution);
  const context=createGuestContext(ctx,manager,run,execution),files=createProjectFileTools(ctx,manager,createProjectFileHandlers(run,{executionBinding:execution,beforeMutation:context.beforeMutation}),execution);
- const helpers=createGuestHelperTools(ctx,manager,context,execution,run.assertAvailable),jobs=createGuestJobTools(ctx,execution);
+ const helpers=createGuestHelperTools(ctx,manager,context,execution,run.assertAvailable),jobs=createGuestJobTools(ctx,execution),conversation=(factories.conversationTools??createConversationTools)(ctx,execution);
  const projectApps=factories.projectApps(ctx,manager,{appsConfig,callApps,retainHeavyToolLease,receiptStore:appsReceipts},execution);
  const removeVerification=installProjectVerification(ctx,manager,run,execution);
  let editorOptions;
@@ -44,13 +45,13 @@ export function composeProjectExecution(ctx,manager,{appsConfig,callApps,capabil
  // With Apps/VM OFF, no origins, identity/certificates or adapter are needed.
  const editors=factories.editorSessions(ctx,manager,editorOptions,execution),capabilityDefinitions=new WeakSet(),capabilityRegistrations=new Map();let closed=false;
  function install(agent){
-  check();if(closed)throw Error('PROJECT_EXECUTION_WORKSPACE_CLOSED');managedShell.install(agent);files.install(agent);helpers.install(agent);jobs.install(agent);
+  check();if(closed)throw Error('PROJECT_EXECUTION_WORKSPACE_CLOSED');managedShell.install(agent);files.install(agent);helpers.install(agent);jobs.install(agent);conversation.install(agent);
   if(capabilities&&!capabilityRegistrations.has(agent)){
    const definition={name:'runtime_capabilities',description:'Read bounded capabilities of this bound isolated project without waking Apps or choosing a host fallback.',parameters:{type:'object',properties:{},additionalProperties:false},isConcurrencySafe:()=>true,output:{schema:{type:'object'},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]},async execute(_args,actual){check();actual.signal.throwIfAborted();const owner=manager.ownerAgent(actual.agent),record=manager.data.sessions[owner?.id];if(!record||record.legacy)throw Error('NO_MANAGED_PROJECT');const value=await capabilities.snapshot(record.root);check();return value;}};
    capabilityDefinitions.add(definition);capabilityRegistrations.set(agent,{definition,remove:agent.ctx.tools.register(definition)});
   }
  }
- function remove(agent){managedShell.remove(agent);files.remove(agent);helpers.remove(agent);jobs.remove(agent);const entry=capabilityRegistrations.get(agent);if(entry){capabilityDefinitions.delete(entry.definition);entry.remove();capabilityRegistrations.delete(agent);}}
+ function remove(agent){managedShell.remove(agent);files.remove(agent);helpers.remove(agent);jobs.remove(agent);conversation.remove(agent);const entry=capabilityRegistrations.get(agent);if(entry){capabilityDefinitions.delete(entry.definition);entry.remove();capabilityRegistrations.delete(agent);}}
  function managerExecution(actual){
   const owner=manager.ownerAgent(actual.agent),record=manager.data.sessions[owner?.id];let args=actual.arguments;
   // The manager's existing target/operation accounting uses its host project
@@ -63,6 +64,6 @@ export function composeProjectExecution(ctx,manager,{appsConfig,callApps,capabil
  // Install all existing/seeded scopes before opening the permanent root slot.
  // Future children are synchronously shadowed by the plugin's created hook.
  for(const agent of ctx.agents.list())install(agent);
- const close=execution.registerWorkspace({handles:actual=>!closed&&([project,managedShell,files,helpers,jobs,projectApps].some(owner=>owner.handles(actual))||capabilityDefinitions.has(ctx.tools.get(actual.name,actual.agent,actual.toolSet))),async beforeHeavy(actual){check();await projectApps.beforeHeavy();check();await run.beforeHeavy(actual.signal);check();}});
- return{isolated,run,editors,install,remove,handles:managedShell.handles,managerExecution,async dispose(){if(closed)return;closed=true;close();for(const agent of [...capabilityRegistrations.keys()])remove(agent);managedShell.dispose();files.dispose();helpers.dispose();jobs.dispose();context.dispose();removeVerification?.();project.dispose();await Promise.allSettled([projectApps.dispose(),run.dispose(),editors.dispose()]);}};
+ const close=execution.registerWorkspace({handles:actual=>!closed&&([project,managedShell,files,helpers,jobs,conversation,projectApps].some(owner=>owner.handles(actual))||capabilityDefinitions.has(ctx.tools.get(actual.name,actual.agent,actual.toolSet))),async beforeHeavy(actual){check();await projectApps.beforeHeavy();check();await run.beforeHeavy(actual.signal);check();}});
+ return{isolated,ready:conversation.ready,run,editors,install,remove,handles:managedShell.handles,managerExecution,async dispose(){if(closed)return;closed=true;close();for(const agent of [...capabilityRegistrations.keys()])remove(agent);managedShell.dispose();files.dispose();helpers.dispose();jobs.dispose();context.dispose();removeVerification?.();project.dispose();await Promise.allSettled([conversation.dispose(),projectApps.dispose(),run.dispose(),editors.dispose()]);}};
 }
