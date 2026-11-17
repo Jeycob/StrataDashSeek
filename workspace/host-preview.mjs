@@ -46,7 +46,7 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
  function liveContext(sessionId,access){
   check();need(ID.test(sessionId),'PREVIEW_SESSION_INVALID');
   const agent=ctx.agents.get(sessionId),record=manager.data.sessions[sessionId];
-  need(agent&&manager.ownerAgent(agent)===agent&&record&&!record.legacy&&!manager.data.trash?.[sessionId]&&!ctx.workspaceRegistry.archivedSessionIds.has(sessionId),'PREVIEW_PROJECT_UNAVAILABLE');
+  need(agent&&manager.ownerAgent(agent)===agent&&record&&!record.legacy&&!manager.data.trash?.[sessionId]&&!ctx.workspaceRegistry.archivedSessionIds.includes(sessionId),'PREVIEW_PROJECT_UNAVAILABLE');
   if(access)need(ctx.agents.get(access.id)===access&&manager.ownerAgent(access)===agent,'PREVIEW_ACCESS_CHANGED');
   const workspaces=ctx.workspaceRegistry.list().filter(w=>w.sessionIds.includes(sessionId));need(workspaces.length===1&&(!record.workspaceId||workspaces[0].id===record.workspaceId),'PREVIEW_WORKSPACE_CHANGED');
   for(const subject of [agent,access].filter(Boolean))need(['workspace-write','danger-full-access'].includes(ctx.sandboxPolicy.resolve({session:subject.session})?.mode),'PREVIEW_READ_ONLY');

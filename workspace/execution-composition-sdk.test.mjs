@@ -35,7 +35,7 @@ async function fixture(t,{mode='isolated-guest',off=false,guest,hostPreview,edit
  ctx.provide('agents',{list:()=>[...agents.values()],get:id=>agents.get(id)});
  ctx.provide('llm',{});ctx.provide('sessionQuery',{readSession:async()=>({events:[]})});
  ctx.provide('connection',{fetch:{register:route=>{routes.set(route.path,route);return()=>routes.delete(route.path);}}});
- ctx.provide('workspaceRegistry',{archivedSessionIds:new Set()});ctx.provide('sandboxPolicy',{resolve:()=>({mode:'workspace-write'})});
+ ctx.provide('workspaceRegistry',{archivedSessionIds:Object.freeze([])});ctx.provide('sandboxPolicy',{resolve:()=>({mode:'workspace-write'})});
  ctx.provide('shellEnv',{collect:()=>({})});ctx.provide('shell',{execute(){state.hostShell++;throw Error('HOST_SHELL_TRIPWIRE');}});
  new LocalJobs(ctx,{maxConcurrentJobsPerOwner:4,retainBytes:65536,settledRetainBytes:16000,pumpPollMs:2});
  let execution;

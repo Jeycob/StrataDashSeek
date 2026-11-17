@@ -20,8 +20,8 @@ let modules;
 function sdk(){return modules??=(async()=>{
  const cli=process.env.HARNESS_NATIVE_CLI??path.join(process.env.HOMEAI_RUNTIME??'/data/harness/runtime','node_modules/@deepseek-ai/dsh/lib/bin.js'),base=path.resolve(path.dirname(cli),'../..');
  const load=name=>import(pathToFileURL(path.join(base,name,'lib/index.js')));
- const [C,P,T,J,S,pipeline,output,sandbox]=await Promise.all([load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-jobs-local'),load('dsh-scope'),import(pathToFileURL(path.join(base,'dsh-tools/lib/pipeline.js'))),import(pathToFileURL(path.join(base,'dsh-subprocess-local/lib/output.js'))),load('dsh-sandbox-local')]);
- return{...C,SystemPrompt:P.default,Tools:T.default,Jobs:J.default,...S,...pipeline,...output,Sandbox:sandbox.default};
+ const [C,P,T,J,S,pipeline,output,sandbox,workspace]=await Promise.all([load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-jobs-local'),load('dsh-scope'),import(pathToFileURL(path.join(base,'dsh-tools/lib/pipeline.js'))),import(pathToFileURL(path.join(base,'dsh-subprocess-local/lib/output.js'))),load('dsh-sandbox-local'),load('dsh-workspace')]);
+ return{...C,SystemPrompt:P.default,Tools:T.default,Jobs:J.default,...S,...pipeline,...output,Sandbox:sandbox.default,workspaceDomainState:workspace.workspaceDomainState};
 })();}
 const tick=()=>new Promise(resolve=>setTimeout(resolve,5));
 async function until(check){for(let n=0;n<200;n++){if(await check())return;await tick();}assert.fail('bounded fixture wait');}
@@ -34,7 +34,11 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
  ctx.provide('projectExecutionMode',createProjectExecutionMode(hostExecutionBinding()).service);
  const agents=new Map(),scopes=[],workspaces=[],routes=new Map(),events=new Map(),processes=[],calls=[],targets=[],brokers=[],relays=[];
  ctx.provide('agents',{get:id=>agents.get(id),list:()=>[...agents.values()]});
- ctx.provide('workspaceRegistry',{list:()=>workspaces,archivedSessionIds:new Set()});
+ // Use the pinned SDK's actual domain schema: the public archive view is a
+ // readonly SessionId ARRAY, not a Set. Freeze it to catch consumer mutation.
+ let workspaceState=S.workspaceDomainState.parse({initialized:true,workspaceIds:[],archivedSessionIds:[],pinnedSessionIds:[]});Object.freeze(workspaceState.archivedSessionIds);
+ const archive=id=>{workspaceState=S.workspaceDomainState.parse({...workspaceState,archivedSessionIds:[...workspaceState.archivedSessionIds,id]});Object.freeze(workspaceState.archivedSessionIds);};
+ ctx.provide('workspaceRegistry',{list:()=>workspaces,get archivedSessionIds(){return workspaceState.archivedSessionIds;}});
  ctx.provide('shellEnv',{collect:()=>({})});ctx.provide('sandboxPolicy',{resolve:({session})=>({mode:session.mode??'workspace-write'})});
  // Synthetic sole-rung selection: no real probe/process. Production uses the
  // actual unchanged selected backend and never receives internals overrides.
@@ -72,7 +76,7 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
  async function call(a,name,value,signal=new AbortController().signal){const toolSet=await ctx.tools.resolve({agent:a,modelSelection:a.model.current(),signal});try{const report=await ctx.tools.execute({agent:a,signal,toolSet,calls:[{id:'preview-'+(++sequence),name,arguments:JSON.stringify(value)}]});return report.results[0].result;}finally{toolSet.dispose();}}
  const control=input=>preview.operation(input,{ownerControl:true});
  t.after(async()=>{for(const p of processes){p.hold=false;if(p.kills)p.release();}await preview.dispose();await run.dispose();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();assert(path.resolve(directory).startsWith(path.resolve(os.tmpdir())+path.sep+'host-preview-sdk-'));await fs.rm(directory,{recursive:true,force:true});});
- return{ctx,manager,run,preview,agent,call,control,processes,calls,targets,brokers,relays,routes,workspaces,state,projects,set rejectPeer(value){rejectPeer=value;}};
+ return{ctx,manager,run,preview,agent,call,control,processes,calls,targets,brokers,relays,routes,workspaces,state,projects,archive,set rejectPeer(value){rejectPeer=value;}};
 }
 async function start(f,agent){const result=await f.call(agent,'project_exec',args);assert.equal(result.isError,false,JSON.stringify(result));return result.value.jobId;}
 async function open(f,agent,jobId){const result=await f.call(agent,'project_preview',{operation:'open',jobId});assert.equal(result.isError,false,JSON.stringify(result));return result.value;}
@@ -170,7 +174,7 @@ test('aborted open closes a late-bound broker and relay without stopping the ori
 
 for(const event of ['archive','mode','dispose'])test('actual scoped '+event+' lifecycle revokes its preview and drains only its producer',async t=>{
  const f=await fixture(t),a=await f.agent('owner'),b=await f.agent('foreign'),opened=await open(f,a,await start(f,a));await start(f,b);
- if(event==='archive'){f.ctx.workspaceRegistry.archivedSessionIds.add(a.id);f.ctx.emit('workspace/session-archived',{sessionId:a.id});}
+ if(event==='archive'){f.archive(a.id);f.ctx.emit('workspace/session-archived',{sessionId:a.id});}
  if(event==='mode'){a.session.mode='read-only';f.ctx.emit('session/event',a.session,{type:'sandbox/mode'});}
  if(event==='dispose')f.preview.remove(a);
  assert(f.brokers[0].closed>0);await until(()=>f.processes[0].status==='killed');assert.equal(f.processes[1].kills,0);assert.equal(f.targets.length,1);assert.equal(opened.state,'ready');
@@ -190,7 +194,7 @@ for(const change of ['dispose','archive','workspace'])test('late custody after '
  const waiting=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});f.run.custodyFor=async(...args)=>{const capture=await original(...args);entered();await gate;return capture;};
  const pending=f.preview.operation({operation:'open',jobId:id},{agent:a}),rejected=assert.rejects(pending);await waiting;
  if(change==='dispose')await f.preview.dispose();
- if(change==='archive')f.ctx.workspaceRegistry.archivedSessionIds.add(a.id);
+ if(change==='archive')f.archive(a.id);
  if(change==='workspace'){f.workspaces[0].id='changed';f.manager.data.sessions[a.id].workspaceId='changed';}
  release();await rejected;assert.equal(f.targets.length+f.brokers.length+f.relays.length,0);await assert.rejects(fs.stat(path.join(f.state,'host-preview-origins.json')),{code:'ENOENT'});await assert.rejects(fs.stat(path.join(f.state,'preview-relays')),{code:'ENOENT'});assert.equal(f.processes[0].kills,0);
 });
@@ -216,4 +220,11 @@ test('only trusted owner status correlates original admitted SDK call and curren
 test('missing or oversized private SDK correlation stays unknown and never becomes caller-selected authority',async t=>{
  const f=await fixture(t),a=await f.agent('owner'),background=await f.run.startWithCustody(args,{agent:a,callId:'x'.repeat(257),rootCallId:'bad\nid',name:'project_exec',signal:new AbortController().signal}),lease=await f.run.custodyFor(background.jobId,a.id);
  assert.equal(lease.call.callId,null);assert.equal(lease.call.rootCallId,null);assert.equal(lease.call.toolName,'project_exec');assert.deepEqual(Object.keys(background).sort(),['cwd','jobId','kind']);assert.equal((await f.call(a,'project_preview',{operation:'status',callId:'caller-value'})).isError,true);
+});
+
+test('owner status with actual SDK archive arrays serves own ready preview and refuses archived session without generic503',async t=>{
+ const f=await fixture(t),a=await f.agent('owner'),id=await start(f,a),opened=await open(f,a,id);assert(Array.isArray(f.ctx.workspaceRegistry.archivedSessionIds));assert(Object.isFrozen(f.ctx.workspaceRegistry.archivedSessionIds));assert.equal(f.ctx.workspaceRegistry.archivedSessionIds.has,undefined);
+ const status=()=>f.routes.get('/api/workbench/preview').fetch(new Request('http://dsh.internal/api/workbench/preview',{method:'POST',headers:{host:'same.test',origin:'https://same.test','content-type':'application/json'},body:JSON.stringify({operation:'status',sessionId:a.id})}));
+ f.archive('unrelated-session');let response=await status();assert.equal(response.status,200);const ready=await response.json();assert.equal(ready.state,'ready');assert.equal(ready.previewId,opened.previewId);assert.equal(ready.jobId,id);assert.equal(ready.correlation.ownerAgentId,a.id);assert.equal(f.targets.length,1);
+ f.archive(a.id);response=await status();assert.equal(response.status,409);assert.deepEqual(await response.json(),{code:'PREVIEW_PROJECT_UNAVAILABLE'});assert.equal(f.targets.length,1);assert.equal((await f.call(a,'project_preview',{operation:'status'})).isError,true);
 });
