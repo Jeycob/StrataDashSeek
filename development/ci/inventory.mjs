@@ -9,6 +9,7 @@ const helpers = new Map([
   ['vast/apps-browser-check.cjs', 'Owned-release browser verification adapter; requires a project, plan and release ID.']
 ]);
 const hostFixtures = new Map([
+  ['workspace/owned-range-linux.test.mjs', 'Explicit operator-prepared nonroot /var/lib fixture and actual same-host SDK backend; proves leader-surviving descendant range and retained permit before preview activation.'],
   ['workspace/project-custody-linux.test.mjs', 'Root-prepared existing nonroot account and canonical /var/lib fixture with explicit real Landlock/bwrap backend; operator qualification records positive custody and namespace refusal separately.'],
   ['workspace/host-peer-connector-linux.test.mjs', 'Explicit Root-controlled real SDK loopback fixture with probed Landlock; production service-UID proc visibility is separately qualified before preview activation.'],
   ['workspace/code-server.browser.test.cjs', 'Actual code-server acceptance against an explicitly prepared local WSL fixture and HOMEAI_EDITOR_URL; independent runtime evidence remains separate from required portable Native panel fixtures.'],

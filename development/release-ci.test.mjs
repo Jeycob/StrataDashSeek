@@ -76,7 +76,7 @@ test('discovery includes development, Python and new test directories while repo
   assert.equal(classify('workspace/native-ui/test-bundle.cjs').kind, 'helper');
   assert.equal(classify('deployments/apps-live-lifecycle-check.cjs').outcome, 'unrunnable');
   assert.equal(classify('deployments/apps-live-lifecycle-check.cjs').required, false);
-  for(const file of ['workspace/project-custody-linux.test.mjs','workspace/host-peer-connector-linux.test.mjs']){const row=classify(file);assert.equal(row.lane,'outside-ci');assert.equal(row.required,false);assert.equal(row.outcome,'unrunnable');}
+  for(const file of ['workspace/project-custody-linux.test.mjs','workspace/host-peer-connector-linux.test.mjs','workspace/owned-range-linux.test.mjs']){const row=classify(file);assert.equal(row.lane,'outside-ci');assert.equal(row.required,false);assert.equal(row.outcome,'unrunnable');}
   assert.equal(classify('benchmarks/historical/challenge.test.cjs').required, false);
   assert.equal(candidate('vast/startup-extract-tests.py'), true);
 });

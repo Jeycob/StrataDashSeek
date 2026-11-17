@@ -8,7 +8,7 @@ export const projectJobLifetime = timeoutMs => Math.min(MAX_PROJECT_JOB_LIFETIME
 const evidenceId=value=>typeof value==='string'&&/^[\x21-\x7e]{1,256}$/.test(value)?value:null;
 export const projectBackgroundSchema = { type: 'object', properties: { kind: { type: 'string', const: 'background' }, jobId: { type: 'string' }, cwd: { type: 'string' } }, required: ['kind', 'jobId', 'cwd'], additionalProperties: false };
 export function renderProjectBackground(args, value) {
-  return [{ type: 'text', text: `Started background job ${value.jobId}. Maximum lifetime: ${projectJobLifetime(args.timeoutMs)}ms. Read status/logs with job_output or job_list; stop this owned job with job_kill. Do not use nohup, setsid or process-name kills.` }];
+  return [{ type: 'text', text: `Started background job ${value.jobId}. Maximum lifetime: ${projectJobLifetime(args.timeoutMs)}ms. Read status/logs with job_output or job_list; stop this owned job with job_kill. Other build/test commands wait while this job runs: run those checks before starting a long-lived server, or stop this job first. Do not use nohup, setsid or process-name kills.` }];
 }
 
 // Only SDK-owned handles are retained. Never discover/adopt arbitrary PIDs or

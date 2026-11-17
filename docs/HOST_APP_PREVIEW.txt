@@ -209,7 +209,10 @@ kernel, TLS/browser, UID1001 or deployed owner-Peer acceptance. Root owns those
 runtime qualifications, signed integration and configuration. The prepared
 owned-range-linux.test.mjs requires explicit operator selection and a fresh
 canonical non-writable-by-others /var/lib/homeai-owned-range-fixture-* directory
-owned by its executing UID. It redirects the synthetic descendant's pipes so
+owned by its executing UID/GID with mode0700 and a12-character alphanumeric
+suffix. The fixture creates and removes only its fresh verified run-* child;
+after actual fixture exit Root removes the now-empty outer with rmdir. It
+redirects the synthetic descendant's pipes so
 the wrapper can exit, verifies that the job/permit remain held, then uses only
 exact owned stop and observes its TERM trap and eventual range exit. B has not
 executed this fixture. Live preview
