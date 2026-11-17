@@ -22,6 +22,7 @@ const defaults=Object.freeze({hostRunner:createProjectCommandRunner,guestRunner:
 // Trusted source-only fixture seam: factories are supplied directly by test
 // code, never plugin config or a browser value. Production always uses defaults.
 export function composeProjectExecution(ctx,manager,{appsConfig,callApps,capabilities}={},factories=defaults){
+ factories={...defaults,...factories};
  const execution=requireProjectExecutionMode(ctx),isolated=execution.snapshot.mode==='isolated-guest',check=()=>execution.assertUnchanged();check();
  const shell=isolated?null:factories.hostRunner(ctx,manager,{},execution);
  if(!isolated){

@@ -22,6 +22,11 @@ export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceReg
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 export async function apply(ctx, config = {}) {
+  return applyTrustedWorkspace(ctx, config, undefined);
+}
+// Source-only composition seam for full runtime fixtures. Plugin/HTTP config
+// cannot select factories or redirect the production SDK.
+export async function applyTrustedWorkspace(ctx, config = {}, compositionFactories) {
   const sourceCommit = path.basename(await fs.realpath(root));
   const admission = installRuntimeAdmission(ctx, { expectedCommit: sourceCommit });
   const execution = ctx.projectExecutionMode;
@@ -35,7 +40,7 @@ export async function apply(ctx, config = {}) {
   const capabilities = createRuntimeCapabilities({ workspaceRoot: config.appsWorkspaceRoot ?? appsConfig?.workspaceRoot ?? path.dirname(manager.projectsRoot), capacityPath: appsConfig?.stateDir ?? '/data/harness/state/applications', minFreeBytes: appsConfig?.minFreeBytes ?? 2 * 1024 ** 3,
     ...(appsConfig ? { readAppsState: ({ signal }) => callApps('/state', undefined, { ...appsConfig, signal, timeoutMs: 1500 }) } : {}) }, execution);
   registerRuntimeCapabilities(ctx, manager, capabilities);
-  const composition=composeProjectExecution(ctx,manager,{appsConfig,callApps,capabilities}),managedShell=composition;
+  const composition=composeProjectExecution(ctx,manager,{appsConfig,callApps,capabilities},compositionFactories),managedShell=composition;
   ctx.effect(()=>()=>composition.dispose());
   if(composition.isolated)await composition.ready;
   let lastCacheCleanup = 0, cacheCleanupPending;

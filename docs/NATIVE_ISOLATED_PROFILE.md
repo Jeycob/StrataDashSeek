@@ -70,7 +70,7 @@ discovery would require a separate guest-backed context provider. Historical
 instruction text already recorded in a session is not erased or reread by this
 unit; activation and legacy-session review remain separate requirements.
 
-Tests use only public synthetic temporary files. Actual SDK readers are mounted
+Reader tests use only public synthetic temporary files. Actual SDK readers are mounted
 through the public boot carrier before first Tools resolution. The native
 unprojected path includes normal AGENTS/skill sentinels and an external skill
 directory-link sentinel before any tool executes; projected readers yield zero
@@ -82,6 +82,34 @@ adapters, preparation order, readiness and shutdown. It does not start a web
 server, use a model, publish a real policy/snapshot, or access a guest, live
 backend or private data. The new suite passed **12/12 with zero skips** on local
 Linux Node24 with the existing exact SDK, including both external file links;
-the focused Windows run passed 78/79 with only that privilege skip. Full isolated
-web startup remains an integration qualification requirement. Policy activation,
-rollback enforcement floor and isolation acceptance are not provided here.
+the focused Windows run passed 78/79 with only that privilege skip.
+
+`development/native-isolated-web.test.mjs` additionally starts one owned child
+with the complete pinned Linux Native WEB composition, public carrier and real
+workspace plugin. It uses a new temporary home/profile/session/project and
+snapshot, a synthetic validated isolated binding, the real Root mode/admission
+service with an injected synthetic admission client, and Apps/VM unavailable.
+This tests the actual Native web listener, anonymous API refusal, launch-token
+owner authentication, `owner-api.cjs` RPC, workspace health/injection, isolated
+execution route, native/workbench catalog metadata, one real seeded Session
+with its standard preset and first ToolSet, the exact AppsOFF command refusal,
+and settled child shutdown. A positive read control calibrates access times on
+the two external public sentinel targets; neither is accessed by Native startup
+or first ToolSet resolution. The earlier reader fixture covers pre-step too.
+
+The trusted-only `applyTrustedWorkspace(ctx, config, compositionFactories)` seam
+lets that direct fixture supply only the reviewed conversation consumer loader
+for the existing installed SDK. Production `apply(ctx, config)` passes undefined
+and retains the same defaults; config and HTTP never select factories or SDK
+paths. Composition merges partial trusted overrides with its existing defaults.
+The test pre-enrolls only its synthetic project registry metadata and does not
+test project cloning/enrollment. It does not invoke a model, contact a guest or
+live backend, publish a real mode/snapshot, change `/data/harness`, mount a path,
+or use operator credentials. It is functional local WEB startup qualification,
+not Root broker/trust-server, guest, policy activation, rollback-floor or
+isolation acceptance.
+
+The combined Linux reader, full WEB, workspace composition/mode, conversation
+helper and managed-shell regression run passed **80/80, zero skips**, using the
+existing complete pinned SDK and Node24. No production carrier bootstrap change
+was necessary to obtain that result.
