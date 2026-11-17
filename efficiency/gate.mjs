@@ -26,7 +26,8 @@ export class FairGate {
 
 export const heavyTool = exec => exec.name==='verify_project'||exec.name==='project_exec'&&/\b(?:npm|pnpm|yarn|dotnet|pytest|playwright|tsc|vite|cargo|make|cmake|gcc|clang|pip)\b/u.test(exec.arguments?.command??'');
 
+export const COMPACTION_HANDOFF='HomeAI handoff v2: Write a factual handoff in at most 600 words. Keep separate: original user goal and acceptance constraints; latest actual user correction and how it changes the goal; current files and verified changes; unsaved drafts, save conflicts and pending operations; unresolved errors with exact diagnostics or full-log paths; the next concrete action. Preserve any requested output draft already in progress. A status question or resume does not replace the original goal. Distinguish observed facts, assumptions, failed attempts and checks not run. Keep exact identifiers needed to continue. Omit repeated tool catalogs, environment boilerplate, chronological narration and superseded fixes. Do not invent progress or claim acceptance without evidence.';
 export function normalizeCompaction(options){
-  if(options.purpose!=='compaction'||options.reasoningEffort==='off'&&(options.maxTokens??0)>=8192)return null;
-  return{...options,reasoningEffort:'off',maxTokens:Math.max(8192,options.maxTokens??0),messages:[...(options.messages??[]),{role:'user',content:[{type:'text',text:'Write a factual handoff in at most1000 words. Preserve the concrete goal, constraints, exact paths, verified changes, unresolved errors and next actions. Do not repeat tool catalogs or environment boilerplate. Do not invent facts.'}]}]};
+  if(options.purpose!=='compaction'||options.messages?.some(message=>message.content?.some?.(block=>block.type==='text'&&block.text===COMPACTION_HANDOFF)))return null;
+  return{...options,reasoningEffort:'off',maxTokens:4096,messages:[...(options.messages??[]),{role:'user',content:[{type:'text',text:COMPACTION_HANDOFF}]}]};
 }

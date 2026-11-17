@@ -7,6 +7,10 @@ it is not installed into the production runtime. All four official Actions
 are pinned to full commit IDs. The workflow neither deploys nor uses production
 credentials. Its successful result is not live production acceptance.
 
+Pushes to `main`, `fix/**`, and `codex/**` run the same gate. This lets the
+integration owner validate a normal Codex branch through an authorized Git push;
+workflow dispatch and pull requests remain available.
+
 ## What runs
 
 `development/release-ci.mjs` inventories Git-tracked and nonignored untracked
@@ -29,7 +33,9 @@ current worker rules and starts the packet checks with `unshare --net`; the
 Python fixture refuses the host namespace. The wrapper requires positive
 results for bridge/control denial, pre-existing connections, previews, DNS/DHCP
 and idempotence. Ubuntu's `iptables`, `iproute2` and `util-linux` are test
-prerequisites, with installed versions recorded. `HARNESS_FIREWALL_TOOLS` may
+prerequisites, with installed versions recorded. OpenSSL and ripgrep are also
+installed explicitly for actual editor certificate and isolated file-tool
+fixtures. `HARNESS_FIREWALL_TOOLS` may
 select an explicitly prepared local tools directory. Missing tools or namespace
 support fail the required check; the raw Python helper is not run a second time
 without its required arguments.

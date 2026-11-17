@@ -62,8 +62,9 @@ test('heavy tool capacity bounds resource contention without serializing every r
   const q=new FairGate({capacity:2}),a=await q.acquire({rootId:'A'}),b=await q.acquire({rootId:'B'});assert.equal(q.active.size,2);
   let started=false;const c=q.acquire({rootId:'C'}).then(p=>(started=true,p));await tick();assert.equal(started,false);a.release();(await c).release();b.release();
 });
-test('compaction retains the existing bounded nonreasoning policy without recursion',()=>{
-  const r=normalizeCompaction({purpose:'compaction',reasoningEffort:'medium',maxTokens:1000,messages:[]});assert.equal(r.reasoningEffort,'off');assert.equal(r.maxTokens,8192);assert.equal(normalizeCompaction(r),null);
+test('compaction uses the factual handoff ceiling without recursion or an already-off bypass',()=>{
+  const r=normalizeCompaction({purpose:'compaction',reasoningEffort:'medium',maxTokens:1000,messages:[]});assert.equal(r.reasoningEffort,'off');assert.equal(r.maxTokens,4096);assert.equal(normalizeCompaction(r),null);
+  const existing=normalizeCompaction({purpose:'compaction',reasoningEffort:'off',maxTokens:8192,messages:[]});assert.equal(existing.maxTokens,4096);assert.match(existing.messages.at(-1).content[0].text,/unsaved drafts, save conflicts/);assert.match(existing.messages.at(-1).content[0].text,/original user goal/);assert.match(existing.messages.at(-1).content[0].text,/latest actual user correction/);
   assert.equal(normalizeCompaction({reasoningEffort:'medium'}),null);
 });
 test('engine metrics require one unambiguous new record and preserve unknown values',()=>{

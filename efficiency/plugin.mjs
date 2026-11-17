@@ -24,6 +24,17 @@ export async function apply(ctx,config={}){
   const emit=(type,data)=>{try{return ledger.record(type,data);}catch{/* Metrics failure cannot change task outcome or release a gate. */}};
   const root=agent=>rootAgent(agent,ctx.agents),idOf=agent=>root(agent)?.session?.id;
   const card=id=>{if(!cards.has(id))cards.set(id,new WorkCard());return cards.get(id);};
+  const hydrated=new Map();
+  async function hydrate(id){
+    if(!hydrated.has(id))hydrated.set(id,(async()=>{
+      // Read canonical history once per loaded session, including requests that
+      // compaction removed from the current model surface. Never use summaries
+      // or a child agent's assignment as the owner's latest human request.
+      const query=ctx.sessionQuery??ctx.get?.('sessionQuery');
+      if(query){const saved=await query.readSession(id);card(id).observeMessages(saved.events.flatMap(e=>e.type==='user/message'?[e.data]:e.type==='agent/inbox/spliced'?e.data.inserted??[]:[]));}
+    })().catch(error=>{hydrated.delete(id);throw error;}));
+    await hydrated.get(id);
+  }
   const review=id=>ctx.waterfall('workspace-runtime/review',{sessionId:id},()=>undefined);
   const projectFor=async id=>{if(!projectCache.has(id))projectCache.set(id,await review(id));return projectCache.get(id);};
   const activeFor=agent=>{const id=idOf(agent);return{id,runId:runs.get(id)??`${id}:unknown`};};
@@ -44,7 +55,8 @@ export async function apply(ctx,config={}){
   ctx.on('agent/pre-step',async(input,next)=>{
     const {id}=activeFor(input.agent);
     if(providers.has(input.modelSelection.provider)){
-      const task=input.messages?.filter(m=>m.source?.kind==='user').map(m=>textOf(m.content)).join('\n');if(task)card(id).setTask(task);
+      await hydrate(id);
+      if(input.agent.session.id===id)card(id).observeMessages(input.messages);
       await projectFor(id); // Root identity is stable; do not rescan all sources on every step.
     }
     return next();
