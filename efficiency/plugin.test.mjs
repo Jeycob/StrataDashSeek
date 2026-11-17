@@ -5,15 +5,11 @@ import path from 'node:path';
 import os from 'node:os';
 import {apply} from './plugin.mjs';
 import {digest} from '../quality/core.mjs';
-import {createHash} from 'node:crypto';
-import {createProjectExecutionMode} from '../workspace/execution-mode-service.mjs';
-function hostMode(){const policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},policySha256=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(policy).sort(([a],[b])=>a.localeCompare(b))))).digest('hex'),snapshot={...policy,policySha256,sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'};return createProjectExecutionMode({snapshot,assertUnchanged:()=>snapshot}).service;}
 
 async function fixture(t){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'eff-plugin-'));t.after(()=>fs.rm(directory,{recursive:true,force:true}));
   const hooks=new Map(),tools=new Map(),effects=[],guards=[],sections=[],contexts=[],agent={id:'A',session:{id:'A',header:{}}};let reviewCalls=0;
   const ctx={agents:{get:id=>id==='A'?agent:undefined},systemPrompt:{section:x=>sections.push(x),context:x=>contexts.push(x)},on:(name,fn)=>{if(!hooks.has(name))hooks.set(name,[]);hooks.get(name).push(fn);},effect:fn=>effects.push(fn()),tools:{guard:fn=>guards.push(fn),register:x=>tools.set(x.name,x)},llm:{},shell:{sandboxMode:'workspace-write'},shellEnv:{collect:()=>({})},waterfall:async()=>{reviewCalls++;return{root:directory,sourceHash:'source',checkpoints:{test:{}},legacy:false};}};
-  ctx.projectExecutionMode=hostMode();
   await apply(ctx,{stateDirectory:path.join(directory,'.state'),engineMetrics:false});t.after(()=>effects.forEach(fn=>fn?.()));
   const call=(name,...args)=>hooks.get(name)[0](...args);
   const exec=(name,args)=>({name,arguments:args,agent,token:Symbol(),signal:new AbortController().signal});

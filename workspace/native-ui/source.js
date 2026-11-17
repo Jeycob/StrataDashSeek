@@ -110,7 +110,7 @@ function ChangesSession(props){
   ...(summary?.warnings||[]).slice(0,8).map((warning,index)=>h('p',{key:'warning'+index,className:'hc-notice'},String(warning).slice(0,500))),
   files.length?h('div',{className:'hc-body'},h('nav',{className:'hc-list','aria-label':text('fileChanges')},...files.map(file=>h('button',{type:'button',key:file.path,className:'hc-file','data-change-path':file.path,'aria-pressed':changes.selected===file.path,onClick:()=>changes.select(file.path)},h('span',{className:'hc-path'},file.path),h('span',{className:'hc-counts'},h('span',null,text(file.status)),file.added!==null&&file.added!==undefined&&h('span',{className:'hc-plus'},'+'+file.added),file.deleted!==null&&file.deleted!==undefined&&h('span',{className:'hc-minus'},'−'+file.deleted))))),h('div',{className:'hc-diff'},h(ChangeDiff,{diff:changes.diff,selected:changes.selected}))):!(changes.error&&!summary)&&h('p',{className:'hc-empty',role:'status'},text(changes.loading?'loadingChanges':'noChanges')));
 }
-function Changes(props){return h('div',{className:'harness-model-pane'},h(ConversationModel,{sessionId:props.sessionId,key:props.sessionId}),h('div',{className:'harness-model-pane-content'},h(ExecutionPane,{...props,Host:ChangesSession,changes:true,key:props.sessionId})));}
+function Changes(props){return h('div',{className:'harness-model-pane'},h(ConversationModel,{sessionId:props.sessionId,key:props.sessionId}),h('div',{className:'harness-model-pane-content'},h(ChangesSession,{...props,key:props.sessionId})));}
 // Safari versions without AbortSignal.any/timeout use the same explicit
 // controller lifetime as every other browser. Timers/listeners always detach.
 async function nativeJSON(url,options={},timeoutMs=15000){
@@ -157,92 +157,6 @@ function ConversationModel({sessionId}){
  const selection=current?.selection,selected=current?(current.source==='workspace'?'workspace':selection?JSON.stringify({provider:selection.provider,model:selection.model}):'workspace'):'',groups=current?.groups||[];
  const model=groups.find(group=>group.id===selection?.provider)?.models.find(model=>model.id===selection?.model),known=groups.some(group=>group.models.some(model=>JSON.stringify({provider:group.id,model:model.id})===selected));
  return h('section',{className:'harness-conversation-model','data-model-session':sessionId},h('label',null,text('conversationModel'),h('select',{value:selected,onChange:event=>{if(event.target.value)void select(event.target.value==='workspace'?null:JSON.parse(event.target.value));},disabled:busy||!current,'aria-label':text('conversationModel')},!current?h('option',{value:''},text(currentError?'modelUnconfirmed':'modelLoading')):h('option',{value:'workspace'},text('workspaceModel')),selected&&selected!=='workspace'&&!known&&h('option',{value:selected,disabled:true},selection.provider+' / '+selection.model),...groups.map(group=>h('optgroup',{key:group.id,label:group.name},...group.models.map(model=>h('option',{key:model.id,value:JSON.stringify({provider:group.id,model:model.id})},model.name)))))),current?.source==='session'&&model?.reasoning&&h('label',null,text('modelEffort'),h('select',{'aria-label':text('modelEffort'),value:selection.reasoningEffort??'',disabled:busy||!current,onChange:event=>void select({provider:selection.provider,model:selection.model,...(event.target.value?{reasoningEffort:event.target.value}:{})})},h('option',{value:''},text('modelEffortDefault')),...model.reasoning.efforts.map(effort=>h('option',{key:effort.id,value:effort.id},effort.name)))),h('small',null,text('modelScope')),writing&&h('p',{role:'status'},text('modelPending')),busy&&!writing&&h('p',{role:'status'},text('modelLoading')),current?.lastUsed&&h('small',null,text('modelUsed')+': '+current.lastUsed.provider+' / '+current.lastUsed.model),current?.selectionError&&h('p',{role:'alert'},text('modelUnavailable')),current?.workspaceDefaultError&&h('p',{role:'alert'},text('modelDefaultUnavailable')),current?.failures?.length>0&&h('p',{role:'status'},text('modelCatalogPartial')),currentError&&h('p',{role:'alert'},currentError),h('button',{type:'button',onClick:()=>void load(),disabled:busy},text('modelRetry')));
-}
-Object.assign(copy.en,{editor:'Code editor',editorHelp:'Code OSS through code-server. Live project files and Git changes for this conversation.',editorOpen:'Open code-server',editorLoading:'Opening editor…',editorUnavailable:'The code-server editor is unavailable. Your project files remain on the server.',editorRetry:'Reconnect editor',editorClose:'Close editor',editorCloseHelp:'Save or resolve unsaved files in the editor before closing. Close this editor now?',editorLimit:'Three editors are retained to protect drafts. Close a saved editor before opening another.',editorDrafts:'Unsaved buffers stay in this editor when you switch conversations. Resolve save conflicts in code-server.',editorExpired:'Editor access has expired. Save your draft locally before reconnecting.',editorMobile:'A separate tab provides more room. Save drafts before switching editor windows.',editorNewTab:'Open editor in a new tab',editorStarting:'The editor is starting. Retry shortly.',editorReadOnly:'This editor is read-only.',editorChanges:'Review Git changes in the code editor.',editorEntry:'Open code editor',executionLoading:'Checking project access…',executionUnavailable:'Project access could not be confirmed. Retry before opening project files.',executionRetry:'Retry project access'});
-Object.assign(copy.cs,{editor:'Editor kódu',editorHelp:'Code OSS přes code-server. Živé soubory projektu a Git změny této konverzace.',editorOpen:'Otevřít code-server',editorLoading:'Otevírám editor…',editorUnavailable:'Editor code-server není dostupný. Soubory projektu zůstávají na serveru.',editorRetry:'Znovu připojit editor',editorClose:'Zavřít editor',editorCloseHelp:'Před zavřením ulož nebo vyřeš rozepsané soubory v editoru. Zavřít tento editor?',editorLimit:'Tři editory zůstávají otevřené kvůli draftům. Před dalším otevřením zavři uložený editor.',editorDrafts:'Při přepnutí konverzace zůstávají rozepsané soubory v tomto editoru. Konflikty ukládání vyřeš v code-serveru.',editorExpired:'Platnost připojení editoru skončila. Před opětovným připojením si ulož draft lokálně.',editorMobile:'Samostatná karta nabízí více místa. Před přechodem mezi okny editoru ulož drafty.',editorNewTab:'Otevřít editor v nové kartě',editorStarting:'Editor se spouští. Za chvíli zkus připojení znovu.',editorReadOnly:'Tento editor umožňuje pouze čtení.',editorChanges:'Git změny zkontroluj v editoru kódu.',editorEntry:'Otevřít editor kódu',executionLoading:'Ověřuji přístup k projektu…',executionUnavailable:'Přístup k projektu se nepodařilo ověřit. Před otevřením souborů zkus připojení znovu.',executionRetry:'Znovu ověřit přístup'});
-
-// This observation only selects a view. Server-bound execution mode remains
-// authoritative for every operation; Apps availability never selects a backend.
-let executionView={mode:null,loading:true},executionRequest=null,executionPoll,executionExpiry,executionEpoch=0;
-const executionObservers=new Set();
-const executionActive=()=>!document.hidden&&[...executionObservers].some(row=>row.active);
-function publishExecution(value){executionView=value;for(const row of executionObservers)row.notify(value);}
-function stopExecutionRequest(){++executionEpoch;executionRequest?.controller.abort();executionRequest=null;clearTimeout(executionPoll);}
-function scheduleExecution(){clearTimeout(executionPoll);if(executionActive())executionPoll=setTimeout(()=>void refreshExecution(),15000);}
-function refreshExecution(){
- if(executionRequest)return executionRequest.promise;
- const controller=new AbortController(),ticket=++executionEpoch;
- if(!executionView.mode)publishExecution({mode:null,loading:true});
- const promise=(async()=>{
-  try{
-   const value=await nativeJSON('/api/workbench/execution',{signal:controller.signal});
-   if(controller.signal.aborted||ticket!==executionEpoch)return executionView;
-   if(value.version!==1||value.available!==true||!['host-compat','isolated-guest'].includes(value.mode))throw Error('Unconfirmed execution mode');
-   publishExecution({mode:value.mode,loading:false});clearTimeout(executionExpiry);
-   executionExpiry=setTimeout(()=>publishExecution({mode:null,loading:false}),30000);
-  }catch(error){if(!controller.signal.aborted&&ticket===executionEpoch){clearTimeout(executionExpiry);publishExecution({mode:null,loading:false});}}
-  finally{if(ticket===executionEpoch){executionRequest=null;scheduleExecution();}}
-  return executionView;
- })();
- executionRequest={controller,promise};return promise;
-}
-function executionVisibility(){if(document.hidden)stopExecutionRequest();else if(executionActive())void refreshExecution();}
-function executionOffline(){stopExecutionRequest();clearTimeout(executionExpiry);publishExecution({mode:null,loading:false});}
-function executionOnline(){if(executionActive())void refreshExecution();}
-function useExecutionMode(active){
- const [value,setValue]=React.useState(executionView),subscription=React.useRef(null);
- if(!subscription.current)subscription.current={active:false,notify:setValue};
- React.useEffect(()=>{
-  const row=subscription.current,first=executionObservers.size===0;executionObservers.add(row);setValue(executionView);
-  if(first){document.addEventListener('visibilitychange',executionVisibility);window.addEventListener('offline',executionOffline);window.addEventListener('online',executionOnline);}
-  return()=>{executionObservers.delete(row);if(!executionObservers.size){stopExecutionRequest();document.removeEventListener('visibilitychange',executionVisibility);window.removeEventListener('offline',executionOffline);window.removeEventListener('online',executionOnline);}else scheduleExecution();};
- },[]);
- React.useEffect(()=>{subscription.current.active=active;if(executionActive())void refreshExecution();else{clearTimeout(executionPoll);if(executionRequest)stopExecutionRequest();}},[active]);
- return {...value,refresh:refreshExecution};
-}
-function ExecutionPane(props){
- useLanguage();const info=props.useTabInfo?.(),execution=useExecutionMode(info?.tab.visible!==false);
- if(execution.mode==='host-compat')return h(props.Host,props);
- if(execution.mode==='isolated-guest')return props.changes?h('section',{className:'harness-native-surface harness-execution-state','data-code-changes-entry':props.sessionId},h('p',null,text('editorChanges')),h('button',{type:'button',className:'harness-native-action',onClick:()=>void window.HarnessNativeUI?.openFiles(props.sessionId)},text('editorEntry'))):h(EditorSession,{...props,key:props.sessionId});
- return h('section',{className:'harness-native-surface harness-execution-state','data-execution-unavailable':props.sessionId},h('p',{role:execution.loading?'status':'alert'},text(execution.loading?'executionLoading':'executionUnavailable')),h('button',{type:'button',className:'harness-native-action',disabled:execution.loading,onClick:()=>void execution.refresh()},text('executionRetry')));
-}
-
-// Park the real browsing context rather than evicting unknown dirty buffers.
-const editorFrames=new Map();
-function parkEditor(entry){entry.frame.style.display='none';}
-function EditorSession({sessionId,useTabInfo}){
- useLanguage();const host=React.useRef(null),epoch=React.useRef(0),pending=React.useRef(null),[entry,setEntry]=React.useState(()=>editorFrames.get(sessionId)||null),[busy,setBusy]=React.useState(false),[error,setError]=React.useState(''),[confirm,setConfirm]=React.useState(false),[online,setOnline]=React.useState(navigator.onLine);
- const info=useTabInfo?.(),visible=info?.tab.visible!==false,[now,setNow]=React.useState(Date.now());
- React.useEffect(()=>{const timer=setInterval(()=>setNow(Date.now()),30000);return()=>clearInterval(timer);},[]);
- React.useEffect(()=>{const online=()=>setOnline(navigator.onLine);window.addEventListener('online',online);window.addEventListener('offline',online);return()=>{window.removeEventListener('online',online);window.removeEventListener('offline',online);};},[]);
- React.useEffect(()=>{
-  if(!entry)return;const position=()=>{const rect=host.current?.getBoundingClientRect(),shown=visible&&!document.hidden&&rect&&rect.width>0&&rect.height>0;Object.assign(entry.frame.style,shown?{display:'block',position:'fixed',left:rect.left+'px',top:rect.top+'px',width:rect.width+'px',height:rect.height+'px',zIndex:'40'}:{display:'none'});};
-  const observer=typeof ResizeObserver==='function'?new ResizeObserver(position):null;if(host.current)observer?.observe(host.current);
-  window.addEventListener('resize',position);window.addEventListener('scroll',position,true);document.addEventListener('visibilitychange',position);position();
-  return()=>{observer?.disconnect();window.removeEventListener('resize',position);window.removeEventListener('scroll',position,true);document.removeEventListener('visibilitychange',position);parkEditor(entry);};
- },[entry,sessionId,visible]);
- React.useEffect(()=>{if(!visible){++epoch.current;pending.current?.abort();pending.current=null;setBusy(false);}return()=>{++epoch.current;pending.current?.abort();pending.current=null;};},[sessionId,visible]);
- async function open(reconnect=false){
-  if(!sessionId||pending.current)return;if(!entry&&editorFrames.size>=3){setError(text('editorLimit'));return;}
-  if(reconnect&&entry&&!window.confirm(text('editorCloseHelp')))return;
-  const ticket=++epoch.current,controller=new AbortController();pending.current=controller;setBusy(true);setError('');
-  try{
-   const execution=await refreshExecution();if(controller.signal.aborted||ticket!==epoch.current)return;if(execution.mode!=='isolated-guest')throw Error(text('executionUnavailable'));
-   const result=await nativeJSON('/api/workbench/editor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'open',sessionId}),signal:controller.signal},30000);
-   if(ticket!==epoch.current)return;if(result.version!==1||result.sessionId!==sessionId)throw Error('Invalid editor response');
-   if(result.state!=='ready'){setError(text(result.state==='starting'?'editorStarting':'editorUnavailable')+(result.code?' ('+result.code+')':''));return;}
-   const url=new URL(result.url,location.href);
-   if(url.protocol!=='https:'||url.origin===location.origin||url.username||url.password||url.search)throw Error('Editor requires a separate secure origin');
-   if([...editorFrames].some(([id,e])=>id!==sessionId&&e.origin===url.origin))throw Error('Editor origin is already assigned to another conversation');
-   const frame=document.createElement('iframe');frame.title='Code OSS · '+sessionId;frame.referrerPolicy='no-referrer';frame.setAttribute('allow','clipboard-read; clipboard-write');frame.src=url.href;frame.className='harness-code-frame';frame.style.display='none';document.body.append(frame);
-   const next={frame,origin:url.origin,launchURL:url.origin+'/',expiresAt:result.expiresAt,readOnly:result.readOnly===true};const previous=editorFrames.get(sessionId);editorFrames.set(sessionId,next);setEntry(next);previous?.frame.remove();
-  }catch(e){if(ticket===epoch.current&&!controller.signal.aborted)setError(e.name==='AbortError'?text('editorUnavailable'):e.message);}finally{if(pending.current===controller)pending.current=null;if(ticket===epoch.current)setBusy(false);}
- }
- async function close(){
-  if(pending.current)return;const current=entry,ticket=++epoch.current,controller=new AbortController();pending.current=controller;setBusy(true);setError('');
-  try{const result=await nativeJSON('/api/workbench/editor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'close',sessionId}),signal:controller.signal});if(ticket!==epoch.current)return;if(result.version!==1||result.sessionId!==sessionId||result.state!=='closed')throw Error('Invalid editor response');if(editorFrames.get(sessionId)===current){editorFrames.delete(sessionId);current.frame.remove();setEntry(null);}setConfirm(false);}catch(e){if(ticket===epoch.current&&!controller.signal.aborted)setError(e.message);}finally{if(pending.current===controller)pending.current=null;if(ticket===epoch.current)setBusy(false);}
- }
- return h('section',{className:'harness-native-surface harness-code-editor','data-editor-session':sessionId},h('header',null,h('h3',null,'Code OSS · code-server'),h('button',{type:'button',disabled:busy||!online,onClick:()=>void open(Boolean(entry))},text(busy?'editorLoading':entry?'editorRetry':'editorOpen')),entry&&h('button',{type:'button',disabled:busy,onClick:()=>setConfirm(true)},text('editorClose'))),h('p',{className:'hc-meta'},text('editorDrafts')),entry&&h('p',{className:'hc-meta'},text('editorMobile')+' ',h('a',{href:entry.launchURL,target:'_blank',rel:'noopener noreferrer'},text('editorNewTab'))),entry?.readOnly&&h('p',{role:'status'},text('editorReadOnly')),entry?.expiresAt<=now&&h('p',{role:'status'},text('editorExpired')),!online&&h('p',{role:'status'},text('editorUnavailable')),error&&h('p',{role:'alert'},error),confirm&&h('div',{role:'group'},h('p',null,text('editorCloseHelp')),h('button',{type:'button',onClick:()=>void close(),disabled:busy},text('editorClose')),h('button',{type:'button',onClick:()=>setConfirm(false)},text('deviceCancel'))),h('div',{ref:host,className:'harness-code-host',hidden:!visible}));
 }
 function relativeProject(root,base){
  if(typeof root!=='string'||typeof base!=='string')return null;
@@ -303,7 +217,7 @@ function apply(ctx,config={}){
   React.useEffect(()=>info?.tab.actions.bindCommands({refresh:()=>{void view.current?.reload?.();}}),[info?.tab.actions]);
   return h('div',{ref,className:'harness-native-surface',style:{height:'100%',minHeight:240,minWidth:0,overflow:'auto'},'data-harness-native-view':kind});
  }
- function Files(props){return h('div',{className:'harness-model-pane'},h(ConversationModel,{sessionId:props.sessionId,key:props.sessionId}),h('div',{className:'harness-model-pane-content'},h(ExecutionPane,{...props,Host:Mounted,kind:'files',section:'files'})));}
+ function Files(props){return h('div',{className:'harness-model-pane'},h(ConversationModel,{sessionId:props.sessionId,key:props.sessionId}),h('div',{className:'harness-model-pane-content'},h(Mounted,{...props,kind:'files',section:'files'})));}
  function Docker(props){
   const info=props.useTabInfo(),[message,setMessage]=React.useState(''),[busy,setBusy]=React.useState(false);useLanguage();
   const view=React.useRef(null),host=React.useRef(null),visible=React.useRef(info.tab.visible);visible.current=info.tab.visible;
@@ -365,10 +279,10 @@ function apply(ctx,config={}){
  }
  const register=(definition,Component)=>{
   ctx.effect(()=>ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:definition.id,inject:sessionId=>({sessionId})},Component)),'native-workbench: '+definition.kind);
-  function LocalizedTitle(){useLanguage();useExecutionMode(false);return h('span',null,definition.title());}
+  function LocalizedTitle(){useLanguage();return h('span',null,definition.title());}
   ctx.effect(()=>ctx.slots.inject('sidebar.right.pane.tab.title',()=>ctx.slots.register({name:'sidebar.right.pane.tab.title',key:definition.id},LocalizedTitle)),'native-workbench: '+definition.kind+' title');
  };
- const files={id:'stratadashseek/workspace-files',kind:'files',keepMounted:true,title:()=>text(executionView.mode==='isolated-guest'?'editor':'files'),guide:[{id:'workspace',commandId:'workspace.files',order:10,title:()=>text(executionView.mode==='isolated-guest'?'editor':'files'),description:()=>text(executionView.mode==='isolated-guest'?'editorHelp':'filesHelp')}]};
+ const files={id:'stratadashseek/workspace-files',kind:'files',keepMounted:true,title:()=>text('files'),guide:[{id:'workspace',commandId:'workspace.files',order:10,title:()=>text('files'),description:()=>text('filesHelp')}]};
  const changes={id:'stratadashseek/changes',kind:'harness-changes',keepMounted:true,title:()=>text('changes'),guide:[{id:'changes',order:15,title:()=>text('changes'),description:()=>text('changesHelp')}]};
  const docker={id:'stratadashseek/docker',kind:'harness-docker',keepMounted:true,title:()=>text('docker'),guide:[{id:'docker',order:20,title:()=>text('docker'),description:()=>text('dockerHelp')}]};
  // A compatibility switch also lets integration tests exercise the original

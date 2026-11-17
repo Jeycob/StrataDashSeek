@@ -9,9 +9,6 @@ const helpers = new Map([
   ['vast/apps-browser-check.cjs', 'Owned-release browser verification adapter; requires a project, plan and release ID.']
 ]);
 const hostFixtures = new Map([
-  ['workspace/code-server.browser.test.cjs', 'Actual code-server acceptance against an explicitly prepared local WSL fixture and HOMEAI_EDITOR_URL; independent runtime evidence remains separate from required portable Native panel fixtures.'],
-  ['development/guest-capability-probe.cjs', 'Operator-only disposable QEMU guest using pinned installed boot artifacts after fresh host quiescence; plan tests run separately in CI.'],
-  ...['guest-volume-census','guest-cache-diagnostic','guest-container-isolation-probe','project-share-probe','project-container-share-probe'].map(name=>['development/'+name+'.cjs','Operator-only bounded disposable guest acceptance using pinned boot artifacts; separate synthetic plan tests remain required in CI.']),
   ['deployments/apps-live-lifecycle-check.cjs', 'Explicit live demo lifecycle check reads the installed private worker key; operator-run acceptance only.'],
   ['deployments/apps-real-worker-check.cjs', 'Acceptance against an explicitly prepared dedicated Docker worker; no such host or credentials in CI.'],
   ['deployments/docker-worker-provision-check.cjs', 'Operator check of the installed Docker VM/engine; not a disposable unit fixture.'],
@@ -19,11 +16,10 @@ const hostFixtures = new Map([
   ['workspace/reasoning-smoke.cjs', 'Legacy fixture requires installed host profiles; current-source unit/SDK checks are separate.']
 ]);
 const linuxChecks = new Set(['development/guest-disk-grow-linux-check.cjs','deployments/worker-network-linux-check.cjs','vast/runtime-paths-linux-check.cjs', 'vast/startup-update-linux-check.cjs', 'workspace/process-lock-linux-check.mjs', 'workspace/checkpoint-restore-linux-check.mjs', 'mobile/runtime-readiness-native-check.cjs', 'vast/apps-context-linux-check.cjs','vast/runtime-lease-linux-check.cjs','vast/startup-hook-linux-check.cjs']);
-const rootTests = new Set(['development/project-toolchain.test.cjs', 'mobile/runtime-readiness.test.cjs', 'vast/apps-data-linux-check.cjs', 'workspace/editor-transport.test.cjs']);
+const rootTests = new Set(['mobile/runtime-readiness.test.cjs', 'vast/apps-data-linux-check.cjs']);
 export function candidate(name) {
-  if (hostFixtures.has(name.replaceAll('\\', '/'))) return true;
   const base = path.posix.basename(name);
-  return /\.test\.(?:[cm]js|py)$|[-_](?:check|smoke)\.[cm]js$|^test[-_].+\.[cm]js$|^test[-_].+\.py$|[-_]tests\.py$/u.test(base);
+  return /\.test\.[cm]js$|[-_](?:check|smoke)\.[cm]js$|^test[-_].+\.[cm]js$|^test[-_].+\.py$|[-_]tests\.py$/u.test(base);
 }
 export function classify(name) {
   name = name.replaceAll('\\', '/');
@@ -32,10 +28,6 @@ export function classify(name) {
   if (hostFixtures.has(name)) return {file: name, kind: 'existing-host-fixture', lane: 'outside-ci', required: false, outcome: 'unrunnable', reason: hostFixtures.get(name)};
   if (name === 'development/device-workerd-check.mjs') return {file: name, kind: 'workerd', lane: 'local-engine', required: true, timeoutMs: 120000};
   if (name === 'workspace/runtime-admission-native.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:180000,minTests:2};
-  if (name === 'development/native-isolated-profile.test.mjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:12};
-  if (name === 'development/native-isolated-web.test.mjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:1};
-  if (name === 'development/project-execution-floor-root.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_EXECUTION_FLOOR_ROOT_TEST:'1'},minTests:10};
-  if (name === 'vast/startup-install-floor.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_EXECUTION_FLOOR_ROOT_TEST:'1'},minTests:6};
   if (name === 'vast/runtime-recovery.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_RECOVERY_ROOT_TEST:'1'},minTests:12};
   if (name === 'workspace/runtime-admission.test.mjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_ADMISSION_ROOT_TEST:'1'},minTests:9};
   if (name === 'vast/runtime-admission-server.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_ADMISSION_SERVER_ROOT_TEST:'1'},minTests:6};

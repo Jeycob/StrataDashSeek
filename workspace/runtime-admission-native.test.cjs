@@ -9,11 +9,9 @@ test('mandatory admission survives optional plugin disposal in the actual pinned
  const {installRuntimeAdmission}=await import(pathToFileURL(path.join(__dirname,'runtime-admission-hooks.mjs')).href);
  const mandatoryModule=await import(pathToFileURL(path.join(__dirname,'runtime-admission-plugin.mjs')).href);
  const root=new Context();t.after(()=>root.fiber.dispose());let calls=0,bodies=0,optionalReady=false,mandatoryReady=false;
- const [{default:SystemPrompt},{default:Tools}]=await Promise.all(['dsh-system-prompt','dsh-tools'].map(name=>import(pathToFileURL(sdk.resolve('@deepseek-ai/'+name)).href)));new SystemPrompt(root,{});new Tools(root);
- const {canonical}=require('../vast/project-execution-mode.cjs'),policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},snapshot={...policy,policySha256:crypto.createHash('sha256').update(canonical(policy)).digest('hex'),sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'},binding={snapshot,assertUnchanged:()=>snapshot};
  const client={required:true,async admit(){calls++;throw Error('SYNTHETIC_ADMISSION_CLOSED');}};
  const optional=root.plugin({name:'optional-workspace-admission-fixture',apply(ctx){installRuntimeAdmission(ctx,{},client);optionalReady=true;}});
- root.plugin({name:'mandatory-root-admission-fixture',inject:['tools'],async apply(ctx){mandatoryModule.installTrustedRuntimeAdmission(ctx,binding);mandatoryReady=true;}});
+ root.plugin({name:'mandatory-root-admission-fixture',async apply(ctx){await mandatoryModule.apply(ctx);mandatoryReady=true;}});
  const until=Date.now()+5000;while(!(optionalReady&&mandatoryReady)&&Date.now()<until)await pause(10);
  assert(optionalReady&&mandatoryReady,'Both actual plugin fibers must finish loading');
  const dispatch=()=>root.waterfall('tools/execute',{signal:AbortSignal.timeout(1000)},async()=>{bodies++;});

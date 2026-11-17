@@ -3,7 +3,6 @@
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),crypto=require('node:crypto');
 const runtime=require('./runtime-paths.cjs');
 const REPOSITORY='Jeycob/StrataDashSeek',MIB=1024*1024;
-const executionFloor=root=>require('./project-execution-floor.cjs').createExecutionFloor({rootDirectory:path.resolve(root)}).capturePolicy();
 function atomic(file,value,mode=0o600){const tmp=file+'.tmp-'+crypto.randomBytes(12).toString('hex'),fd=fs.openSync(tmp,'wx',mode);try{fs.writeFileSync(fd,typeof value==='string'||Buffer.isBuffer(value)?value:JSON.stringify(value,null,2));fs.fsyncSync(fd);}finally{fs.closeSync(fd);}fs.renameSync(tmp,file);if(process.platform==='linux'){const parent=fs.openSync(path.dirname(file),'r');try{fs.fsyncSync(parent);}finally{fs.closeSync(parent);}}}
 function commitPayload(input){
  const text=input.toString('utf8');if(!Buffer.from(text).equals(input))throw Error('Invalid commit encoding');
@@ -40,31 +39,26 @@ function managedPointer(root,name,collection){
  const resolved=fs.realpathSync(file),base=path.join(root,collection)+path.sep;if(!resolved.startsWith(base))throw Error('Release pointer is outside managed storage');return{path:file,legacy:resolved,directory:false};
 }
 function restoreTransaction(root){
- const journal=path.join(root,'root-secrets/startup-update-transaction.json');if(!fs.existsSync(journal))return false;rootOwned(journal);const transaction=readJSON(journal,null);if(!transaction)throw Error('Update recovery journal requires operator review');
+ const journal=path.join(root,'root-secrets/startup-update-transaction.json'),transaction=readJSON(journal,null);if(!transaction)return false;
  const base=path.join(root,'releases')+path.sep;
- if(transaction.version!==1||typeof transaction.previous!=='string'||path.dirname(path.resolve(transaction.previous))!==path.resolve(root,'releases')||transaction.link!==path.join(root,'app')||typeof transaction.target!=='string'||path.dirname(path.resolve(transaction.target))!==path.resolve(root,'releases')||!/^[a-f0-9]{40}$/.test(path.basename(transaction.target)))throw Error('Update recovery journal requires operator review');
- const floor=executionFloor(root);
- if(!fs.existsSync(transaction.previous)&&fs.existsSync(transaction.link)&&!fs.lstatSync(transaction.link).isSymbolicLink()){rootOwned(transaction.link);if(transaction.previousApplied)throw Error('Update recovery journal requires operator review');floor.assertLegacyAppAllowed();fs.unlinkSync(journal);return true;}
+ if(typeof transaction.previous!=='string'||path.dirname(path.resolve(transaction.previous))!==path.resolve(root,'releases')||transaction.link!==path.join(root,'app'))throw Error('Update recovery journal requires operator review');
+ if(!fs.existsSync(transaction.previous)&&fs.existsSync(transaction.link)&&!fs.lstatSync(transaction.link).isSymbolicLink()){rootOwned(transaction.link);fs.unlinkSync(journal);return true;}
  if(!fs.existsSync(transaction.previous))throw Error('Update recovery release is missing');
  const current=fs.existsSync(transaction.link)?fs.lstatSync(transaction.link):null;
  if(current&&!current.isSymbolicLink())throw Error('Update recovery would overwrite an unmanaged directory');
- rootOwned(transaction.previous);floor.assertDirectoryAllowed(transaction.previous);
- if(transaction.previousApplied){const previous=transaction.previousApplied;if(!/^[a-f0-9]{40}$/.test(previous.commit||'')||!/^([a-f0-9]{64})$/.test(previous.digest||'')||transaction.previous!==path.join(root,'releases',previous.commit)||releaseDigest(transaction.previous)!==previous.digest)throw Error('Update recovery previous source differs from its verified record');}
- floor.assertDirectoryAllowed(transaction.previous);linkTo(transaction.previous,transaction.link);
+ rootOwned(transaction.previous);linkTo(transaction.previous,transaction.link);
  const applied=path.join(root,'root-secrets/startup-update-applied.json');if(transaction.previousApplied)atomic(applied,transaction.previousApplied);else if(fs.existsSync(applied))fs.unlinkSync(applied);
  fs.unlinkSync(journal);return true;
 }
 function activate(root,candidate,sha,{afterSwitch=()=>{}}={}){
- const floor=executionFloor(root);
  const journal=path.join(root,'root-secrets/startup-update-transaction.json'),pointer=managedPointer(root,'app','releases');
- if(!/^[a-f0-9]{40}$/.test(sha||'')||path.resolve(candidate)!==path.join(path.resolve(root),'releases',sha))throw Error('Candidate is outside managed releases');
- floor.assertReleaseAllowed(sha);if(pointer.directory)floor.assertLegacyAppAllowed();else floor.assertDirectoryAllowed(pointer.legacy);
+ if(path.dirname(path.resolve(candidate))!==path.resolve(root,'releases'))throw Error('Candidate is outside managed releases');
  const digest=releaseDigest(candidate),applied=path.join(root,'root-secrets/startup-update-applied.json'),previousApplied=readJSON(applied,null);
  // Persist intent before the first rename. The stable bootstrap can recover a gap.
- floor.assertReleaseAllowed(sha);if(pointer.directory)floor.assertLegacyAppAllowed();else floor.assertDirectoryAllowed(pointer.legacy);atomic(journal,{version:1,link:pointer.path,previous:pointer.legacy,target:candidate,previousApplied});
+ atomic(journal,{version:1,link:pointer.path,previous:pointer.legacy,target:candidate,previousApplied});
  if(pointer.directory)fs.renameSync(pointer.path,pointer.legacy);
- try{floor.assertReleaseAllowed(sha);linkTo(candidate,pointer.path);afterSwitch();floor.assertReleaseAllowed(sha);atomic(applied,{commit:sha,digest,previous:pointer.legacy,at:new Date().toISOString()});fs.unlinkSync(journal);}
- catch(error){try{floor.assertDirectoryAllowed(pointer.legacy);}catch(cause){throw Object.assign(Error('Update rollback requires operator recovery'),{code:'PROJECT_EXECUTION_FLOOR_ROLLBACK_REQUIRED',cause,activationError:error});}linkTo(pointer.legacy,pointer.path);if(previousApplied)atomic(applied,previousApplied);else if(fs.existsSync(applied))fs.unlinkSync(applied);fs.unlinkSync(journal);throw error;}
+ try{linkTo(candidate,pointer.path);afterSwitch();atomic(applied,{commit:sha,digest,previous:pointer.legacy,at:new Date().toISOString()});fs.unlinkSync(journal);}
+ catch(error){linkTo(pointer.legacy,pointer.path);if(previousApplied)atomic(applied,previousApplied);else if(fs.existsSync(applied))fs.unlinkSync(applied);fs.unlinkSync(journal);throw error;}
 }
 function sameRuntime(candidate,root){return['package.json','package-lock.json'].every(name=>fs.readFileSync(path.join(candidate,'runtime',name)).equals(fs.readFileSync(path.join(root,'runtime',name))));}
 function releaseDigest(directory){rootOwned(directory);const hash=crypto.createHash('sha256');function visit(relative){for(const entry of fs.readdirSync(path.join(directory,relative),{withFileTypes:true}).sort((a,b)=>a.name.localeCompare(b.name))){const name=path.join(relative,entry.name),file=path.join(directory,name),info=rootOwned(file);hash.update(name.split(path.sep).join('/')+'\0');if(entry.isDirectory()){hash.update('directory\0');visit(name);}else if(entry.isFile()){hash.update('file:'+(info.mode&0o111?'x':'-')+'\0');hash.update(fs.readFileSync(file));hash.update('\0');}else throw Error('Unsafe release entry');}}visit('');return hash.digest('hex');}
@@ -78,7 +72,6 @@ async function update(root='/data/harness',{checkOnly=false,onVerified=async()=>
  // Parse only as data; trust ownership is still required before using policy,
  // running any external command or staging a release.
  const settings=config(readJSON(configFile));rootOwned(configFile);
- const floor=checkOnly?null:executionFloor(root);
  for(const directory of[cache,path.join(cache,'home'),releases]){fs.mkdirSync(directory,{recursive:true,mode:directory===releases?0o755:0o700});rootOwned(directory);}
  rootOwned(path.join(root,'root-secrets/startup-update-signers.gpg'));
   if(checkOnly&&fs.existsSync(path.join(root,'root-secrets/startup-update-transaction.json')))throw Error('An unfinished activation requires startup recovery');
@@ -92,7 +85,7 @@ async function update(root='/data/harness',{checkOnly=false,onVerified=async()=>
   verifySignature(program('git',[...gitArgs,'cat-file','commit',sha],{root,maxBuffer:MIB}),path.join(root,'root-secrets/startup-update-signers.gpg'),settings.signers,work,{root});
   write({signatureVerified:true});
   const applied=readJSON(path.join(root,'root-secrets/startup-update-applied.json'),{});
-  if(applied.commit===sha&&fs.realpathSync(path.join(root,'app'))===path.join(releases,sha)){if(!applied.digest||releaseDigest(path.join(releases,sha))!==applied.digest)throw Error('Applied release differs from its verified source');if(!checkOnly){floor.assertReleaseAllowed(sha);await onVerified({commit:sha,digest:applied.digest});floor.assertReleaseAllowed(sha);}return write({phase:'ready',appliedCommit:sha});}
+  if(applied.commit===sha&&fs.realpathSync(path.join(root,'app'))===path.join(releases,sha)){if(!applied.digest||releaseDigest(path.join(releases,sha))!==applied.digest)throw Error('Applied release differs from its verified source');if(!checkOnly)await onVerified({commit:sha,digest:applied.digest});return write({phase:'ready',appliedCommit:sha});}
   const space=fs.statfsSync(root);if(Number(space.bavail)*Number(space.bsize)<settings.minimumFreeBytes+96*MIB)throw Error('Insufficient disk reserve for a safe code update');
   write({phase:'staging'});const archive=path.join(work,'release.tar');fs.writeFileSync(archive,program('git',[...gitArgs,'archive','--format=tar',sha],{root}));
   const candidate=path.join(releases,sha);
@@ -105,7 +98,7 @@ async function update(root='/data/harness',{checkOnly=false,onVerified=async()=>
   if(fs.existsSync(candidate)&&releaseDigest(candidate)!==releaseDigest(staging))throw Error('An existing release differs from its signed source');
   if(checkOnly)return{...checked,checkOnly:true,verified:true,commit:sha};
   if(!fs.existsSync(candidate))fs.renameSync(staging,candidate);
-  const digest=releaseDigest(candidate);floor.assertReleaseAllowed(sha);await onVerified({commit:sha,digest});floor.assertReleaseAllowed(sha);await beforeActivate({commit:sha,digest});floor.assertReleaseAllowed(sha);
+  const digest=releaseDigest(candidate);await onVerified({commit:sha,digest});await beforeActivate({commit:sha,digest});
   // Keep recovery code stable; its upgrades are separate explicit maintenance.
   activate(root,candidate,sha);
   return write({phase:'ready',appliedCommit:sha,error:null});

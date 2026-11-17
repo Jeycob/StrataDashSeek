@@ -1,11 +1,10 @@
 'use strict';
-const {hostExecutionBinding}=require('./fixtures/execution-binding.cjs');
 const test = require('node:test'), assert = require('node:assert/strict');
 const { categoriesFromDiskUsage, refreshStorage } = require('./apps-storage-telemetry.cjs');
 
 test('guest capacity publishes measured total/used bytes and total/free inodes from one nonce', async () => {
   const { DockerVM } = require('./apps-vm.cjs');
-  const vm = { execution: hostExecutionBinding(), buffer: '', serial: { destroyed: false, write(command) { const nonce = command.match(/HARNESS_TOTAL_([a-f0-9]{16})/)[1]; vm.buffer = ['TOTAL=1000', 'USED=700', 'FREE=250', 'ITOTAL=400', 'INODES=100'].map(item => { const [key, value] = item.split('='); return 'HARNESS_' + key + '_' + nonce + '=' + value; }).join('\n'); } } };
+  const vm = { buffer: '', serial: { destroyed: false, write(command) { const nonce = command.match(/HARNESS_TOTAL_([a-f0-9]{16})/)[1]; vm.buffer = ['TOTAL=1000', 'USED=700', 'FREE=250', 'ITOTAL=400', 'INODES=100'].map(item => { const [key, value] = item.split('='); return 'HARNESS_' + key + '_' + nonce + '=' + value; }).join('\n'); } } };
   assert.equal(await DockerVM.prototype.diskFree.call(vm), 250 * 1024); assert.equal(vm.totalBytes, 1000 * 1024); assert.equal(vm.usedBytes, 700 * 1024); assert.equal(vm.totalInodes, 400); assert.equal(vm.freeInodes, 100);
 });
 test('image layers counted once, container writable layers and volumes separate, shared build cache nonadditive', () => {

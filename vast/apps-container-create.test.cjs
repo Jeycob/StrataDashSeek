@@ -1,5 +1,4 @@
 'use strict';
-const {hostExecutionBinding}=require('./fixtures/execution-binding.cjs');
 const {resourceEngine,resourceHost}=require('./resource-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),http=require('node:http'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os');
 const {DockerEngine,LABEL,operationTimeout}=require('./apps-engine.cjs');
@@ -7,7 +6,7 @@ const {createManagedContainer,reconcilePendingCreations,reconcileLegacyCreations
 const {Releases}=require('./apps-releases.cjs');
 const image='sha256:'+'a'.repeat(64),projectId='b'.repeat(16),jobId='c'.repeat(16),containerId='d'.repeat(64);
 const body=()=>({Image:image,Labels:{[LABEL]:'managed',[LABEL+'.project']:projectId},Env:['PRIVATE_VALUE=fixture-not-for-journal'],HostConfig:resourceHost()});
-function manager(engine){engine=resourceEngine(engine,{imageResponse:true});const job={id:jobId,creations:[]},m={execution:hostExecutionBinding(),engine,store:{jobs:[job],projects:{}},save(){},log(){}};return{m,job};}
+function manager(engine){engine=resourceEngine(engine,{imageResponse:true});const job={id:jobId,creations:[]},m={engine,store:{jobs:[job],projects:{}},save(){},log(){}};return{m,job};}
 function inspected(record,patch={}){return{Id:containerId,Name:'/'+record.name,Image:record.imageId,Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:record.projectId,[LABEL+'.job']:record.jobId,[LABEL+'.create']:record.token}},State:{Status:'created',Running:false,StartedAt:'0001-01-01T00:00:00Z'},...patch};}
 
 test('distinct data helper slots retain the parent job and a recorded step can never send a second create',async()=>{let posts=0;const engine={json:async(method,route,options)=>{assert.equal(method,'POST');posts++;assert.match(route,new RegExp('sdsh-test-'+projectId+'-'+jobId+'-db-(?:shadow|final)$'));assert(['db-shadow','db-final'].includes(options.json.Labels[LABEL+'.slot']));return{Id:(posts===1?'a':'f').repeat(64)};}},fixture=manager(engine),json=body();json.Labels[LABEL+'.role']='test';await createManagedContainer(fixture.m,fixture.job,json,{slot:'db-shadow'});await createManagedContainer(fixture.m,fixture.job,json,{slot:'db-final'});assert.equal(posts,2);assert(fixture.job.creations.every(record=>record.jobId===fixture.job.id));await assert.rejects(createManagedContainer(fixture.m,fixture.job,json,{slot:'db-shadow'}),{code:'DOCKER_CREATION_RECONCILIATION_REQUIRED'});assert.equal(posts,2);await assert.rejects(createManagedContainer(fixture.m,fixture.job,json,{slot:'../outside'}),/Invalid managed creation slot/);assert.equal(posts,2);});

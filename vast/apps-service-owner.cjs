@@ -12,7 +12,7 @@ async function ownAppsService(cfg,create,{timeoutMs=2000}={}){
   await new Promise((resolve,reject)=>app.server.close(error=>error&&error.code!=='ERR_SERVER_NOT_RUNNING'?reject(error):resolve()));
   // An already accepted handler may have started a background job while close
   // was waiting for its HTTP response. Keep ownership until that work settles.
-  if(app.manager.busy||app.manager.previewRequests||app.manager.ticking||require('./apps-project-runtime.cjs').active(app.manager))throw Object.assign(Error('Application work is still active'),{code:'APPS_SERVICE_BUSY'});
+  if(app.manager.busy||app.manager.previewRequests||app.manager.ticking)throw Object.assign(Error('Application work is still active'),{code:'APPS_SERVICE_BUSY'});
   await app.manager.close?.();await lease.release();closed=true;
  }};
 }

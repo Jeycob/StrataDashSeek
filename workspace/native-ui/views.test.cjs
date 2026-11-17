@@ -133,9 +133,7 @@ test('Apps reference drafts and request lifetimes survive real Chromium races in
    // Real fetch cancellation closes its HTTP connection on destroy.
    holdState=true;await page.evaluate(()=>{window.detached=view.element;window.detachedMutations=0;window.detachedObserver=new MutationObserver(rows=>detachedMutations+=rows.length);detachedObserver.observe(detached,{childList:true,subtree:true,characterData:true});void view.refresh();});
    await wait(()=>heldStates.length>0,'state request held before destroy');
-   // The resource widget removes its own box synchronously during destroy.
-   // Exclude only that teardown record; keep observing every later mutation.
-   const abortedBefore=abortedResponses;await page.evaluate(()=>{view.destroy();for(const row of detachedObserver.takeRecords())if(row.type!=='childList'||row.addedNodes.length||![...row.removedNodes].every(node=>node.classList?.contains('apps-resource-inventory')))throw Error('Unexpected synchronous destroy mutation');if(detached.isConnected)throw Error('Destroyed view is still connected');});
+   const abortedBefore=abortedResponses;await page.evaluate(()=>view.destroy());
    await page.waitForFunction(()=>fetchRecords.some(r=>r.url.includes('/state?')&&r.aborted));await wait(()=>abortedResponses>abortedBefore,'browser fetch abort closes held response');
    releaseStates();await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
    assert.equal(await page.evaluate(()=>detachedMutations),0);await page.evaluate(()=>detachedObserver.disconnect());
@@ -144,7 +142,7 @@ test('Apps reference drafts and request lifetimes survive real Chromium races in
     await page.evaluate(()=>{window.ignoreLogAbort=true;window.view=HarnessApps.mount(document.querySelector('#host'),{scope:'global',visible:()=>true});});
     await page.locator('#host').getByRole('button',{name:'Logs',exact:true}).waitFor();holdLog=true;
     await page.locator('#host').getByRole('button',{name:'Logs',exact:true}).click();await wait(()=>heldLogs.length>0,'late log request must start');
-    await page.evaluate(()=>{window.detached=view.element;window.detachedMutations=0;window.detachedObserver=new MutationObserver(rows=>detachedMutations+=rows.length);detachedObserver.observe(detached,{childList:true,subtree:true,characterData:true});view.destroy();for(const row of detachedObserver.takeRecords())if(row.type!=='childList'||row.addedNodes.length||![...row.removedNodes].every(node=>node.classList?.contains('apps-resource-inventory')))throw Error('Unexpected synchronous destroy mutation');if(detached.isConnected)throw Error('Destroyed view is still connected');});
+    await page.evaluate(()=>{window.detached=view.element;window.detachedMutations=0;window.detachedObserver=new MutationObserver(rows=>detachedMutations+=rows.length);detachedObserver.observe(detached,{childList:true,subtree:true,characterData:true});view.destroy();});
     await page.waitForFunction(()=>fetchRecords.filter(r=>r.url.includes('container-log')).at(-1)?.aborted);
     const release=heldLogs.shift();holdLog=false;release(responseStatus);
     await page.waitForFunction(()=>fetchRecords.filter(r=>r.url.includes('container-log')).at(-1)?.bodyRead);

@@ -1,4 +1,3 @@
-import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 // Explicit integration tests: run with the pinned real Harness SDK, not a mock registry.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,7 +35,7 @@ async function fixture(t, { snapshotOverride } = {}) {
     appsReads++; return { enabled: true, available: false, worker: { phase: 'asleep' },
       projects: [{ id: ownId, path: path.relative(root, ownRoot), applicationUrl: 'https://secret-own.invalid', env: { secret: 'CANARY_SECRET' } }, { id: otherId, path: path.relative(root, otherRoot) }],
       jobs: [{ id: ownId, projectId: ownId, action: 'verify', status: 'passed', output: 'CANARY_LOG' }, { id: otherId, projectId: otherId, action: 'deploy', status: 'running' }], containers: [] };
-  } }, hostExecutionBinding());
+  } });
   const snapshotRoots = [], wrapped = { snapshot: async p => { snapshotRoots.push(p); return snapshotOverride ? snapshotOverride(p) : capabilities.snapshot(p); }, renderContext: p => capabilities.renderContext(p) };
   registerRuntimeCapabilities(ctx, manager, wrapped);
   ctx.systemPrompt.section({ name: 'fixture:stable', order: 1, interpolate: false, text: 'Stable reusable system instruction.' });

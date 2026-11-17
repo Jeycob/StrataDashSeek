@@ -1,5 +1,0 @@
-# Authority and UNIX socket permissions are supplied by the existing root broker.
-auth: none
-cert: false
-socket: /run/homeai-editor/code.sock
-socket-mode: "0600"

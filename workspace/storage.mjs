@@ -8,16 +8,10 @@ import { acquireProcessLock, processIdentity, ownerState } from './process-lock.
 const { isPrivateSourcePath } = privateSource;
 
 export const hash = data => crypto.createHash('sha256').update(data).digest('hex');
-async function sourceBytes(root, file) {
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+async function sourceBytes(file) {
+  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = await handle.stat(); if (!stat.isFile() || stat.nlink !== 1 || stat.size > 1024 * 1024) throw new WorkbenchError('CHECKPOINT_CHANGED', 'Source is linked, oversized or changed.');
-    // O_NOFOLLOW protects only the final component. Confirm the opened inode,
-    // not a pre-open path check, when a guest may replace an ancestor symlink.
-    if (process.platform === 'linux') {
-      const actual = await fs.realpath('/proc/self/fd/' + handle.fd);
-      if (actual !== file || !within(root, actual)) throw new WorkbenchError('CHECKPOINT_CHANGED', 'Opened source escaped its project.');
-    }
     const buffer = Buffer.alloc(stat.size + 1); let size = 0;
     while (size < buffer.length) { const read = await handle.read(buffer, size, buffer.length - size, size); if (!read.bytesRead) break; size += read.bytesRead; }
     if (size > stat.size) throw new WorkbenchError('CHECKPOINT_CHANGED', 'Source grew while being captured.');
@@ -113,7 +107,7 @@ export async function sourceManifest(root, { maxFiles = 5000, maxBytes = 32 * 10
       if (stat.nlink !== 1) { inventory[rel] = { kind, state: 'excluded', reason: 'hard-link' }; continue; }
       if (stat.size > 1024 * 1024) { inventory[rel] = { kind, state: 'excluded', reason: 'per-file-limit', bytes: stat.size, mtimeMs: stat.mtimeMs }; continue; }
       if (++count > maxFiles || bytes + stat.size > maxBytes) throw new WorkbenchError('CHECKPOINT_TOO_LARGE', 'Source checkpoint exceeds its configured budget.');
-      const data = await sourceBytes(root, await canonicalInside(root, rel));
+      const data = await sourceBytes(await canonicalInside(root, rel));
       if (data.length > 1024 * 1024 || bytes + data.length > maxBytes) throw new WorkbenchError('CHECKPOINT_CHANGED', 'Source grew during inventory.');
       let binary = data.includes(0);
       try { new TextDecoder('utf-8', { fatal: true }).decode(data); } catch { binary = true; }
@@ -134,7 +128,7 @@ export async function saveCheckpoint(root, destination, manifest, { signal, minF
   try {
   for (const [relative, expected] of Object.entries(manifest.files)) {
     signal?.throwIfAborted();
-    const source = await canonicalInside(root, relative), data = await sourceBytes(await fs.realpath(root), source);
+    const source = await canonicalInside(root, relative), data = await sourceBytes(source);
     if (data.length !== expected.bytes || hash(data) !== expected.sha256) throw new WorkbenchError('CHECKPOINT_CHANGED', 'Source changed while checkpointing; previous checkpoint is retained.');
     const target = path.join(staging, 'files', relative); await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }); const output = await fs.open(target, 'wx', 0o600); try { await output.writeFile(data); await output.sync(); } finally { await output.close(); }
   }

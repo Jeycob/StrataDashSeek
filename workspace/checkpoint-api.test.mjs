@@ -5,8 +5,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { checkpointOperation } from './checkpoint-api.mjs';
 import { WorkspaceManager } from './manager.mjs';
-import { bindProjectExecution } from './execution-mode.mjs';
-import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import { ProjectLocks, saveCheckpoint, sourceManifest } from './storage.mjs';
 
 async function fixture(t) {
@@ -19,7 +17,6 @@ async function fixture(t) {
   await fs.writeFile(path.join(root, 'app.js'), 'working');
   const session = { id: 'one', header: { cwd: root } }, agent = { id: 'one', session, status: 'idle' };
   const manager = Object.create(WorkspaceManager.prototype);
-  Object.defineProperty(manager, 'execution', { value: bindProjectExecution(hostExecutionBinding()), enumerable: true });
   Object.assign(manager, { root: state, data: { sessions: { one: { root, checkpoints: { best: { path: saved, sha256: manifest.sha256 } } } } }, locks: new ProjectLocks(path.join(state, 'leases')), running: new Map(), resultWork: new Map(), save: async () => {} });
   let mode = 'workspace-write';
   manager.ctx = { sessions: { get: () => session }, agents: { get: () => agent }, sandboxPolicy: { resolve: () => ({ mode }) }, waterfall: async () => [] };
