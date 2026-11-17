@@ -34,6 +34,9 @@ function launch(name,exe,args,asRoot=false){
 }
 function portOpen(port){return new Promise(resolve=>{const q=http.get('http://127.0.0.1:'+port+'/health',r=>{r.resume();resolve(true)});q.on('error',()=>resolve(false));q.setTimeout(2000,()=>{q.destroy();resolve(false)});});}
 (async()=>{
+ // Host argv and patch bytes stay unchanged. The isolated carrier receives a
+ // complete private reader projection before any unprivileged service starts.
+ const nativeLaunch=projectExecution.mode==='host-compat'?{script:R+'/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js',args:['web','--patch',admissionPatch]}:await require('./native-isolated-profile.cjs').prepareNativeIsolatedLaunch({binding:require('./project-execution-mode.cjs').createExecutionModeContract().bindForService({sourceCommit:projectExecution.sourceCommit,launchId:projectExecution.launchId}),gid});
  const vaultPlan=R+'/root-secrets/vault-runtime.json';
  if(fs.existsSync(vaultPlan))await require('./vault-migrate.cjs').hydrate(JSON.parse(fs.readFileSync(vaultPlan,'utf8')),new (require('./apps-vault.cjs').InfisicalVault)({vaultMachineFile:R+'/root-secrets/vault-machine.json'}));
  if(!await portOpen(8080))launch('strata','bash',['/data/start-strata.sh'],true);
@@ -41,7 +44,7 @@ function portOpen(port){return new Promise(resolve=>{const q=http.get('http://12
  if(!tailscaleAlive){try{fs.unlinkSync(R+'/tailscaled.sock')}catch{}launch('tailscaled','/usr/sbin/tailscaled',['--tun=userspace-networking','--statedir='+R+'/root-secrets/tailscale','--state='+R+'/root-secrets/tailscaled.state','--socket='+R+'/tailscaled.sock'],true);}
  launch('model-proxy',R+'/node/bin/node',[R+'/app/vast/model-proxy.cjs']);
  launch('applications',R+'/node/bin/node',[R+'/app/vast/apps-service.cjs',R+'/apps-config.json']);
- launch('harness',R+'/node/bin/node',[R+'/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js','web','--patch',admissionPatch,'--no-open','--host','127.0.0.1','--port','3090','--public-url','https://'+cfg.publicHost+'/','--trusted-host',cfg.publicHost]);
+ launch('harness',R+'/node/bin/node',[nativeLaunch.script,...nativeLaunch.args,'--no-open','--host','127.0.0.1','--port','3090','--public-url','https://'+cfg.publicHost+'/','--trusted-host',cfg.publicHost]);
  launch('push',R+'/node/bin/node',[R+'/app/mobile/webpush-server.cjs',R+'/push-config.json']);
  launch('proxy',R+'/node/bin/node',[R+'/app/mobile/https-proxy.cjs',R+'/config.json']);
  launch('push-watcher',R+'/venv/bin/python',[R+'/app/mobile/watch-harness-notifications.py','--session-root',R+'/home/.dsh/sessions','--key-file',R+'/secrets/webpush-internal.key']);
