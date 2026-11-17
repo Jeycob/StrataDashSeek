@@ -1,0 +1,141 @@
+Private verified own-peer connector (source candidate only)
+
+Scope and API
+
+  const connector = createOwnPeerConnector({
+    binding: requiredTrustedServerBinding,
+    custodyFor: run.custodyFor,
+  });
+  const peer = await connector.connect({deadline: Date.now()+2500, signal});
+  // Only now may a later trusted component choose to write application bytes.
+  // peer.socket is the SAME connected, paused Node socket; resume explicitly.
+  // peer.evidence is bounded private source evidence, not an authorization.
+  // peer.close() destroys only this connection; peer.done observes its close.
+
+No caller-supplied host/port/PID/URL/root/owner fields are accepted by connect.
+The factory requires both functions and has no permissive default. It is not
+registered as a tool, route, HTTP broker, public listener, TLS endpoint or job
+lifecycle controller. It does not install dependencies or select Apps/mode.
+The second factory argument is a trusted in-memory source-test seam only.
+
+The trusted binding callback must return a FROZEN record containing:
+  jobId, owner, generation, projectSessionId, workspaceId, projectId,
+  projectRoot (canonical absolute path), uid (integer), port (1..65535),
+  signal (revocation AbortSignal), assertCurrent (synchronous throwing check).
+
+Only Root's server composition derives these values from its own actual
+registered producer/project/workspace/session/access state. B's custody lease
+has projectSessionId/workspaceId/projectRoot, NOT projectId: the callback must
+validate that exact projectId-to-root/session/workspace relation itself. Merely
+copying request strings or trusting a user-reported port is insufficient.
+assertCurrent must revalidate actual binding authority and the original record;
+revoke its signal when that authority ends. The connector copies all target
+fields and rechecks binding/lease after awaited observations. No target can be
+selected through browser/model/tool/config strings by this new source API.
+
+custodyFor is called with only exact jobId and owner, WITHOUT an abort signal:
+retrieving a committed B lease must not give the connector job-kill authority.
+Connect cancellation/refusal/revocation destroys only its own socket. No
+listener, process name, PID or producer is signalled or adopted. B's same
+original SDK handle/done/kill and confinement remain the producer authority.
+The API is compatible with B's separate UTF8 first-frame fix.
+
+Positive observation
+
+Linux little-endian procfs is required. The wrapper anchor must still match
+captured PID/ppid/pgrp/startTicks/generation, exact owner/job/context and host
+PID namespace. All attributed processes must share this PID AND network
+namespace with the connector and have the trusted service UID. Namespace PIDs
+are never guessed or treated as host PIDs. Different child process groups or
+setsid() do not invalidate real parent ancestry.
+
+One fixed IPv4 TCP connection to127.0.0.1 and the trusted port is made paused.
+There is no HTTP module, request, preface, health probe, write or retry/redial.
+Before exposing this same socket, bytesWritten must still be0 and the exact
+local/remote endpoints must match. A reader may buffer bounded unsolicited
+server data under Node's stream high-water mark; this is not forwarded HTTP.
+
+Both /proc/self/net/tcp and tcp6 are read. IPv4-mapped IPv6 accepted peers are
+canonicalized too, so an ordinary dual-stack server is supported. Only the
+unique REVERSE ESTABLISHED four-tuple is relevant, never the listener's port
+or inode. A zero inode/no observable accepted fd can mean accept() has not
+completed: bounded polling waits, then refuses; it never substitutes a port
+owner or another connection.
+
+The scanner starts only at the live captured wrapper. It enumerates every
+task's children, verifies each process's live stat/start/parent/UID/namespaces,
+and scans only that bounded current descendant graph's fd symlinks. A unique
+owned process must hold socket:[the exact reverse inode]. Two owned holders,
+changed proof, inaccessible/malformed/truncated observations or unsupported
+facts refuse. A second graph/fd/tuple observation and final identity checks
+of every ancestry hop precede release. Canonical project-root device/inode
+and binding/lease are checked around the proof. ENOENT/ESRCH during a changing
+snapshot permits bounded reobservation; a positively observed proof change is
+fatal. No unrelated global /proc PID/fd scan or process adoption occurs.
+
+Bounds (fixed, no request overrides)
+
+Total proof window min(caller deadline,2500ms),32 observation attempts and25ms
+poll delay;128 processes,512 total tasks,4096 total fds per graph scan,8192
+cumulative directory entries,16384 proc operations,262144B per proc file,
+4096 rows/table,4MiB cumulative file bytes, and64KiB serialized evidence.
+Ancillary stat/namespace/children reads have tighter limits. Reads are async
+with checks before/after awaits. Late acquired file/directory handles close
+in finally even when a fence rejects. A hard timer rejects a pending proof
+independently; socket close also rejects it. Late read completion cannot cause
+a new effect or return a socket. No fd/device contents, cmdline or environment
+are read; fd links are observed without opening them.
+
+Socket lifetime and limits of the claim
+
+Refusal destroys only the created connection. A returned peer closes on the
+original lease.done (success or rejection), binding revocation or caller
+abort, and peer.done resolves on its actual Node close event. No SDK job is
+killed by the connector. Root must still supervise producer lifecycle using
+its existing supported controller. A callback's own effects remain Root's
+responsibility; this library only bounds waiting and fences late results.
+
+This is positive SNAPSHOT ATTRIBUTION. Procfs reads are not atomic across
+processes/files, are not an exclusive kernel ownership lease, and do not
+prove absence of an additional fd holder outside the descendant graph.
+An adversarial fd transfer/close after the last observation is not prevented.
+No global holder-completeness or resistance to same-UID ptrace is claimed.
+The captured context is not an access grant. A later broker must preserve
+its actual authentication/access/namespace checks and account for these
+limits; no HTTP forwarding authorization follows from this source unit.
+
+A producer that double-forks/reparents away from the still-live anchor, moves
+network/PID namespace or changes UID is unsupported and refused. The required
+/proc access can be denied by hidepid/ptrace restrictions; denial is not skipped
+or treated as proof. Large/busy graphs/tables can legitimately hit bounds.
+
+Validation and remaining qualification
+
+Windows Node24 pure tests use only in-memory proc/socket/clock adapters; no
+real connection is opened. They cover IPv4/mapped IPv6, delayed accept/inode0,
+foreign/same-port cases, setsid and nonleader-task ancestry, PID/fd/namespace/
+UID races, ambiguity, permission/truncation/caps, exact context/generation,
+pre/post-await expiry, abort/deadline, late handle acquisition and peer close
+while a proc read is pending. These are not Linux/runtime acceptance.
+
+Prepared Root-only Linux fixture (NOT RUN in this source task):
+  HOMEAI_HOST_PEER_LINUX_FIXTURE=1 HOMEAI_RUNTIME=/already/installed/runtime \
+    node --test workspace/host-peer-connector-linux.test.mjs
+
+Use the exact reviewed pinned SDK/runtime. It loads actual SDK subprocess,
+sandbox, Bash and jobs, then starts a fixed loopback server through B's real
+startWithCustody/custodyFor. No execute/process boundary is mocked. It creates
+only a new owned /var/lib/homeai-host-peer-fixture-* tree and ephemeral127.0.0.1
+listeners; no model, HTTP request, Native server, VM, download or installation.
+It proves zero early bytes, exact accepted descendant socket, later explicit
+fixture-only data exchange, refusal of a separate parent-owned listener with
+zero bytes and that listener still alive, plus revocation/lease.done closure.
+All owned connections/jobs settle before recursive own-tree removal.
+
+This explicit Root fixture requires UID0 and an actual selected confinement
+backend preserving the host PID/network namespaces (normally Landlock).
+A supported bwrap PID-isolated SDK backend is intentionally refused by this
+HOST connector; the fixture must not waive or relabel that failure. No outside
+write sentinel under the SDK's globally writable /tmp is used. Root UID0 proof
+does NOT qualify production UID1001 proc visibility/ptrace permissions; that
+remains a separate exact-runtime qualification prerequisite before use.
