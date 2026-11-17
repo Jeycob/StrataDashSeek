@@ -59,11 +59,13 @@ test('source changes, unknown test classification and unavailable suites cannot 
 test('discovery includes development, Python and new test directories while reporting helpers and historical fixtures explicitly', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'release-ci-inventory-'));
   t.after(async () => {const real = await fs.realpath(root); assert.equal(path.dirname(real), await fs.realpath(os.tmpdir())); assert(path.basename(real).startsWith('release-ci-inventory-')); assert.equal((await fs.lstat(root)).isSymbolicLink(), false); await fs.rm(real, {recursive: true, force: true});});
-  for (const name of ['development/new.test.mjs', 'mobile/test_notification_watcher.py', 'vast/startup-extract-tests.py', 'new-module/new.test.cjs', 'new-module/manual-check.cjs', 'workspace/native-ui/test-bundle.cjs', 'benchmarks/historical/challenge.test.cjs', 'node_modules/dependency/ignored.test.mjs']) {
+  for (const name of ['development/new.test.mjs', 'mobile/test_notification_watcher.py', 'vast/startup-extract-tests.py', 'new-module/new.test.cjs', 'new-module/manual-check.cjs', 'workspace/native-ui/test-bundle.cjs', 'benchmarks/historical/challenge.test.cjs', 'benchmarks/n06-finalization/finalization.test.mjs', 'node_modules/dependency/ignored.test.mjs']) {
     await fs.mkdir(path.dirname(path.join(root, name)), {recursive: true}); await fs.writeFile(path.join(root, name), '');
   }
   const result = await inventory(root);
-  assert.equal(result.entries.length, 7); assert.deepEqual(result.unclassified, ['new-module/manual-check.cjs']);
+  assert.equal(result.entries.length, 8); assert.deepEqual(result.unclassified, ['new-module/manual-check.cjs']);
+  const finalization = result.entries.find(row => row.file === 'benchmarks/n06-finalization/finalization.test.mjs');
+  assert.equal(finalization.required, true); assert.equal(finalization.kind, 'node'); assert.equal(finalization.lane, 'portable'); assert.equal(finalization.minTests, 13);
   assert.equal(result.entries.find(row => row.file.endsWith('test_notification_watcher.py')).kind, 'python');
   assert.equal(classify('vast/apps-context-linux-check.cjs').lane, 'linux-root');
   assert.equal(classify('workspace/runtime-admission-native.test.cjs').minTests, 2);

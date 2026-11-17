@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.png -text
+# Preserve the byte-pinned benchmark dependency snapshots across checkouts.
+benchmarks/n06-finalization/frozen/** -text
