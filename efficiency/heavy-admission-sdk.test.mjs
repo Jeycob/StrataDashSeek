@@ -10,6 +10,9 @@ import {retainHeavyToolLease} from './heavy-tool-lease.mjs';
 import {registerWorkspaceHeavyAdmission} from './heavy-admission.mjs';
 import {createProjectAppsTools} from '../workspace/project-apps-tools.mjs';
 import {createProjectAppsReceiptStore} from '../workspace/project-apps-receipts.mjs';
+import {createHash} from 'node:crypto';
+import {createProjectExecutionMode} from '../workspace/execution-mode-service.mjs';
+function hostMode(){const policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},policySha256=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(policy).sort(([a],[b])=>a.localeCompare(b))))).digest('hex'),snapshot={...policy,policySha256,sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'};return createProjectExecutionMode({snapshot,assertUnchanged:()=>snapshot}).service;}
 const SDK=process.env.EFFICIENCY_SDK_ROOT??'/data/harness/runtime/node_modules';
 const load=(name,file='index.js')=>import(pathToFileURL(path.join(SDK,'@deepseek-ai',name,'lib',file)));
 const [{Context},{default:SystemPrompt},{default:Tools},{ToolExecutionPipeline,executeToolBatch},{createScope}]=await Promise.all([load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-tools','pipeline.js'),load('dsh-scope')]);
@@ -19,6 +22,7 @@ async function fixture(t,{schedule=true,registerFirst=false,orphan=false,liveBod
  const a={id:'sdk-heavy',session:{id:'sdk-heavy',header:{}}},scope=createScope(ctx,a);a.ctx=scope.ctx;
  const root=path.join(directory,'project');await fs.mkdir(root);let mutations=0,reads=0,checks=0,acquires=0;const requests=[];
  ctx.provide('agents',{get:id=>id===a.id?a:undefined,list:()=>[a]});ctx.provide('llm',{});ctx.provide('shell',{});ctx.provide('shellEnv',{});
+ ctx.provide('projectExecutionMode',hostMode());
  ctx.on('workspace-runtime/review',async()=>({root,sourceHash:'synthetic',checkpoints:{},legacy:false}));
  const manager={ownerAgent:value=>value,data:{sessions:{[a.id]:{root,independentRepository:true}}},withProjectRuntimeAuthority:async(_input,action)=>action('unused')};
  const store=createProjectAppsReceiptStore(path.join(directory,'private'));const row={requestId:'a'.repeat(32),ownerId:a.id,projectId:'b'.repeat(16),appsJobId:null,startedAt:1};if(orphan)await store.save(row);

@@ -6,6 +6,9 @@ import path from 'node:path';
 import {verifyProject, runProgram, validateContract, confined, parseTestCounts, compactReport} from './core.mjs';
 import {validatePlan, resolveBaseURL, verifyBrowser} from './browser.mjs';
 import {executeVerification, apply} from './plugin.mjs';
+import {createHash} from 'node:crypto';
+import {createProjectExecutionMode} from '../workspace/execution-mode-service.mjs';
+function hostMode(){const policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},policySha256=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(policy).sort(([a],[b])=>a.localeCompare(b))))).digest('hex'),snapshot={...policy,policySha256,sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'};return createProjectExecutionMode({snapshot,assertUnchanged:()=>snapshot}).service;}
 
 const command = code => [process.execPath, '-e', code];
 async function project(t, checks, requiredKinds = ['test']) {
@@ -124,7 +127,7 @@ test('browser plan cannot silently ignore misspelled expectations or use foreign
 function pluginContext({stale=false,exitCode=0}={}) {
   const root=path.resolve('managed-project'), events=[], specs=[]; let reviews=0;
   const report={passed:true,complete:true,stale:false,checks:[{passed:true,checksPassed:4,checksTotal:4,artifactPaths:[]}]};
-  const ctx={waterfall:async()=>({root,sourceHash:stale && reviews++ ? 'new' : 'original',ports:[4000]}),serial:async(name,value)=>events.push({name,value}),shellEnv:{collect:()=>({DSH_APP_PORT:'4000'})},shell:{sandboxMode:'workspace-write',resolve:s=>{specs.push(s);return s;},execute:async()=>({result:async()=>({exitCode,stdout:{text:JSON.stringify(report)}})})}};
+  const ctx={projectExecutionMode:hostMode(),waterfall:async()=>({root,sourceHash:stale && reviews++ ? 'new' : 'original',ports:[4000]}),serial:async(name,value)=>events.push({name,value}),shellEnv:{collect:()=>({DSH_APP_PORT:'4000'})},shell:{sandboxMode:'workspace-write',resolve:s=>{specs.push(s);return s;},execute:async()=>({result:async()=>({exitCode,stdout:{text:JSON.stringify(report)}})})}};
   return {ctx,root,events,specs,execution:{agent:{session:{id:'fixture'}},signal:new AbortController().signal}};
 }
 test('plugin uses managed root and native confinement and reports once',async()=>{
@@ -134,7 +137,7 @@ test('plugin uses managed root and native confinement and reports once',async()=
   assert.equal(f.events.length,1); assert.equal(f.events[0].value.sourceHash,'original'); assert.equal(f.events[0].value.checksTotal,4);
 });
 test('native tool definition uses a concurrency callback',()=>{
-  let definition;apply({tools:{register:tool=>{definition=tool;}}});
+  let definition;apply({projectExecutionMode:hostMode(),tools:{register:tool=>{definition=tool;}}});
   assert.equal(definition.name,'verify_project');assert.equal(definition.isConcurrencySafe({}),false);
 });
 test('plugin invalidates changed source and nonzero native exits',async()=>{

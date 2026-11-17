@@ -8,6 +8,9 @@ import {pathToFileURL} from 'node:url';
 import {createRequire} from 'node:module';
 import {apply,inject} from './plugin.mjs';
 import {digest} from '../quality/core.mjs';
+import {createHash} from 'node:crypto';
+import {createProjectExecutionMode} from '../workspace/execution-mode-service.mjs';
+function hostMode(){const policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},policySha256=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(policy).sort(([a],[b])=>a.localeCompare(b))))).digest('hex'),snapshot={...policy,policySha256,sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'};return createProjectExecutionMode({snapshot,assertUnchanged:()=>snapshot}).service;}
 
 const SDK=process.env.EFFICIENCY_SDK_ROOT??'/data/harness/runtime/node_modules';
 const yaml=createRequire(path.join(path.dirname(SDK),'package.json'))('yaml');
@@ -25,6 +28,8 @@ async function fixture(t,{throughPlugin=false,declaredInject=inject,events=[]}={
   t.after(async()=>{await ctx.fiber.dispose();await fs.rm(directory,{recursive:true,force:true});});
   new SystemPrompt(ctx,{});new Tools(ctx);
   const agent={id:'sdk-agent',session:{id:'sdk-agent',header:{}}};ctx.provide('agents',{get:id=>id===agent.id?agent:undefined});ctx.provide('llm',{});ctx.provide('shell',{});ctx.provide('shellEnv',{});
+  if(throughPlugin)await ctx.plugin({name:'explicit-execution-mode-fixture',apply(owner){owner.provide('projectExecutionMode',hostMode());}}).await();
+  else ctx.provide('projectExecutionMode',hostMode());
   const historyReads=[],queryService={async readSession(id){historyReads.push(id);return{events};}};
   // Native owns sessionQuery in a sibling plugin, not on the root context.
   // A root-owned provision would bypass Cordis's declared dependency check.
