@@ -1,10 +1,14 @@
-# Execution protocol1 source declaration
+# Execution source qualification: host-compatible candidate
 
-The exact canonical vast/project-execution-compatibility.json declares this
-integrated source's execution-mode contract. It does not activate a mode,
-install the stable bootstrap, create a policy, provision a guest or establish
-product/isolation acceptance. Required exact-source release CI and the cold
-operator procedure remain mandatory before use.
+This candidate intentionally remains protocol0 (descriptor absent). A source
+audit found native SDK automatic project instruction/skill readers outside the
+tool pipeline, using the host project cwd and following resolved symlinks.
+Their mode-aware boundary must be fixed and functionally tested before a later
+protocol1 declaration. The former8ad draft declaration was not deployed and
+is withdrawn. Host-compatible cold bootstrap qualification and isolated
+activation are separate phases. Required exact-source release CI and the cold
+operator procedure remain mandatory. No execution policy or bootstrap has
+been changed in staging by this source work.
 
 The integration binds supervisor publication and inherited launch identity,
 the permanent root SDK admission slot, manager/storage/Changes/capabilities,

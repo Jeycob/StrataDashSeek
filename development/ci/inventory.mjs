@@ -19,7 +19,7 @@ const hostFixtures = new Map([
   ['workspace/reasoning-smoke.cjs', 'Legacy fixture requires installed host profiles; current-source unit/SDK checks are separate.']
 ]);
 const linuxChecks = new Set(['development/guest-disk-grow-linux-check.cjs','deployments/worker-network-linux-check.cjs','vast/runtime-paths-linux-check.cjs', 'vast/startup-update-linux-check.cjs', 'workspace/process-lock-linux-check.mjs', 'workspace/checkpoint-restore-linux-check.mjs', 'mobile/runtime-readiness-native-check.cjs', 'vast/apps-context-linux-check.cjs','vast/runtime-lease-linux-check.cjs','vast/startup-hook-linux-check.cjs']);
-const rootTests = new Set(['mobile/runtime-readiness.test.cjs', 'vast/apps-data-linux-check.cjs', 'workspace/editor-transport.test.cjs']);
+const rootTests = new Set(['development/project-toolchain.test.cjs', 'mobile/runtime-readiness.test.cjs', 'vast/apps-data-linux-check.cjs', 'workspace/editor-transport.test.cjs']);
 export function candidate(name) {
   if (hostFixtures.has(name.replaceAll('\\', '/'))) return true;
   const base = path.posix.basename(name);

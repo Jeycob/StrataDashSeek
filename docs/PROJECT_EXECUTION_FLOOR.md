@@ -1,8 +1,8 @@
 # Stable execution floor
 
 This source adds stable enforcement for the separate execution-mode protocol.
-It does not install the bootstrap, provision policy, migrate credentials or
-qualify isolated execution. The integrated source declaration is described below.
+It does not install the bootstrap, provision policy, declare source protocol1,
+migrate credentials or qualify isolated execution.
 
 ## Separate capability, unchanged recovery identity
 
@@ -15,11 +15,11 @@ verified source tree:
 {"contract":"project-execution-v1","sourceProtocol":1,"version":1}
 ```
 
-Root integration now supplies that exact descriptor for the complete bound
-source composition. See PROJECT_EXECUTION_RELEASE_QUALIFICATION.md for the
-checked consumers and remaining runtime acceptance. A module filename or
-partial source preparation does not declare support. Descriptor bytes are
-covered by the normal signed-source digest.
+The current host-compatible candidate intentionally has no descriptor. The
+SDK automatic project-context reader boundary still needs integration before
+protocol1 qualification. See PROJECT_EXECUTION_RELEASE_QUALIFICATION.md.
+A later declaration requires a separate reviewed signed-source change; its
+bytes are covered by the normal signed-source digest.
 
 An absent descriptor is protocol0; the exact canonical descriptor is
 protocol1. Malformed, linked, writable, oversized or future descriptors fail
