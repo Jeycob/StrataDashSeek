@@ -14,6 +14,15 @@ test('Apps process derives exact own immutable source and inherited launch, with
  for(const invalid of ['/data/harness/app/vast','/tmp/releases/'+ 'b'.repeat(40)+'/vast',directory+'/nested'])assert.throws(()=>bindAppsProcess({directory:invalid,filesystem:{realpathSync:p=>p}}),{code:'PROJECT_EXECUTION_SOURCE_INVALID'});
  assert.throws(()=>bindAppsProcess({directory,launchId:'mismatched',filesystem:{realpathSync:p=>p},trustedDirectory(){},modeContract:{bindForService:()=>f.binding}}),{code:'PROJECT_EXECUTION_BINDING_CHANGED'});
 });
+test('Apps DEFAULT process validator reads every protected ancestor without privileged runtime helpers',()=>{
+ const f=executionBindingFixture('host-compat'),directory='/data/harness/releases/'+f.binding.snapshot.sourceCommit+'/vast',seen=[],unsafe=new Map();
+ const filesystem={realpathSync:p=>unsafe.get(p)?.realpath??p,lstatSync(p){seen.push(p);return{uid:0,mode:0o755,isDirectory:()=>true,isSymbolicLink:()=>false,...unsafe.get(p)};}};
+ let binds=0;const options={directory,launchId:f.binding.snapshot.launchId,filesystem,modeContract:{bindForService(input){binds++;assert.deepEqual(input,{sourceCommit:f.binding.snapshot.sourceCommit,launchId:f.binding.snapshot.launchId});return f.binding;}}};
+ assert.equal(bindAppsProcess(options).snapshot.mode,'host-compat');assert.deepEqual(seen,['/','/data','/data/harness','/data/harness/releases','/data/harness/releases/'+f.binding.snapshot.sourceCommit,directory]);assert.equal(binds,1);
+ for(const [target,change]of [['/data',{uid:1001}],['/data/harness/releases',{mode:0o775}],[directory,{mode:0o757}],[directory,{isDirectory:()=>false}],['/data/harness',{isSymbolicLink:()=>true}],['/data/harness/releases',{realpath:'/different'}]]){unsafe.set(target,change);assert.throws(()=>bindAppsProcess(options),{code:'PROJECT_EXECUTION_SOURCE_UNSAFE'});unsafe.clear();assert.equal(binds,1);}
+ assert.throws(()=>bindAppsProcess({...options,filesystem:{...filesystem,lstatSync(){throw Object.assign(Error('denied'),{code:'EACCES'});}}}),{code:'PROJECT_EXECUTION_SOURCE_UNSAFE'});assert.equal(binds,1);
+ f.fail();assert.throws(()=>bindAppsProcess(options),{code:'PROJECT_EXECUTION_BINDING_CHANGED'});
+});
 test('missing Apps production binding fails before creating state or controller key',async t=>{
  const dir=await temporary(t),stateDir=path.join(dir,'not-created'),keyFile=path.join(dir,'not-created-key');assert.throws(()=>new AppsManager({stateDir,executionMode:'host-compat'}),{code:'PROJECT_EXECUTION_BINDING_REQUIRED'});await assert.rejects(fs.stat(stateDir),{code:'ENOENT'});
  assert.throws(()=>createAppsService({keyFile,executionMode:'host-compat'}),{code:'PROJECT_EXECUTION_SOURCE_INVALID'});await assert.rejects(fs.stat(keyFile),{code:'ENOENT'});
