@@ -1,6 +1,8 @@
 # Doručování změn HomeAI
 
-Postup vychází z integračních zkušeností 16.–17. listopadu 2026. Cílem je rychleji doručovat ověřené uživatelské výsledky a omezit přípravy, které jejich dostupnost neposouvají.
+Postup vychází z integračních zkušeností 16.–18. listopadu 2026. Cílem je rychleji doručovat ověřené uživatelské výsledky a omezit přípravy, které jejich dostupnost neposouvají.
+
+**Souhlas s původní benchmarkovou sadou:** uživatel 18. listopadu 2026 přímo v koordinačním chatu potvrdil všech 20 již zadaných běhů HomeAI/DS na stávajícím Vastu podle původního zmrazeného manifestu, včetně jeho omezených opravných pokusů. Jednotlivé běhy této sady nevyžadují další souhlas. Oprávnění platí do jejího dokončení nebo změny či odvolání uživatelem; nezahrnuje nové placené prostředky, neomezené opakování ani rozšíření sady. Původní časové limity, povinné přijetí a omezení nástrojů zůstávají. Přímé potvrzení a uzavření původní otázky uchovává projektové předání; případné konkrétní nové odmítnutí nástroje posuzuj podle jeho skutečného důvodu.
 
 1. **Vyber nejbližší použitelný výsledek.** Popiš cestu od viditelné konverzace přes skutečný model a nástroje k dostupnému preview. Každá infrastrukturní práce musí určit, kterou její část odblokuje. Guest runtime rozvíjej souběžně; podporovaný HOST pilot na něj nečeká, pokud jej jeho zadání nevyžaduje. Docker scénář ovšem potřebuje skutečný Docker. Přijetí ani izolaci kvůli alternativní cestě neoslabuj.
 

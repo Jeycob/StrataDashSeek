@@ -9,6 +9,8 @@ Navazuj na rozpracovanou práci a doruč nejbližší použitelný výsledek v r
 
 **Trvalé projektové oprávnění:** uživatel 17. 11. 2026 přímo schválil současné i budoucí opravy HomeAI / StrataDashSeek do `main` a všechny potřebné projektové přenosy mezi jeho pracovním prostorem, GitHubem projektu a stávajícím Vast prostředím. Souhlas platí do změny či odvolání; nežádej jej znovu pro jednotlivé SHA, merge ani dávky těchto přenosů. Přesné výroky a zdroj jsou v osobním workflow a projektovém předání. Ověření výsledku, ochrana tajemství a omezení nástrojů zůstávají; toto oprávnění se nepřenáší na nesouvisející projekty ani nové placené prostředky.
 
+**Původní benchmarková sada:** uživatel 18. 11. 2026 přímo v koordinačním chatu potvrdil všech 20 již zadaných běhů HomeAI/DS na stávajícím Vastu podle původního zmrazeného manifestu, včetně jeho omezených opravných pokusů. Nežádej další souhlas pro jednotlivé běhy této sady. Oprávnění platí do jejího dokončení nebo změny či odvolání uživatelem; nezahrnuje nové placené prostředky, neomezené opakování ani rozšíření sady. Původní časové limity a omezení nástrojů zůstávají; případné konkrétní nové odmítnutí řeš podle jeho skutečného důvodu. Přesný výrok a zdroj uchovává osobní workflow a projektové předání.
+
 ## Načti jen potřebné podklady
 
 Cesty níže jsou relativní ke koordinačnímu pracovnímu prostoru HomeAI. Hledej jej nejprve v kontextu zadání; známé místní umístění je `C:/Users/jkremer/Documents/ChatGPT/SaturdayNight`. Rozliš tento prostor od implementátorových checkoutů. Pokud chybí podklad nezbytný pro provozní zásah, pojmenuj jej; dostupná nezávislá lokální práce může pokračovat.
