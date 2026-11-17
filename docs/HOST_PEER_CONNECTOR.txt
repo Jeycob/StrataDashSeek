@@ -49,11 +49,24 @@ namespace with the connector and have the trusted service UID. Namespace PIDs
 are never guessed or treated as host PIDs. Different child process groups or
 setsid() do not invalidate real parent ancestry.
 
-One fixed IPv4 TCP connection to127.0.0.1 and the trusted port is made paused.
-There is no HTTP module, request, preface, health probe, write or retry/redial.
+One established IPv4 TCP connection to127.0.0.1 and the trusted port is retained
+paused. Custody is not application listen readiness. Before any connection is
+established, ECONNREFUSED alone may be retried: each refused zero-write socket
+must actually close first, then the same target/binding/custody/anchor is
+rechecked before a fresh paused socket. There are at most100 attempts,25ms
+apart, within the SAME original deadline (maximum2500ms); no deadline resets.
+Other connect errors refuse immediately. There is no HTTP module, request,
+preface, health request or application write. Once TCP establishes, there is
+never a redial/retry after attribution refusal, ambiguity or any proof change.
 Before exposing this same socket, bytesWritten must still be0 and the exact
 local/remote endpoints must match. A reader may buffer bounded unsolicited
 server data under Node's stream high-water mark; this is not forwarded HTTP.
+
+Private error evidence includes only phase (context/tcp-connect/peer-proof),
+dialAttempts, established and a bounded lastConnectCode. A historical refused
+connect code may remain while a later established proof fails; phase/code must
+be interpreted together. No raw message, target, PID, root, token or credentials
+are added to these diagnostics. They are evidence, not caller-selected authority.
 
 Both /proc/self/net/tcp and tcp6 are read. IPv4-mapped IPv6 accepted peers are
 canonicalized too, so an ordinary dual-stack server is supported. Only the

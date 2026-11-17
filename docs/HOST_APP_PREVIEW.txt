@@ -66,6 +66,12 @@ a fresh verified same-socket connector result before any HTTP bytes cross the
 relay. Attribution refusal closes that connection and never kills or adopts the
 foreign listener. No permissive proxy or direct-port fallback exists.
 
+Wrapper custody does not prove that the application's listen() has completed.
+The connector may retry only a refused pre-connect socket after its actual
+zero-write close, with the same target, live custody/anchor and original bounded
+deadline. It never repeats the application command, resets expiry or redials
+after an established connection's attribution fails. See HOST_PEER_CONNECTOR.
+
 The normal tool renderer provides an Open application preview Markdown link;
 no Native bundle change is needed. Open again with the same own job ID for a
 fresh one-use link before expiry. Status contains no new bearer grant. The
@@ -86,6 +92,17 @@ caller fields, selector or authority are added. Model tool open/status/close
 and owner open/restart/close outputs do not expose this status-only record.
 An observer must bind the complete ready-state fingerprint and both real
 history identifiers; absent/mismatched correlation cannot excuse unsettled work.
+
+Owner restart failures return {code,diagnostic}; owner status retains the same
+lastRestartFailure. The bounded diagnostic records observedAt and phase
+(stop-old/context/admission/custody/peer-probe/post-probe), safe error code and,
+when available, peer phase/dial count/established/last connect code. It includes
+no raw exception message, stderr, PID, root or credentials. Model status does
+not expose it. This distinguishes an old-range stop failure from a new app's
+listen/proof failure, including after exact new-producer cleanup. Preserve the
+actual non200 body before archiving. A later delayed-listen reproduction proves
+that source race exists, not that it caused an earlier attempt whose code/body
+was not retained. Restart receipts remain idempotent; diagnostics cause no retry.
 
 The existing owner-Peer authenticated connection service registers exactly
 POST /api/workbench/preview with buffered JSON at most2048 bytes and a second

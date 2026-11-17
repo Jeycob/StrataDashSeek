@@ -14,6 +14,12 @@ const {EditorOrigins}=createRequire(import.meta.url)('./editor-origins.cjs');
 const {createEditorBroker}=createRequire(import.meta.url)('./editor-broker.cjs');
 const fail=code=>new WorkbenchError(code,'The application preview is unavailable. Check its own job and reopen it from this conversation.',409);
 const need=(value,code)=>{if(!value)throw fail(code);};
+const diagnosticCode=value=>typeof value==='string'&&/^[A-Z][A-Z0-9_]{0,63}$/.test(value)?value:null;
+function restartDiagnostic(error,phase,observedAt){
+ const diagnostic={phase,code:diagnosticCode(error?.code)??'PREVIEW_RESTART_FAILED',observedAt},peer=error?.peerDiagnostic;
+ if(peer&&['context','tcp-connect','peer-proof'].includes(peer.phase)&&Number.isInteger(peer.dialAttempts)&&peer.dialAttempts>=0&&peer.dialAttempts<=100&&typeof peer.established==='boolean')diagnostic.peer=Object.freeze({phase:peer.phase,dialAttempts:peer.dialAttempts,established:peer.established,lastConnectCode:diagnosticCode(peer.lastConnectCode)});
+ return Object.freeze(diagnostic);
+}
 const ID=/^[a-zA-Z0-9_-]{1,128}$/;
 const contained=(base,file)=>file!==base&&file.startsWith(base+path.sep);
 export const previewSupported=ctx=>process.platform==='linux'&&os.endianness()==='LE'&&typeof process.getuid==='function'&&hasOwnedRangeProvider(ctx?.subprocess);
@@ -75,7 +81,7 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
  }});}
  const view=entry=>({version:1,state:entry.state,sessionId:entry.sessionId,previewId:entry.id,jobId:entry.jobId,generation:entry.generation,url:entry.endpoint.origin+'/',expiresAt:entry.deadline,workSettled:entry.workSettled===true,reopenInstructions:'Use project_preview open with this own job ID to obtain a fresh link before the displayed expiry.'});
  const issue=entry=>{const grant=entry.broker.issue();return{...view(entry),url:grant.url,grantExpiresAt:grant.grantExpiresAt};};
- const ownerStatus=entry=>({...view(entry),correlation:{version:1,sessionId:entry.sessionId,ownerAgentId:entry.owner,jobId:entry.jobId,previewId:entry.id,generation:entry.generation,expiresAt:entry.deadline,originalCall:entry.originalCall??null,producerCall:entry.producerCall??null}});
+ const ownerStatus=entry=>({...view(entry),lastRestartFailure:entry.restartFailure??null,correlation:{version:1,sessionId:entry.sessionId,ownerAgentId:entry.owner,jobId:entry.jobId,previewId:entry.id,generation:entry.generation,expiresAt:entry.deadline,originalCall:entry.originalCall??null,producerCall:entry.producerCall??null}});
  function revoke(entry){entry.abort.abort();entry.target.abort();entry.relay?.destroyConnections();try{entry.broker?.close();}catch{}if(entry.broker?.server.listening){entry.broker.server.closeAllConnections();entry.broker.server.close();}clearTimeout(entry.timer);}
  async function closeEntry(entry){
   entry.state='closing';revoke(entry);
@@ -115,17 +121,18 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
   need(ID.test(input.requestId??'')&&input.previewId===entry.id,'PREVIEW_RESTART_INVALID');
   if(entry.restarts.has(input.requestId))return entry.restarts.get(input.requestId);
   need(entry.restarts.size<16&&input.generation===entry.generation,'PREVIEW_RESTART_STALE');
-  await validateEntry(entry);const operation=bounded(async restartSignal=>{
+  await validateEntry(entry);entry.restartFailure=null;let phase='stop-old';const recordFailure=error=>{entry.restartFailure??=restartDiagnostic(error,phase,f.now());};const operation=bounded(async restartSignal=>{
    entry.state='restarting';entry.target.abort();entry.relay.destroyConnections();
    try{
     try{await run.stopOwned(entry.jobId,entry.owner);}catch{}await entry.producerDone;restartSignal.throwIfAborted();
+    phase='context';
     const fresh=await context(entry.sessionId,entry.access);need(fresh.record===entry.project.record&&fresh.workspaceId===entry.project.workspaceId&&fresh.port===entry.project.port&&fresh.root===entry.project.root&&fresh.dev===entry.project.dev&&fresh.ino===entry.project.ino&&!entry.abort.signal.aborted&&entry.deadline-f.now()>=1000,'PREVIEW_RESTART_CHANGED');
-    const background=await executeRestart(entry,restartSignal);restartSignal.throwIfAborted();const capture=await run.custodyFor(background.jobId,entry.owner);restartSignal.throwIfAborted();
+    phase='admission';const background=await executeRestart(entry,restartSignal);restartSignal.throwIfAborted();phase='custody';const capture=await run.custodyFor(background.jobId,entry.owner);restartSignal.throwIfAborted();
     need(capture.expiresAt<=entry.deadline&&capture.context.projectRoot===entry.project.root,'PREVIEW_RESTART_CHANGED');
     entry.capture=capture;entry.generation=capture.identity.generation;entry.jobId=background.jobId;entry.target=new AbortController();entry.state='opening';
-    const peer=await connector(entry).connect({deadline:Math.min(entry.deadline,f.now()+2500),signal:restartSignal});peer.close();await peer.done;await validateEntry(entry);restartSignal.throwIfAborted();entry.state='ready';watch(entry,capture);return view(entry);
-   }catch(error){entry.state='blocked';entry.target.abort();entry.relay.destroyConnections();throw error;}
-  },Math.min(entry.deadline,f.now()+f.operationMs),signal?AbortSignal.any([signal,entry.abort.signal]):entry.abort.signal).catch(error=>{entry.state='blocked';entry.target.abort();entry.relay.destroyConnections();void run.stopOwned(entry.jobId,entry.owner).catch(()=>{});throw error;});entry.restarts.set(input.requestId,operation);return operation;
+    phase='peer-probe';const peer=await connector(entry).connect({deadline:Math.min(entry.deadline,f.now()+2500),signal:restartSignal});peer.close();await peer.done;phase='post-probe';await validateEntry(entry);restartSignal.throwIfAborted();entry.state='ready';watch(entry,capture);return view(entry);
+   }catch(error){recordFailure(error);entry.state='blocked';entry.target.abort();entry.relay.destroyConnections();throw error;}
+  },Math.min(entry.deadline,f.now()+f.operationMs),signal?AbortSignal.any([signal,entry.abort.signal]):entry.abort.signal).catch(error=>{recordFailure(error);entry.state='blocked';entry.target.abort();entry.relay.destroyConnections();void run.stopOwned(entry.jobId,entry.owner).catch(()=>{});throw Object.assign(fail(entry.restartFailure.code),{previewDiagnostic:entry.restartFailure});});entry.restarts.set(input.requestId,operation);return operation;
  }
  async function executeRestart(entry,signal){
   // A one-use server ticket enters the actual SDK guard/approval/heavy-tool
@@ -163,7 +170,7 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
  const revokeSession=sessionId=>{const entry=entries.get(sessionId);if(entry){revoke(entry);void ordered(sessionId,()=>closeEntry(entry));}};
  ctx.on('workspace/session-archived',({sessionId})=>revokeSession(sessionId));
  ctx.on('session/event',(session,event)=>{if(event.type==='sandbox/mode')for(const entry of entries.values())if(entry.sessionId===session.id||entry.owner===session.id)revokeSession(entry.sessionId);});
- ctx.effect(()=>ctx.connection.fetch.register({path:'/api/workbench/preview',methods:['POST'],requestBody:'buffered',async fetch(request){try{if(!sameRequestOrigin(request))return new Response('{"code":"ORIGIN_REFUSED"}',{status:403});return Response.json(await operation(await boundedJSON(request,2048),{ownerControl:true,signal:request.signal}),{headers:{'Cache-Control':'no-store'}});}catch(error){return Response.json({code:error.code??'PREVIEW_UNAVAILABLE'},{status:error.status??503,headers:{'Cache-Control':'no-store'}});}}}));
+ ctx.effect(()=>ctx.connection.fetch.register({path:'/api/workbench/preview',methods:['POST'],requestBody:'buffered',async fetch(request){try{if(!sameRequestOrigin(request))return new Response('{"code":"ORIGIN_REFUSED"}',{status:403});return Response.json(await operation(await boundedJSON(request,2048),{ownerControl:true,signal:request.signal}),{headers:{'Cache-Control':'no-store'}});}catch(error){return Response.json({code:error.code??'PREVIEW_UNAVAILABLE',...(error.previewDiagnostic?{diagnostic:error.previewDiagnostic}:{})},{status:error.status??503,headers:{'Cache-Control':'no-store'}});}}}));
  const poll=setInterval(()=>{for(const entry of entries.values())if(entry.state==='ready')void validateEntry(entry).catch(()=>{if(entries.get(entry.sessionId)===entry)revokeSession(entry.sessionId);});},1000);poll.unref?.();
  return{install,remove,operation,available,handles:actual=>registrations.get(actual.agent)?.definition===ctx.tools.get(actual.name,actual.agent,actual.toolSet),async dispose(){disposed=true;clearInterval(poll);for(const registration of registrations.values())registration.remove();registrations.clear();for(const entry of entries.values())revoke(entry);await Promise.allSettled([...entries.values()].map(closeEntry));}};
 }

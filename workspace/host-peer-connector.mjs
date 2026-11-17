@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import {constants} from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-export const peerLimits=Object.freeze({milliseconds:2500,attempts:32,pollMs:25,processes:128,tasks:512,fds:4096,entries:8192,bytes:4*1024**2,operations:16384,fileBytes:262144,rows:4096,evidenceBytes:65536});
+export const peerLimits=Object.freeze({milliseconds:2500,attempts:32,connectAttempts:100,pollMs:25,processes:128,tasks:512,fds:4096,entries:8192,bytes:4*1024**2,operations:16384,fileBytes:262144,rows:4096,evidenceBytes:65536});
 const failure=code=>Object.assign(Error(code),{code}),need=(ok,code)=>{if(!ok)throw failure(code);};
 const decimal=value=>typeof value==='string'&&/^[1-9][0-9]{0,19}$/.test(value);
 const stable=value=>JSON.stringify(value);
@@ -68,9 +68,9 @@ export function createOwnPeerConnector({binding,custodyFor}={},trusted={}){
  return Object.freeze({async connect(options){
   need(options&&Object.keys(options).every(key=>['deadline','signal'].includes(key))&&Number.isSafeInteger(options.deadline),'PEER_CONNECT_OPTIONS_INVALID');
   need(platform==='linux'&&endianness==='LE','PEER_PLATFORM_UNSUPPORTED');const end=Math.min(options.deadline,now()+peerLimits.milliseconds);
-  let socket,lease,source,target,timer,ended=false,resolveDone;const done=new Promise(resolve=>{resolveDone=resolve;});let rejectStop;
+  let socket,lease,source,target,timer,ended=false,socketClosed=true,resolveDone,dialAttempts=0,established=false,lastConnectCode=null,phase='context';const done=new Promise(resolve=>{resolveDone=resolve;});let rejectStop;
   const stopped=new Promise((_,reject)=>{rejectStop=reject;});void stopped.catch(()=>{});
-  const close=()=>{ended=true;if(socket)socket.destroy();else resolveDone();};
+  const close=()=>{ended=true;if(socket&&!socketClosed)socket.destroy();else resolveDone();};
   const stop=code=>{rejectStop(failure(code));close();};
   const abort=()=>stop('PEER_ABORTED'),revoke=()=>stop('PEER_BINDING_REVOKED');
   const check=()=>{need(!ended&&!options.signal?.aborted&&now()<end,'PEER_DEADLINE_OR_CLOSED');if(source){need(!source.signal.aborted,'PEER_BINDING_REVOKED');need(!source.assertCurrent()?.then,'PEER_ASYNC_ASSERT_UNSUPPORTED');need(stable(targetSnapshot(source))===stable(target),'PEER_BINDING_CHANGED');}if(lease)lease.assertCurrent();};
@@ -88,9 +88,25 @@ export function createOwnPeerConnector({binding,custodyFor}={},trusted={}){
     const rootBefore=await reader.call(()=>files.stat(target.projectRoot));need(rootBefore.isDirectory(),'PEER_PROJECT_ROOT_CHANGED');
     // No socket/bytes before trusted context and the live anchor are checked.
     const liveAnchor=await reader.identity(anchor.pid,target.uid,namespaces.pid,namespaces.net);need(['pid','ppid','pgrp','startTicks'].every(key=>liveAnchor[key]===anchor[key]),'PEER_ANCHOR_CHANGED');check();
-    socket=makeSocket();socket.pause();socket.on('error',()=>close());socket.once('close',()=>{ended=true;rejectStop(failure('PEER_SOCKET_CLOSED'));cleanup();resolveDone();});
     Promise.resolve(lease.done).then(()=>stop('PEER_CUSTODY_EXPIRED'),()=>stop('PEER_CUSTODY_EXPIRED'));
-    await new Promise((resolve,reject)=>{const fail=error=>reject(error?.code?failure('PEER_CONNECT_FAILED'):error);socket.once('error',fail);socket.once('connect',()=>{socket.removeListener('error',fail);resolve();});socket.connect({host:'127.0.0.1',port:target.port,family:4,localAddress:'127.0.0.1'});});check();
+    phase='tcp-connect';
+    for(;dialAttempts<peerLimits.connectAttempts;){
+     check();const currentAnchor=await reader.identity(anchor.pid,target.uid,namespaces.pid,namespaces.net);need(['pid','ppid','pgrp','startTicks'].every(key=>currentAnchor[key]===anchor[key]),'PEER_ANCHOR_CHANGED');check();
+     const current=makeSocket();socket=current;socketClosed=false;dialAttempts++;let connected=false,closed;
+     const closedPromise=new Promise(resolve=>{closed=resolve;});current.pause();current.on('error',()=>{if(connected)close();});
+     current.once('close',()=>{closed();if(socket===current)socketClosed=true;if(connected||ended){ended=true;rejectStop(failure('PEER_SOCKET_CLOSED'));cleanup();resolveDone();}});
+     try{
+      await new Promise((resolve,reject)=>{const earlyClose=()=>reject(failure('PEER_SOCKET_CLOSED')),fail=error=>{lastConnectCode=typeof error?.code==='string'&&/^[A-Z0-9_]{1,64}$/.test(error.code)?error.code:null;const refused=failure('PEER_CONNECT_FAILED');refused.refused=lastConnectCode==='ECONNREFUSED';reject(refused);};current.once('error',fail);current.once('close',earlyClose);current.once('connect',()=>{connected=true;established=true;current.removeListener('error',fail);current.removeListener('close',earlyClose);resolve();});current.connect({host:'127.0.0.1',port:target.port,family:4,localAddress:'127.0.0.1'});});check();break;
+     }catch(error){
+      current.destroy();await closedPromise;check();need(current.destroyed&&current.bytesWritten===0,'PEER_SOCKET_TUPLE_INVALID');
+      // Custody acknowledges the wrapper, not listen readiness. Retry ONLY a
+      // refused pre-connect socket after its actual close, within this SAME
+      // absolute deadline/target. Never redial an established/refused proof.
+      if(connected||!error.refused||dialAttempts>=peerLimits.connectAttempts)throw error;
+      await sleep(Math.min(peerLimits.pollMs,Math.max(0,end-now())));check();
+     }
+    }
+    phase='peer-proof';
     const tuple={localAddress:socket.localAddress,localPort:socket.localPort,remoteAddress:socket.remoteAddress,remotePort:socket.remotePort};need(tuple.localAddress==='127.0.0.1'&&tuple.remoteAddress==='127.0.0.1'&&Number.isInteger(tuple.localPort)&&tuple.localPort>0&&tuple.remotePort===target.port&&socket.bytesWritten===0,'PEER_SOCKET_TUPLE_INVALID');
     for(let attempt=0;attempt<peerLimits.attempts;attempt++){
      check();try{
@@ -103,7 +119,7 @@ export function createOwnPeerConnector({binding,custodyFor}={},trusted={}){
         const rootAfter=await reader.call(()=>files.stat(target.projectRoot));need(rootBefore.dev===rootAfter.dev&&rootBefore.ino===rootAfter.ino&&await reader.call(()=>files.realpath(target.projectRoot))===target.projectRoot,'PEER_PROJECT_ROOT_CHANGED');
         for(const process of after){const final=await reader.identity(process.pid,target.uid,namespaces.pid,namespaces.net);need(['pid','ppid','pgrp','startTicks'].every(key=>final[key]===process[key]),'PEER_PROOF_CHANGED');}
         check();need(!socket.destroyed&&socket.readyState==='open'&&socket.bytesWritten===0,'PEER_SOCKET_CLOSED');
-        const evidence=Object.freeze({kind:'observed-own-established-peer',target,anchor,holder:Object.freeze({...holders[0],fds:Object.freeze([...holders[0].fds])}),tuple:Object.freeze(tuple),inode,pidNamespace:namespaces.pid,netNamespace:namespaces.net,ancestry:Object.freeze(graph.map(row=>Object.freeze({pid:row.pid,ppid:row.ppid,startTicks:row.startTicks,pgrp:row.pgrp}))),observedAt:now(),exclusiveOwnershipProven:false,atomicOwnershipLease:false});
+        const evidence=Object.freeze({kind:'observed-own-established-peer',target,anchor,holder:Object.freeze({...holders[0],fds:Object.freeze([...holders[0].fds])}),tuple:Object.freeze(tuple),inode,pidNamespace:namespaces.pid,netNamespace:namespaces.net,ancestry:Object.freeze(graph.map(row=>Object.freeze({pid:row.pid,ppid:row.ppid,startTicks:row.startTicks,pgrp:row.pgrp}))),observedAt:now(),dialAttempts,exclusiveOwnershipProven:false,atomicOwnershipLease:false});
         need(Buffer.byteLength(stable(evidence))<=peerLimits.evidenceBytes,'PEER_EVIDENCE_LIMIT');clearTimer(timer);return Object.freeze({socket,evidence,done,close});
        }
       }
@@ -113,6 +129,6 @@ export function createOwnPeerConnector({binding,custodyFor}={},trusted={}){
     throw failure('PEER_UNATTRIBUTED');
    })();
    return await Promise.race([work,stopped]);
-  }catch(error){close();cleanup();throw error?.code?error:failure('PEER_VERIFICATION_FAILED');}
+  }catch(error){close();cleanup();const result=error?.code?error:failure('PEER_VERIFICATION_FAILED');result.peerDiagnostic=Object.freeze({phase,dialAttempts,established,lastConnectCode});throw result;}
  }});
 }

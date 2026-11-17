@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
+import net from 'node:net';
 import {createOwnPeerConnector,parsePeerStat,parsePeerTcp,peerLimits} from './host-peer-connector.mjs';
 const header=' sl local_address rem_address st tx tr retr uid timeout inode\n';
 const tcp=(inode='900',mapped=false)=>header+' 0: '+(mapped?'0000000000000000FFFF00000100007F':'0100007F')+':5208 '+(mapped?'0000000000000000FFFF00000100007F':'0100007F')+':9C40 01 0:0 00:0 0 1001 0 '+inode+' 1\n';
@@ -21,6 +22,9 @@ class Socket extends EventEmitter{
  connect(options){this.connects.push(options);this.localAddress='127.0.0.1';this.localPort=40000;this.remoteAddress=options.host;this.remotePort=options.port;this.readyState='open';queueMicrotask(()=>{if(!this.destroyed)this.emit('connect');});}
  destroy(){if(this.destroyed)return;this.destroyed=true;this.readyState='closed';queueMicrotask(()=>this.emit('close'));}
  write(){throw Error('NO APPLICATION WRITES PERMITTED IN CONNECTOR');}
+}
+function refusedSocket(code='ECONNREFUSED'){
+ const socket=new Socket();socket.connect=options=>{socket.connects.push(options);queueMicrotask(()=>{socket.emit('error',Object.assign(Error('synthetic connect error'),{code}));socket.destroy();});};return socket;
 }
 function fixture(){
  const proc=new MemoryProc(),socket=new Socket(),revoke=new AbortController();let settled,live=true,bindingLive=true,time=1000,bindingCalls=0,custodyCalls=0;
@@ -97,4 +101,42 @@ test('no written byte or oversized proc file can be accepted',async()=>{
 });
 test('hard deadline during pending proc proof closes own connection and fences late continuation',async()=>{
  const f=fixture();let release,entered=false,timeout;f.proc.hook=async(kind,file)=>{if(kind==='open'&&file==='/proc/self/net/tcp'){entered=true;await new Promise(resolve=>{release=resolve;});}};const pending=f.create({}, {setTimeout:fn=>{timeout=fn;return 1;},clearTimeout:()=>{}}).connect({deadline:3000});for(let n=0;n<256&&!entered;n++)await Promise.resolve();assert(entered);timeout();await assert.rejects(pending,rejectCode('PEER_DEADLINE'));assert(f.socket.destroyed);const count=f.proc.events.length;release();await flushed();assert(f.proc.events.slice(count).every(event=>event.startsWith('close:')));assert.equal(f.socket.connects.length,1);
+});
+
+test('delayed listen: refused zero-write startup sockets close before one same-socket ownership proof succeeds',async()=>{
+ const f=fixture(),sockets=[];
+ const connector=f.create({}, {socket:()=>{const socket=new Socket(),attempt=sockets.length;sockets.push(socket);if(attempt<2)socket.connect=options=>{socket.connects.push(options);queueMicrotask(()=>{socket.emit('error',Object.assign(Error('synthetic not listening yet'),{code:'ECONNREFUSED'}));socket.destroy();});};return socket;}});
+ const peer=await connector.connect({deadline:3000});assert.equal(sockets.length,3);assert(sockets.slice(0,-1).every(socket=>socket.destroyed&&socket.bytesWritten===0));assert.equal(peer.socket,sockets[2]);assert.equal(peer.socket.bytesWritten,0);assert.equal(peer.evidence.dialAttempts,3);peer.close();await peer.done;
+});
+
+test('real delayed-listen TCP startup connects without early bytes under synthetic proc attribution',async t=>{
+ const f=fixture(),created=[],accepted=new Set();let bytes=0,listenTimer,refused=0;
+ const server=net.createServer(socket=>{accepted.add(socket);socket.on('data',data=>{bytes+=data.length;});socket.once('close',()=>accepted.delete(socket));});
+ await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});const port=server.address().port;await new Promise(resolve=>server.close(resolve));
+ t.after(async()=>{clearTimeout(listenTimer);for(const socket of created)socket.destroy();for(const socket of accepted)socket.destroy();if(server.listening)await new Promise(resolve=>server.close(resolve));});
+ const target=Object.freeze({...f.target,port});let current;
+ f.proc.hook=(kind,file)=>{if(kind==='open'&&file==='/proc/self/net/tcp'){assert(current.localPort);f.proc.files.set(file,header+' 0: 0100007F:'+port.toString(16).padStart(4,'0')+' 0100007F:'+current.localPort.toString(16).padStart(4,'0')+' 01 0:0 00:0 0 1001 0 900 1\n');}};
+ const connector=f.create({binding:async()=>target},{now:Date.now,sleep:ms=>new Promise(resolve=>setTimeout(resolve,ms)),socket:()=>{const socket=new net.Socket();current=socket;created.push(socket);socket.on('error',error=>{if(error.code==='ECONNREFUSED'&&++refused===1)listenTimer=setTimeout(()=>server.listen(port,'127.0.0.1'),40);});return socket;}});
+ const peer=await connector.connect({deadline:Date.now()+1500});assert(refused>=1);assert(created.length>=2);assert(created.slice(0,-1).every(socket=>socket.destroyed&&socket.bytesWritten===0));assert.equal(peer.socket,created.at(-1));assert.equal(peer.socket.bytesWritten,0);assert.equal(bytes,0);peer.close();await peer.done;assert.equal(server.listening,true);
+});
+
+test('startup retry shares one absolute deadline and closes every refused socket with bounded safe diagnostics',async()=>{
+ const f=fixture(),sockets=[],connector=f.create({}, {socket:()=>{const socket=refusedSocket();sockets.push(socket);return socket;}});
+ await assert.rejects(connector.connect({deadline:1050}),error=>{assert.equal(error.peerDiagnostic.phase,'tcp-connect');assert.equal(error.peerDiagnostic.established,false);assert.equal(error.peerDiagnostic.lastConnectCode,'ECONNREFUSED');assert.equal(error.peerDiagnostic.dialAttempts,2);return /DEADLINE/.test(error.code);});
+ assert.equal(sockets.length,2);assert(sockets.every(socket=>socket.destroyed&&socket.bytesWritten===0));assert(sockets.every(socket=>socket.connects[0].port===f.target.port));
+});
+test('startup never retries non-refusal errors or any already-established attribution refusal',async()=>{
+ const f=fixture(),sockets=[];await assert.rejects(f.create({}, {socket:()=>{const socket=refusedSocket('EACCES');sockets.push(socket);return socket;}}).connect({deadline:3000}),error=>{assert.equal(error.code,'PEER_CONNECT_FAILED');assert.deepEqual(error.peerDiagnostic,{phase:'tcp-connect',dialAttempts:1,established:false,lastConnectCode:'EACCES'});return true;});assert.equal(sockets.length,1);assert(sockets[0].destroyed);
+ const g=fixture();g.proc.links.set('/proc/200/fd/3','socket:[899]');await assert.rejects(g.connect(),error=>{assert.equal(error.code,'PEER_UNATTRIBUTED');assert.equal(error.peerDiagnostic.phase,'peer-proof');assert.equal(error.peerDiagnostic.established,true);assert.equal(error.peerDiagnostic.dialAttempts,1);return true;});assert.equal(g.socket.connects.length,1);assert(g.socket.destroyed);
+});
+test('startup refusal wait is fenced by caller abort, binding revocation and custody settlement before any redial',async()=>{
+ for(const action of[(f,c)=>c.abort(),f=>f.revoke.abort(),f=>f.settle()]){
+  const f=fixture(),controller=new AbortController(),sockets=[];let release,entered;const waiting=new Promise(resolve=>{entered=resolve;});
+  const pending=f.create({}, {socket:()=>{const socket=refusedSocket();sockets.push(socket);return socket;},sleep:()=>{entered();return new Promise(resolve=>{release=resolve;});}}).connect({deadline:3000,signal:controller.signal});
+  await waiting;action(f,controller);await assert.rejects(pending);release();await flushed();assert.equal(sockets.length,1);assert(sockets[0].destroyed);assert.equal(sockets[0].bytesWritten,0);
+ }
+});
+test('startup rechecks anchor generation and refuses written failed sockets before retry',async()=>{
+ const f=fixture(),sockets=[];await assert.rejects(f.create({}, {socket:()=>{const socket=refusedSocket();sockets.push(socket);return socket;},sleep:async()=>{f.proc.files.set('/proc/100/stat',stat(100,50,100,'1001'));}}).connect({deadline:3000}),rejectCode('PEER_ANCHOR_CHANGED'));assert.equal(sockets.length,1);assert(sockets[0].destroyed);
+ const g=fixture(),written=refusedSocket();written.bytesWritten=1;await assert.rejects(g.create({}, {socket:()=>written}).connect({deadline:3000}),rejectCode('PEER_SOCKET_TUPLE_INVALID'));assert.equal(written.connects.length,1);
 });
