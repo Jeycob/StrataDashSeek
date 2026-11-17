@@ -57,8 +57,8 @@ jobs:
           npm ci --prefix development/ci --no-audit --no-fund
           python -m pip install --no-deps --requirement development/ci/requirements.txt
           sudo -n apt-get update
-          sudo -n apt-get install --no-install-recommends -y iptables iproute2 util-linux openssl ripgrep
-          dpkg-query -W iptables iproute2 util-linux openssl ripgrep
+          sudo -n apt-get install --no-install-recommends -y iptables iproute2 util-linux e2fsprogs openssl ripgrep
+          dpkg-query -W iptables iproute2 util-linux e2fsprogs openssl ripgrep
           node development/ci/node_modules/playwright/cli.js install --with-deps chromium
           echo "HARNESS_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
       - name: Build the Worker without uploading or provisioning

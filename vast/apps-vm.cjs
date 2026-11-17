@@ -2,7 +2,8 @@
 const fs = require('node:fs'), path = require('node:path'), cp = require('node:child_process'), net = require('node:net'), crypto = require('node:crypto');
 const {LABEL} = require('./apps-engine.cjs');
 const {atomicJson}=require('../mobile/private-json.cjs');
-const {PILOT_WORKER_PROFILE,validatePilot,workerProfile}=require('./apps-worker-profile.cjs');
+const {PILOT_WORKER_PROFILE,validatePilot,validateWorkerShape,workerProfile}=require('./apps-worker-profile.cjs');
+const {inspectWorkerCapacity}=require('./apps-worker-growth-policy.cjs');
 const {fixedguestOverlayProbe,parseOverlayProbe}=require('./apps-overlay-probe.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function requireControl(vm){
@@ -75,8 +76,8 @@ class DockerVM {
   if(process.getuid?.()===0)throw Error('Docker VM must run as the unprivileged harness user');
   if(cfg.vm.root!=='/data/harness/docker-worker')throw Error('Unexpected pilot worker directory');
   this.cfg=cfg; this.engine=engine; this.root=cfg.vm.root; this.stateFile=path.join(cfg.stateDir,'vm.json');
-  this.manifest=JSON.parse(fs.readFileSync(path.join(this.root,'manifest.json')));
-  validatePilot(this.manifest);
+  const manifestBytes=fs.readFileSync(path.join(this.root,'manifest.json'));this.manifestSha256=crypto.createHash('sha256').update(manifestBytes).digest('hex');
+  this.manifest=JSON.parse(manifestBytes);validateWorkerShape(this.manifest);
   this.saved=fs.existsSync(this.stateFile)?JSON.parse(fs.readFileSync(this.stateFile)):{initialized:false,resumeIds:[],containers:[]};
   this.phase='asleep'; this.error=null; this.serial=null; this.pending=null; this.lastUsed=Date.now(); this.stopping=false; this.buffer='';
   const live=this.pid(),disabled=cfg.enabled!==true||cfg.vm.enabled!==true;
@@ -87,10 +88,12 @@ class DockerVM {
  }
  save(){atomicJson(this.stateFile,this.saved);}
  pid(){try{const pid=Number(fs.readFileSync(path.join(this.root,'qemu.pid'),'utf8')); const args=fs.readFileSync('/proc/'+pid+'/cmdline','utf8').split('\0');return args.includes('stratadashseek-docker') && args.includes('file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback')?pid:null;}catch{return null;}}
- status(){return{managed:true,phase:this.phase,pid:this.pid(),error:this.error,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,totalBytes:this.totalBytes??null,usedBytes:this.usedBytes??null,totalInodes:this.totalInodes??null,storageCategories:this.storageCategories??null,storageCheckedAt:this.storageCheckedAt??null,diskCheckedAt:this.diskCheckedAt??null,profile:workerProfile(this.manifest,{driver:this.observedStorageDriver,at:this.storageObservedAt,ready:this.phase==='ready'}),initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
+ capacityStatus(){return inspectWorkerCapacity({workerRoot:this.root,guardFile:'/data/harness/runtime-status/worker-capacity.json'});}
+ requireCapacity(){const capacity=this.capacityStatus();if(!capacity.allowed||capacity.manifestSha256!==this.manifestSha256)throw Object.assign(Error(capacity.reasonCode||'WORKER_CAPACITY_MANIFEST_CHANGED'),{code:capacity.reasonCode||'WORKER_CAPACITY_MANIFEST_CHANGED'});validatePilot(this.manifest,{capacity});return capacity;}
+ status(){const capacity=this.capacityStatus();return{managed:true,phase:capacity.allowed?this.phase:'blocked',pid:this.pid(),error:this.error??capacity.reasonCode??null,capacity,idleSeconds:this.cfg.vm.idleSeconds||120,freeBytes:this.freeBytes??null,freeInodes:this.freeInodes??null,totalBytes:this.totalBytes??null,usedBytes:this.usedBytes??null,totalInodes:this.totalInodes??null,storageCategories:this.storageCategories??null,storageCheckedAt:this.storageCheckedAt??null,diskCheckedAt:this.diskCheckedAt??null,profile:workerProfile(this.manifest,{capacity,driver:this.observedStorageDriver,at:this.storageObservedAt,ready:this.phase==='ready'&&capacity.allowed}),initialized:!!this.saved.initialized,controlIsolation:{version:this.saved.controlIsolationVersion||0,verified:this.phase==='ready'&&this.saved.controlIsolationVersion===1}};}
  touch(){this.lastUsed=Date.now();}
  async ensure(){
-  requireControl(this);
+  requireControl(this);this.requireCapacity();
   this.touch();const waitUntil=Date.now()+90000;while(this.stopping&&Date.now()<waitUntil)await pause(250);if(this.stopping)throw Error('Docker is still saving its state; retry shortly');
   if(this.pending)return this.pending;
   this.pending=this.start().finally(()=>{this.pending=null;});return this.pending;
@@ -115,7 +118,7 @@ class DockerVM {
   socket.write('\n');
  }
  async start(){
-  requireControl(this);
+  requireControl(this);this.requireCapacity();
   if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1){await this.engine.available();return;}
   this.phase='starting';this.error=null;this.scriptSent=false;this.nonce=crypto.randomBytes(8).toString('hex');
   if(this.serial&&!this.serial.destroyed)this.serial.write('\n');
@@ -128,6 +131,7 @@ class DockerVM {
     '-chardev','socket,id=console,path='+this.root+'/serial.sock,server=on,wait=off','-serial','chardev:console','-qmp','unix:'+this.root+'/qmp.sock,server=on,wait=off','-pidfile',this.root+'/qemu.pid',
     '-kernel',this.root+'/vmlinuz-virt','-initrd',this.root+'/initramfs-virt','-cdrom',this.root+'/alpine.iso','-drive','file='+this.root+'/volume.raw,format=raw,if=virtio,cache=writeback',
     '-append','console=ttyS0 alpine_dev=cdrom:iso9660 modules=loop,squashfs,sd-mod,usb-storage,virtio_blk quiet','-netdev','user,id=net0,'+forwards.join(','),'-device','virtio-net-pci,netdev=net0'];
+   this.requireCapacity();
    const log=fs.openSync(path.join(this.root,'qemu.log'),'a',0o600);this.child=cp.spawn('nice',['-n','19','qemu-system-x86_64',...args],{cwd:this.root,stdio:['ignore',log,log]});fs.closeSync(log);
    this.child.on('error',e=>{this.error=e.message;});this.child.on('exit',()=>{this.serial?.destroy();this.serial=null;if(!this.stopping){this.phase='asleep';this.error='Worker exited; next operation will recover it';}});
   }

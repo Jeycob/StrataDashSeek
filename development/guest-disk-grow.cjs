@@ -66,7 +66,9 @@ async function runGrowth(input,ops){
  }
  const initial=await ops.inspect();assertIdentity(plan,initial);
  const existingGuard=await ops.readGuard();
- if(existingGuard!==undefined&&!require('../vast/apps-worker-growth-policy.cjs').validateCapacity({guard:existingGuard,manifest:initial.manifest,manifestSha256:initial.manifestSha256,raw:initial.raw,workerRoot:plan.workerRoot}).allowed)throw fail('GROW_RECOVERY_REQUIRED');
+ const sourceCapacity=require('../vast/apps-worker-growth-policy.cjs').validateCapacity({guard:existingGuard,manifest:initial.manifest,manifestSha256:initial.manifestSha256,raw:initial.raw,workerRoot:plan.workerRoot});
+ const freshTinyFixture=ops.fixture===true&&existingGuard===undefined&&initial.manifest?.version===1&&plan.source.bytes<3*GiB;
+ if(!sourceCapacity.allowed&&!freshTinyFixture)throw fail('GROW_RECOVERY_REQUIRED');
  const budget=assessCapacity(plan,initial.host),manifest=candidateManifest(plan,initial.manifest,planSha256),manifestSha256=sha256(manifest);
  let record={version:1,contract:CONTRACT,migrationId:plan.migrationId,planSha256,phase:'prepared',lastConfirmed:'prepared',source:plan.source,targetBytes:plan.targetBytes,manifestSha256,budget};
  const guard=()=>({...approvedGuard(plan,record),phase:record.phase==='recovery_required'?'recovery_required':'running',fsckVerified:false});

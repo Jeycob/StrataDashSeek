@@ -2,16 +2,11 @@
 
 This is an operator-only source primitive. It does not enable Apps, start a
 guest, change the default pilot, choose a target, or install a startup hook.
-The original3GiB profile and all existing VM/bootstrap files are unchanged.
+The original3GiB/1vCPU/2048MiB profile remains the default. Apps VM start/ensure now read the protected capacity gate before admitting work; bootstrap files are unchanged.
 No existing runtime disk has been resized, copied, formatted, exported or
 deleted by this work. T10 remains deferred; no backup workflow is introduced.
 
-**Production remains blocked.** The installed signed runtime must first expose
-the reviewed `CAPACITY_MIGRATION_CONTRACT = 'raw-ext4-grow-v1'` from
-`vast/apps-worker-profile.cjs`, with all fresh start gates described below.
-`growOffline` verifies the actual installed release's root attestation/digest
-before accepting this handshake. An operator boolean or plan capability field
-cannot replace it. This source commit deliberately does not install that glue.
+**A real migration remains HOLD until a concrete capacity plan and operation are approved.** The source includes `CAPACITY_MIGRATION_CONTRACT = 'raw-ext4-grow-v1'` and all fresh start gates below. `growOffline` requires that support in the actual installed signed runtime and verifies its root attestation/digest. An operator boolean or plan capability field cannot replace that handshake. Publishing this source does not approve a target or run a migration.
 
 ## Interfaces and pinned plan
 
@@ -129,49 +124,15 @@ reconciliation; the helper does not replay publication.
 The helper does not promise rollback to an old raw length after filesystem growth.
 Retained journals and observations explain the state; they are not a backup.
 
-## Minimal runtime glue required from the release owner — NOT APPLIED
+## Runtime consumer gates
 
-The new read-only `vast/apps-worker-growth-policy.cjs` already returns
-`{allowed,phase,reasonCode?,diskBytes?,manifestSha256?}`. Unknown/malformed,
-unreadable, linked, writable or non-root-owned guard state blocks. Missing guard
-permits only the exact existing version1/3GiB default. Approved version2 requires
-all plan/manifest/volume/raw identity bindings. Guard path must be fixed to
-`/data/harness/runtime-status/worker-capacity.json`, not a caller-selectable
-configuration escape.
+The root-owned guard path is fixed to `/data/harness/runtime-status/worker-capacity.json`. Missing state permits only exact version1/3GiB. Pending, malformed, unknown or unsafe state blocks work while remaining visible in read-only status. Approved version2 binds the exact volume, raw identity, plan and manifest hash.
 
-The two existing files need these exact, small callsite changes after review:
+`apps-worker-profile.cjs` separates structural metadata from start authorization and keeps the default CPU, RAM, acceleration and driver unchanged. `DockerVM` stores the constructor manifest hash. `ensure()` reads fresh approval before touching or queueing work; `start()` reads it before adopting a ready VM and again immediately before QEMU spawn. A changed resident manifest is refused, rather than silently adopted.
 
-1. `apps-worker-profile.cjs`: leave `PILOT_WORKER_PROFILE` unchanged. Separate
-   structural manifest validation (fixed1vCPU/2048MiB, v1 exactly3GiB, v2 explicit
-   grown-disk profile) from start authorization. `validatePilot` may accept v2
-   only with a fresh `capacity.allowed`, matching `capacity.diskBytes` and
-   resident manifest hash. `workerProfile` must render structurally valid but
-   blocked v2 metadata/status instead of throwing and hiding the reason.
-2. `apps-vm.cjs` constructor: hash/store original manifest bytes, parse and
-   validate structure only. This preserves read-only diagnostics while blocked.
-3. Add `capacityStatus()` using `inspectWorkerCapacity` and a private
-   `requireCapacity()` using the fresh approved result; require that returned
-   manifest hash equals the constructor's stored manifest hash. Never silently
-   adopt a changed manifest in an already-created controller.
-4. `ensure()`: call `requireCapacity()` before touching/queuing/resuming work.
-   `start()`: call it again before adopting an existing ready VM and immediately
-   before the actual QEMU spawn. This re-reads changes made after construction.
-5. `status()`: call `capacityStatus()` and expose only its bounded status; pass
-   it to `workerProfile`. A pending gate must remain explainable as blocked.
-6. Only after all these sites and their tests are installed in the protected
-   signed runtime, export `CAPACITY_MIGRATION_CONTRACT='raw-ext4-grow-v1'` from
-   the profile module. Exporting the constant alone is not a supported consumer.
+The migration primitive also requires allowed source-capacity state before its first journal or raw write, including when the guard is absent. An already-grown version2 source with a missing approval therefore requires recovery. The explicit tiny-fixture exception is limited to new version1 test images below3GiB and cannot be selected through the production factory.
 
-Existing entrypoints/profile/bootstrap were deliberately not edited by B.
-The root must test pending-after-construction then `ensure` refusal, pending
-direct `start` refusal/no spawn, changed manifest refusal, approved exact v2,
-unknown guard and legacy3GiB absence. CPU/RAM/driver defaults remain unchanged.
-
-CI integration is also deliberately separate: add
-`development/guest-disk-grow-linux-check.cjs` to `linuxChecks` in
-`development/ci/inventory.mjs`, and ensure disposable Linux-root CI has the
-existing e2fsprogs/util-linux tools. Do not run this fixture on a runtime host.
-Without classification the new checker correctly remains unclassified.
+CI classifies `development/guest-disk-grow-linux-check.cjs` as linux-root; the workflow provides e2fsprogs and util-linux. The fixture operates only on its own fresh temporary disk and must never be run on a runtime host.
 
 ## Local evidence and its limits
 

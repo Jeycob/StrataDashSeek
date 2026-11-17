@@ -40,6 +40,16 @@ test('identity changes and uncertain mutating tools leave recovery_required/OFF 
  for(const where of ['allocate','extend','resize','sealAllocation','writeManifest']){const f=fixture(),original=f.ops[where];f.ops[where]=async(...args)=>{await original(...args);throw Object.assign(Error('uncertain'),{code:'GROW_TOOL_TIMEOUT'});};await assert.rejects(runGrowth(f.plan,f.ops),{code:'GROW_RECOVERY_REQUIRED'});assert.equal(f.journal.phase,'recovery_required');assert.equal(f.guard.phase,'recovery_required');const before=f.calls.filter(x=>x===where).length;await assert.rejects(runGrowth(f.plan,f.ops),{code:'GROW_RECOVERY_REQUIRED'});assert.equal(f.calls.filter(x=>x===where).length,before);if(where!=='writeManifest')assert(!f.calls.includes('manifest'));assert(f.observation.raw.bytes>=f.plan.source.bytes);}
  const f=fixture();f.observation.raw.ino++;await assert.rejects(runGrowth(f.plan,f.ops),{code:'GROW_IDENTITY_CHANGED'});assert.equal(f.journal,undefined);
 });
+test('a previously grown source without its approval guard refuses a new migration before any writes',async()=>{
+ const f=fixture();await runGrowth(f.plan,f.ops);
+ const start=f.calls.length,raw=f.observation.raw,geometry=f.observation.fs;
+ f.setJournal(undefined);f.setGuard(undefined);f.plan.migrationId='d'.repeat(32);f.plan.targetBytes=5*GiB;
+ f.plan.source={...f.plan.source,manifestSha256:f.observation.manifestSha256,bytes:raw.bytes,allocatedBytes:raw.allocatedBytes,fs:Object.fromEntries(['uuid','blockSize','blockCount','freeBlocks','inodeCount','freeInodes'].map(key=>[key,geometry[key]]))};
+ await assert.rejects(runGrowth(f.plan,f.ops),{code:'GROW_RECOVERY_REQUIRED'});
+ assert.equal(f.journal,undefined);assert.equal(f.guard,undefined);
+ assert(f.calls.slice(start).every(value=>['cold','consumer'].includes(value)));
+ assert.equal(f.observation.raw.bytes,4*GiB);
+});
 test('clean bit never substitutes for real fsck success and post-growth capacity remains mandatory',async()=>{
  const before=fixture();before.ops.fsck=async()=>{throw Object.assign(Error('fsck exit4'),{code:'GROW_TOOL_FAILED'});};await assert.rejects(runGrowth(before.plan,before.ops),{code:'GROW_RECOVERY_REQUIRED'});assert(!before.calls.includes('allocate'));assert.equal(before.guard.phase,'recovery_required');
  const after=fixture();after.ops.resize=async()=>{after.observation.fs.blockCount=after.plan.targetBytes/4096;after.observation.fs.freeBlocks=1;};await assert.rejects(runGrowth(after.plan,after.ops),{code:'GROW_RECOVERY_REQUIRED'});assert(!after.calls.includes('manifest'));assert.equal(after.observation.raw.bytes,after.plan.targetBytes);
