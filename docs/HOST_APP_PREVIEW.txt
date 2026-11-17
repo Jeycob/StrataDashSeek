@@ -3,8 +3,9 @@ HOST application preview controller (source integration)
 Purpose and default
 
 The HOST composition offers project_preview independently of Apps/VM enablement.
-It is disabled without a valid explicit hostPreview configuration and Linux
-little-endian/getuid capability. An unavailable configuration returns unavailable
+It is disabled without a valid explicit hostPreview configuration, Linux
+little-endian/getuid capability and the actual app-owned range subprocess
+provider below. An unavailable configuration returns unavailable
 without creating a connector, relay or broker. Isolated-guest composition never
 constructs this HOST controller and has no fallback to a HOST process.
 
@@ -39,8 +40,13 @@ Application and model flow
 Start the application through ordinary project_exec (or managed bash) with
 run_in_background:true, listening on the project's assigned DSH_APP_PORT / first
 record port. The public command schema and background result remain unchanged.
-Only explicitly enabled, supported HOST preview composition automatically adds
-the private wrapper custody frame to these background commands. There is no
+Only explicitly enabled, supported HOST preview composition prepares the
+actual sandbox argv and adds custody when it selects the installed Landlock
+launcher (identified by the SDK's exported launcherPath). This does not execute
+the target or override the SDK's selection/probes. A bwrap/other/unknown backend
+keeps ordinary background execution without custody, and preview refuses that
+job. Restart also rechecks this before admitting its captured specification.
+There is no
 model option to request custody, choose a PID, substitute an executor or bypass
 the confined SDK process policy.
 
@@ -99,11 +105,59 @@ extend the first admission. Close, archive, agent disposal, policy/context
 revocation, producer completion, runtime disposal and expiry revoke the broker
 and relay. Lifecycle cleanup uses only retained SDK-owned jobs.
 
-workSettled:true means this preview's retained SDK producer done was observed;
+workSettled:true means this preview's retained SDK producer done was observed
+through the actual whole-range provider described below;
 it never means every Native/background job in the conversation has stopped.
 No-lease close/status is scoped to this preview. An unsuccessful open leaves the
 original owned application job available for job_output/job_kill. A cleanup
 timeout reports blocked/workSettled:false rather than asserting settlement.
+
+Pinned SDK whole-range contract and cold-start registration
+
+Stock dsh-bash-local/SandboxBashExecutor exposes ShellExecution.done/result()
+only for direct command outcome plus bounded pipe drain. ShellExecution has no
+waitForExit/raw provider handle. Its kill() stops calling the provider once the
+direct outcome has changed status. Those facts alone cannot prove surviving
+descendants exited and must not authorize a restart or settled-work claim.
+
+The supported lower-level SubprocessHandle contract has terminate() paired with
+waitForExit(signal): true proves its documented managed range is empty, false
+means the caller signal aborted first, and rejection means observation failed.
+workspace/owned-range-subprocess.mjs extends the ACTUAL pinned
+LocalSubprocessRuntime and calls super.spawn(spec) unchanged. It delegates the
+same streams/control/collection and bound terminate/waitForExit. The SDK retains
+and disposes the ORIGINAL handle; inherited terminal/PTY behavior is unchanged.
+
+Its returned done first reflects original.done (including failure), THEN calls
+original.waitForExit(), and publishes the original outcome/error only after
+strict true. No eager/parallel range observation is introduced: the SDK's
+SystemdScopeOwner startup can race an early not-found observation. If range
+observation is missing, false or throws, the adapter attempts only its exact
+original terminate, emits one constant HOMEAI_RANGE_EXIT_UNOBSERVABLE warning,
+and keeps done pending. Rejecting then would let Bash convert unknown range
+state into fulfilled done/killed. Pending keeps the producer and heavy permit
+retained, makes bounded preview cleanup blocked, and requires operator action;
+it never fabricates settlement or starts a replacement. Direct provider failure
+is rethrown only after verified range absence. Logging cannot alter this fence.
+
+workspace/install.cjs deterministically disables the stock id=subprocess entry
+and inserts exactly one cloud-owned-range-subprocess provider at
+file:///data/harness/app/workspace/owned-range-subprocess.mjs. SDK patches treat
+name as a selector guard, so an attempted in-place name change is unsupported.
+Only one provider is active; no active service or SDK file is mutated.
+Unknown/duplicate profile overrides refuse installation. The isolated profile
+projector allows only this exact reviewed substitution and rewrites it to the
+bound release path. Workspace cold-start injection declares subprocess and
+sandbox. If the original stock provider remains installed, preview capability
+is unavailable; a config flag cannot claim the private provider provenance.
+Root must apply the profile change and cold restart through its authorized
+release process before claiming whole-range preview/cleanup qualification.
+
+The managed range is still the selected SDK provider's documented range. Native
+systemd/Job containment and weaker process-tree/group fallback are not equal:
+SDK fallback expressly cannot guarantee descendants that escape its group or
+direct-parent tree. The adapter adds no process discovery, PID adoption,
+signalling algorithm or stronger kernel containment claim.
 
 Browser boundary and supported first unit
 
@@ -139,5 +193,11 @@ with mocked subprocess handles. Separate tests use synthetic loopback HTTP/TCP
 servers and real brokers/private relays with explicitly mocked attribution.
 They prove source composition and refusal behavior, not real application,
 kernel, TLS/browser, UID1001 or deployed owner-Peer acceptance. Root owns those
-runtime qualifications, signed integration and configuration. Live preview
+runtime qualifications, signed integration and configuration. The prepared
+owned-range-linux.test.mjs requires explicit operator selection and a fresh
+canonical non-writable-by-others /var/lib/homeai-owned-range-fixture-* directory
+owned by its executing UID. It redirects the synthetic descendant's pipes so
+the wrapper can exit, verifies that the job/permit remain held, then uses only
+exact owned stop and observes its TERM trap and eventual range exit. B has not
+executed this fixture. Live preview
 acceptance and the frozen paired benchmark remain separate, unclaimed work.

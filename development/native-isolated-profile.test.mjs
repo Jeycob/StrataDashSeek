@@ -39,6 +39,12 @@ test('unknown bundles, plugins, reader identity, omitted preset children, expres
  await assert.rejects(composition(undefined,{profileText:'- id: unknown-missing-row\n  disabled: true\n'}),{code:'NATIVE_PROFILE_PATCH_UNRESOLVED'});
  await assert.rejects(composition(undefined,{read:()=>''}),{code:'NATIVE_PROFILE_SDK_UNREVIEWED'});
 });
+test('only the reviewed subprocess replacement retains its original identity and release path',async()=>{
+ const source=executionBindingFixture('isolated-guest'),prefix='- id: subprocess\n  disabled: true\n- insert:\n    - id: cloud-owned-range-subprocess\n      name: ',profileText=prefix+'file:///data/harness/app/workspace/owned-range-subprocess.mjs\n',projected=await composition(source,{profileText});
+ const found=projected.entries.filter(row=>row.id==='cloud-owned-range-subprocess');assert.equal(found.length,1);assert.equal(found[0].name,'file:///data/harness/releases/'+source.binding.snapshot.sourceCommit+'/workspace/owned-range-subprocess.mjs');assert.equal(projected.entries.find(row=>row.id==='subprocess').disabled,true);
+ for(const name of ['file:///unreviewed/provider.mjs','@example/subprocess'])await assert.rejects(composition(source,{profileText:prefix+JSON.stringify(name)+'\n'}),{code:'NATIVE_PROFILE_COMPOSITION_UNREVIEWED'});
+ await assert.rejects(composition(source,{profileText:'- insert:\n    - id: cloud-owned-range-subprocess\n      name: file:///data/harness/app/workspace/owned-range-subprocess.mjs\n'}),{code:'NATIVE_PROFILE_COMPOSITION_UNREVIEWED'});
+});
 test('snapshot binds mode, stable policy, source and launch identity and rejects changed contents',async()=>{
  const source=executionBindingFixture('isolated-guest'),entries=(await composition(source)).entries,value=snapshot(source.binding,entries);
  for(const patch of [{sourceCommit:'c'.repeat(40)},{launchId:crypto.randomUUID()},{policyEpoch:crypto.randomUUID()},{mode:'host-compat'}]){const changed=executionBindingFixture('isolated-guest');assert.throws(()=>validateSnapshot(value,changed.binding),/NATIVE_PROFILE_/);source.change(patch);assert.throws(()=>validateSnapshot(value,source.binding),/NATIVE_PROFILE_|PROJECT_EXECUTION_/);}

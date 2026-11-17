@@ -20,8 +20,8 @@ let modules;
 function sdk(){return modules??=(async()=>{
  const cli=process.env.HARNESS_NATIVE_CLI??path.join(process.env.HOMEAI_RUNTIME??'/data/harness/runtime','node_modules/@deepseek-ai/dsh/lib/bin.js'),base=path.resolve(path.dirname(cli),'../..');
  const load=name=>import(pathToFileURL(path.join(base,name,'lib/index.js')));
- const [C,P,T,J,S,pipeline,output]=await Promise.all([load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-jobs-local'),load('dsh-scope'),import(pathToFileURL(path.join(base,'dsh-tools/lib/pipeline.js'))),import(pathToFileURL(path.join(base,'dsh-subprocess-local/lib/output.js')))]);
- return{...C,SystemPrompt:P.default,Tools:T.default,Jobs:J.default,...S,...pipeline,...output};
+ const [C,P,T,J,S,pipeline,output,sandbox]=await Promise.all([load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-jobs-local'),load('dsh-scope'),import(pathToFileURL(path.join(base,'dsh-tools/lib/pipeline.js'))),import(pathToFileURL(path.join(base,'dsh-subprocess-local/lib/output.js'))),load('dsh-sandbox-local')]);
+ return{...C,SystemPrompt:P.default,Tools:T.default,Jobs:J.default,...S,...pipeline,...output,Sandbox:sandbox.default};
 })();}
 const tick=()=>new Promise(resolve=>setTimeout(resolve,5));
 async function until(check){for(let n=0;n<200;n++){if(await check())return;await tick();}assert.fail('bounded fixture wait');}
@@ -36,6 +36,9 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
  ctx.provide('agents',{get:id=>agents.get(id),list:()=>[...agents.values()]});
  ctx.provide('workspaceRegistry',{list:()=>workspaces,archivedSessionIds:new Set()});
  ctx.provide('shellEnv',{collect:()=>({})});ctx.provide('sandboxPolicy',{resolve:({session})=>({mode:session.mode??'workspace-write'})});
+ // Synthetic sole-rung selection: no real probe/process. Production uses the
+ // actual unchanged selected backend and never receives internals overrides.
+ const sandbox=new S.Sandbox(ctx,{runnerCommand:[],runnerFailureSignatures:[],probeTimeoutMs:2000});sandbox.internals={platform:'linux',chain:['landlock']};
  ctx.provide('connection',{fetch:{register:route=>{routes.set(route.path,route);return()=>routes.delete(route.path);}}});
  ctx.provide('shell',{sandboxMode:'workspace-write',resolve:request=>({...request}),async execute(spec){
   calls.push(spec);const out=new S.OutputCollector(65536,'preview fake process'),control=JSON.parse(spec.stdin);let finish;
@@ -69,7 +72,7 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
  async function call(a,name,value,signal=new AbortController().signal){const toolSet=await ctx.tools.resolve({agent:a,modelSelection:a.model.current(),signal});try{const report=await ctx.tools.execute({agent:a,signal,toolSet,calls:[{id:'preview-'+(++sequence),name,arguments:JSON.stringify(value)}]});return report.results[0].result;}finally{toolSet.dispose();}}
  const control=input=>preview.operation(input,{ownerControl:true});
  t.after(async()=>{for(const p of processes){p.hold=false;if(p.kills)p.release();}await preview.dispose();await run.dispose();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();assert(path.resolve(directory).startsWith(path.resolve(os.tmpdir())+path.sep+'host-preview-sdk-'));await fs.rm(directory,{recursive:true,force:true});});
- return{ctx,manager,run,preview,agent,call,control,processes,calls,targets,brokers,relays,routes,workspaces,set rejectPeer(value){rejectPeer=value;}};
+ return{ctx,manager,run,preview,agent,call,control,processes,calls,targets,brokers,relays,routes,workspaces,state,projects,set rejectPeer(value){rejectPeer=value;}};
 }
 async function start(f,agent){const result=await f.call(agent,'project_exec',args);assert.equal(result.isError,false,JSON.stringify(result));return result.value.jobId;}
 async function open(f,agent,jobId){const result=await f.call(agent,'project_preview',{operation:'open',jobId});assert.equal(result.isError,false,JSON.stringify(result));return result.value;}
@@ -180,4 +183,22 @@ for(const change of ['workspace','environment'])test('restart refuses changed '+
  if(change==='workspace'){f.manager.data.sessions[a.id].workspaceId='new-workspace';f.workspaces[0].id='new-workspace';}
  else f.ctx.shellEnv.collect=()=>({CHANGED:'refuse replacement'});
  f.processes[0].release();await rejected;assert.equal(f.calls.length,1);assert.equal(f.targets.length,1);
+});
+
+for(const change of ['dispose','archive','workspace'])test('late custody after '+change+' cannot allocate persistent origins or publish an entry',async t=>{
+ const f=await fixture(t),a=await f.agent('owner'),id=await start(f,a),original=f.run.custodyFor;let entered,release;
+ const waiting=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});f.run.custodyFor=async(...args)=>{const capture=await original(...args);entered();await gate;return capture;};
+ const pending=f.preview.operation({operation:'open',jobId:id},{agent:a}),rejected=assert.rejects(pending);await waiting;
+ if(change==='dispose')await f.preview.dispose();
+ if(change==='archive')f.ctx.workspaceRegistry.archivedSessionIds.add(a.id);
+ if(change==='workspace'){f.workspaces[0].id='changed';f.manager.data.sessions[a.id].workspaceId='changed';}
+ release();await rejected;assert.equal(f.targets.length+f.brokers.length+f.relays.length,0);await assert.rejects(fs.stat(path.join(f.state,'host-preview-origins.json')),{code:'ENOENT'});await assert.rejects(fs.stat(path.join(f.state,'preview-relays')),{code:'ENOENT'});assert.equal(f.processes[0].kills,0);
+});
+
+test('actual SDK bwrap selection preserves ordinary background commands without a custody wrapper',async t=>{
+ const f=await fixture(t),a=await f.agent('owner');
+ const sandbox=f.ctx.sandbox[Symbol.for('cordis.original')]??f.ctx.sandbox;sandbox.internals={platform:'linux',chain:['bwrap']};
+ // This inert shell accepts ordinary stdin-less calls; no real process starts.
+ const execute=f.ctx.shell.execute;f.ctx.shell.execute=async spec=>{if(!spec.stdin){const wrapped={...spec,stdin:JSON.stringify({version:1,nonce:'a'.repeat(64),generation:'b'.repeat(32)})};const process=await execute(wrapped);f.calls.at(-1).command=spec.command;return process;}return execute(spec);};
+ const result=await f.call(a,'project_exec',args);assert.equal(result.isError,false,JSON.stringify(result));await until(()=>f.calls.length===1);assert(!f.calls[0].command.includes('--host-custody-v1'));assert.equal((await f.call(a,'project_preview',{operation:'open',jobId:result.value.jobId})).isError,true);assert.equal(f.targets.length+f.brokers.length+f.relays.length,0);
 });

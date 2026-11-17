@@ -31,7 +31,7 @@ export function composeProjectExecution(ctx,manager,{appsConfig,callApps,capabil
   const editor=previewSettings({enabled:true,ownerOrigin:appsConfig.projectRuntime.editorBrowser.ownerOrigin,endpoints:editorEndpoints});
   if(!editor||editor.endpoints.some(endpoint=>previewConfig.endpoints.some(app=>app.origin===endpoint.origin||app.listenerPort===endpoint.listenerPort)))previewConfig=null;
  }
- const capture=!isolated&&!!previewConfig&&factories.previewSupported();
+ const capture=!isolated&&!!previewConfig&&factories.previewSupported(ctx);
  const shell=isolated?null:factories.hostRunner(ctx,manager,capture?{captureBackgroundCustody:true}:{},execution);
  if(!isolated){
   const project=registerProjectTool(ctx,manager,shell,execution),managedShell=createManagedShell(ctx,manager,shell,execution);

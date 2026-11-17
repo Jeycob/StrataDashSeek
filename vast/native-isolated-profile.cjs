@@ -17,6 +17,7 @@ const REVIEWED=Object.freeze({
 });
 const BUNDLES=['@deepseek-ai/dsh-base','@deepseek-ai/dsh-web-app'];
 const MANAGED=Object.freeze({
+ 'cloud-owned-range-subprocess':'workspace/owned-range-subprocess.mjs',
  'cloud-native-worktrees':'@deepseek-ai/dsh-experimental-worktree',
  'cloud-workspace-runtime':'workspace/plugin.mjs',
  'cloud-quality-gates':'quality/plugin.mjs',
@@ -74,6 +75,7 @@ function projectNativeReaders({baselineEntries,entries,binding}){
   }
  }
  visit(output);
+ if(output.some(row=>row.id==='cloud-owned-range-subprocess')&&output.find(row=>row.id==='subprocess')?.disabled!==true)throw fail('NATIVE_PROFILE_COMPOSITION_UNREVIEWED');
  // Whole preset arrays are required: an id-only overlay cannot reach children
  // of a preset (they are not Loader groups).
  for(const [key,row]of known)if((key.startsWith('/preset-')||['agent-instructions','skill-filesystem','tool-skill','hmr'].includes(row.id))&&!seen.has(key))throw fail('NATIVE_PROFILE_INCOMPLETE');

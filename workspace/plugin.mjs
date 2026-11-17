@@ -18,7 +18,7 @@ import { installModelSelection } from './model-selection.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
-export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt', 'sessionController', 'sessionQuery', 'projectExecutionMode'];
+export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'sandbox', 'subprocess', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt', 'sessionController', 'sessionQuery', 'projectExecutionMode'];
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 export async function apply(ctx, config = {}) {

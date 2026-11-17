@@ -9,13 +9,14 @@ import {bindProjectExecution} from './execution-mode.mjs';
 import {createOwnPeerConnector} from './host-peer-connector.mjs';
 import {createPreviewRelay} from './host-preview-relay.mjs';
 import {projectBackgroundSchema} from './project-process.mjs';
+import {hasOwnedRangeProvider} from './owned-range-state.mjs';
 const {EditorOrigins}=createRequire(import.meta.url)('./editor-origins.cjs');
 const {createEditorBroker}=createRequire(import.meta.url)('./editor-broker.cjs');
 const fail=code=>new WorkbenchError(code,'The application preview is unavailable. Check its own job and reopen it from this conversation.',409);
 const need=(value,code)=>{if(!value)throw fail(code);};
 const ID=/^[a-zA-Z0-9_-]{1,128}$/;
 const contained=(base,file)=>file!==base&&file.startsWith(base+path.sep);
-export const previewSupported=()=>process.platform==='linux'&&os.endianness()==='LE'&&typeof process.getuid==='function';
+export const previewSupported=ctx=>process.platform==='linux'&&os.endianness()==='LE'&&typeof process.getuid==='function'&&hasOwnedRangeProvider(ctx?.subprocess);
 export function previewSettings(config){
  if(config?.enabled!==true)return null;
  try{
@@ -35,7 +36,7 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
  const f={...defaults,...trusted},mode=bindProjectExecution(binding),settings=previewSettings(config),entries=new Map(),queues=new Map(),registrations=new Map();
  let disposed=false,origins;
  const check=()=>{need(!disposed&&mode.assertUnchanged().mode==='host-compat','PREVIEW_MODE_UNAVAILABLE');};check();
- const available=!!settings&&f.supported()&&['custodyFor','startCaptured','producerFor','stopOwned'].every(name=>typeof run[name]==='function');
+ const available=!!settings&&f.supported(ctx)&&['custodyFor','startCaptured','producerFor','stopOwned'].every(name=>typeof run[name]==='function');
  function ordered(id,action){const before=queues.get(id)??Promise.resolve(),next=before.catch(()=>{}).then(action);queues.set(id,next);void next.finally(()=>{if(queues.get(id)===next)queues.delete(id);}).catch(()=>{});return next;}
  async function bounded(action,deadline,outer){
   const controller=new AbortController(),signal=outer?AbortSignal.any([outer,controller.signal]):controller.signal;let timer;
@@ -89,6 +90,10 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
    need(prior.owner===owner&&prior.jobId===jobId,'PREVIEW_FOREIGN_JOB');await validateEntry(prior);return issue(prior);
   }
   const capture=await run.custodyFor(jobId,owner);signal?.throwIfAborted();
+  // Custody may await asynchronous SDK startup. Recheck before ANY persistent
+  // allocation or entry publication, including after controller disposal.
+  const fresh=await context(sessionId,access);signal?.throwIfAborted();check();
+  need(fresh.record===project.record&&fresh.workspaceId===project.workspaceId&&fresh.port===project.port&&fresh.root===project.root&&fresh.dev===project.dev&&fresh.ino===project.ino,'PREVIEW_PROJECT_CHANGED');
   need(capture.context.projectSessionId===sessionId&&capture.context.workspaceId===project.workspaceId&&capture.context.projectRoot===project.root&&Number.isSafeInteger(capture.expiresAt)&&capture.expiresAt>f.now()&&capture.restartSeed,'PREVIEW_CUSTODY_MISMATCH');
   if(!origins)origins=f.origins(path.join(manager.root,'host-preview-origins.json'),settings);
   const endpoint=origins.allocate(project.projectId),entry={id:randomBytes(16).toString('hex'),sessionId,owner,access,project,capture,producerDone:capture.done,generation:capture.identity.generation,seed:capture.restartSeed,jobId,deadline:capture.expiresAt,endpoint,state:'opening',openSignal:signal,abort:new AbortController(),target:new AbortController(),restarts:new Map()};entries.set(sessionId,entry);

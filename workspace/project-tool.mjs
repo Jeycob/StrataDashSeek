@@ -5,6 +5,7 @@ import { normalizeVerificationCommand, nodeTestCommandRecipe } from './tool-reco
 import { createProjectProcessStarter, projectBackgroundSchema, projectJobLifetime, renderProjectBackground } from './project-process.mjs';
 import {bindProjectExecution} from './execution-mode.mjs';
 import {custodyLaunch,startupEnvironment} from './project-custody.mjs';
+import {sameHostCustodyBackend} from './preview-backend.mjs';
 const quote = text => "'" + String(text).replaceAll("'", "'\\''") + "'";
 export const projectCommandParameters = { type: 'object', properties: { command: { type: 'string', description: 'Run verification as a single direct foreground command, or use verify_project. Output is already bounded by Harness; do not add grep/head/tail pipes, log redirections, status echoes or force-exit just to shorten it. Read retained diagnostics separately when needed.' }, description: { type: 'string' }, workdir: { type: 'string' }, timeoutMs: { type: 'number', description: 'Foreground deadline (default 60000ms, maximum 120000ms); for explicit background execution, lifetime (default 300000ms, maximum 600000ms).' }, run_in_background: { type: 'boolean', description: 'Explicitly start an owned, confined background job. Collect with job_output; stop with job_kill. Maximum lifetime is ten minutes. No automatic timeout promotion.' } }, required: ['command', 'description'], additionalProperties: false };
 
@@ -39,6 +40,7 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
     const filtered = normalizeVerificationCommand(args.command);
     const compatible = nodeTestCommandRecipe(filtered.command, { nodePath: node, helperPath: testHelper });
     const background = args.run_in_background === true;
+    if(custody==='auto')custody=await sameHostCustodyBackend(ctx,{mode,workspaceRoot:project.root,additionalWritableRoots:mode==='read-only'?[]:project.gitWritableRoots??[]},execution.signal);
     if(custody&&!background)throw new WorkbenchError('PROJECT_CUSTODY_BACKGROUND_REQUIRED','Custody requires explicit owned background execution.');
     const command = 'exec ' + [node, wrapper, ...(custody?['--host-custody-v1']:[]), '--', 'bash', '-o', 'pipefail', '-c', compatible.command].map(quote).join(' ');
     const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: background ? projectJobLifetime(args.timeoutMs) : Math.min(120000, Math.max(1000, args.timeoutMs ?? 60000)), signal: execution.signal, onExpiry: background ? 'none' : 'kill', ...(custody?{env:startupEnvironment(),stdoutMaxBytes:65536}:{}), dshEnv: { ...ctx.shellEnv.collect(execution), DSH_PROJECT_ROOT: project.root, DSH_PROJECT_READ_ONLY: mode === 'read-only' ? '1' : '0' }, sandboxPolicy: { mode, workspaceRoot: project.root, additionalWritableRoots: mode === 'read-only' ? [] : project.gitWritableRoots ?? [] } });
@@ -52,7 +54,7 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
     return { cwd, spec, adaptations };
   }
   const run = async (args, execution) => {
-    const prepared = await prepare(args, execution,config.captureBackgroundCustody===true&&args?.run_in_background===true);
+    const prepared = await prepare(args, execution,config.captureBackgroundCustody===true&&args?.run_in_background===true?'auto':false);
     check();
     execution.signal.throwIfAborted();
     if (args.run_in_background === true) return { ...prepared, background: await processes.start(prepared, execution, args) };
@@ -74,7 +76,7 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
   run.startCaptured=async(seed,execution,{deadline,onAdmitted})=>{
     const admitted=restartSeeds.get(seed);
     if(!admitted||execution.agent?.id!==admitted.owner||!Number.isSafeInteger(deadline))throw new WorkbenchError('PROJECT_CUSTODY_SEED_INVALID','No exact owned admitted restart specification.');
-    const prepared=await prepare(admitted.args,execution,true);
+    const prepared=await prepare(admitted.args,execution,'auto');
     if(comparable(prepared.spec)!==admitted.spec)throw new WorkbenchError('PROJECT_CUSTODY_SPEC_CHANGED','Project command context changed; restart refused.');
     prepared.hardDeadline=Math.min(deadline,admitted.deadline);
     const background=await processes.start(prepared,execution,admitted.args);
