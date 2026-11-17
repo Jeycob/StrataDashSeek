@@ -80,6 +80,8 @@ file-symlink privilege is unavailable. The fixture also checks immutable
 identity, unknown composition refusal, private publication via in-memory
 adapters, preparation order, readiness and shutdown. It does not start a web
 server, use a model, publish a real policy/snapshot, or access a guest, live
-backend or private data. Full isolated web startup and the Linux file-link
-fixture remain integration qualification requirements. Policy activation,
+backend or private data. The new suite passed **12/12 with zero skips** on local
+Linux Node24 with the existing exact SDK, including both external file links;
+the focused Windows run passed 78/79 with only that privilege skip. Full isolated
+web startup remains an integration qualification requirement. Policy activation,
 rollback enforcement floor and isolation acceptance are not provided here.
