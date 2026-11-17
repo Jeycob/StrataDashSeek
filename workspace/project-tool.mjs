@@ -4,6 +4,7 @@ import { WorkbenchError, within } from './policy.mjs';
 import { normalizeVerificationCommand, nodeTestCommandRecipe } from './tool-recovery.mjs';
 import { createProjectProcessStarter, projectBackgroundSchema, projectJobLifetime, renderProjectBackground } from './project-process.mjs';
 import {bindProjectExecution} from './execution-mode.mjs';
+import {custodyLaunch,startupEnvironment} from './project-custody.mjs';
 const quote = text => "'" + String(text).replaceAll("'", "'\\''") + "'";
 export const projectCommandParameters = { type: 'object', properties: { command: { type: 'string', description: 'Run verification as a single direct foreground command, or use verify_project. Output is already bounded by Harness; do not add grep/head/tail pipes, log redirections, status echoes or force-exit just to shorten it. Read retained diagnostics separately when needed.' }, description: { type: 'string' }, workdir: { type: 'string' }, timeoutMs: { type: 'number', description: 'Foreground deadline (default 60000ms, maximum 120000ms); for explicit background execution, lifetime (default 300000ms, maximum 600000ms).' }, run_in_background: { type: 'boolean', description: 'Explicitly start an owned, confined background job. Collect with job_output; stop with job_kill. Maximum lifetime is ten minutes. No automatic timeout promotion.' } }, required: ['command', 'description'], additionalProperties: false };
 
@@ -11,7 +12,7 @@ export const projectCommandParameters = { type: 'object', properties: { command:
 export function createProjectCommandRunner(ctx, manager, config = {}, binding = manager.execution ?? ctx.projectExecutionMode) {
   const mode=bindProjectExecution(binding),check=()=>{if(mode.assertUnchanged().mode!=='host-compat')throw new WorkbenchError('PROJECT_EXECUTION_MODE_MISMATCH','The host executor requires explicit host compatibility.');};check();
   const processes = createProjectProcessStarter(ctx, {...config.processTimers,assertActive:check});
-  async function prepare(args, execution) {
+  async function prepare(args, execution, custody = false) {
     check();
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !Object.hasOwn(projectCommandParameters.properties, key))) throw new WorkbenchError('INVALID_COMMAND', 'Only command, description, workdir, timeoutMs and run_in_background are supported for managed commands.', 400);
     if (typeof args.command !== 'string' || !args.command.trim() || args.command.length > 65536 || typeof args.description !== 'string' || !args.description.trim()) throw new WorkbenchError('INVALID_COMMAND', 'A bounded command and description are required.', 400);
@@ -35,9 +36,11 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
     // small, literal verification grammar; arbitrary shell/JavaScript is intact.
     const filtered = normalizeVerificationCommand(args.command);
     const compatible = nodeTestCommandRecipe(filtered.command, { nodePath: node, helperPath: testHelper });
-    const command = 'exec ' + [node, wrapper, '--', 'bash', '-o', 'pipefail', '-c', compatible.command].map(quote).join(' ');
     const background = args.run_in_background === true;
-    const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: background ? projectJobLifetime(args.timeoutMs) : Math.min(120000, Math.max(1000, args.timeoutMs ?? 60000)), signal: execution.signal, onExpiry: background ? 'none' : 'kill', dshEnv: { ...ctx.shellEnv.collect(execution), DSH_PROJECT_ROOT: project.root, DSH_PROJECT_READ_ONLY: mode === 'read-only' ? '1' : '0' }, sandboxPolicy: { mode, workspaceRoot: project.root, additionalWritableRoots: mode === 'read-only' ? [] : project.gitWritableRoots ?? [] } });
+    if(custody&&!background)throw new WorkbenchError('PROJECT_CUSTODY_BACKGROUND_REQUIRED','Custody requires explicit owned background execution.');
+    const command = 'exec ' + [node, wrapper, ...(custody?['--host-custody-v1']:[]), '--', 'bash', '-o', 'pipefail', '-c', compatible.command].map(quote).join(' ');
+    const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: background ? projectJobLifetime(args.timeoutMs) : Math.min(120000, Math.max(1000, args.timeoutMs ?? 60000)), signal: execution.signal, onExpiry: background ? 'none' : 'kill', ...(custody?{env:startupEnvironment(),stdoutMaxBytes:65536}:{}), dshEnv: { ...ctx.shellEnv.collect(execution), DSH_PROJECT_ROOT: project.root, DSH_PROJECT_READ_ONLY: mode === 'read-only' ? '1' : '0' }, sandboxPolicy: { mode, workspaceRoot: project.root, additionalWritableRoots: mode === 'read-only' ? [] : project.gitWritableRoots ?? [] } });
+    if(custody)spec.stdin=custodyLaunch(spec,{projectSessionId:agent.id,workspaceId:project.workspaceId??null,projectRoot:realRoot});
     const adaptations = [];
     if (filtered.changed) adaptations.push(filtered.reason === 'VERIFICATION_STATUS_ECHO_REMOVED' ? '[Harness: terminal status echo and display filters removed; the direct verifier retains its real exit code and bounded diagnostics.]' : filtered.reason === 'VERIFICATION_OUTPUT_FILTERS_REMOVED' ? '[Harness: terminal display filters removed from verification; bounded output preserves progress and the real exit status.]' : '[Harness: terminal tail filter removed from verification; bounded output retains the first diagnostic.]');
     if (compatible.changed) adaptations.push('[Harness: Node test compatibility helper used; directory operands select real test files, with original options and exit status retained.]');
@@ -55,6 +58,13 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
     return { ...prepared, result: prepared.adaptations.length ? { ...result, stdout: { ...result.stdout, text: prepared.adaptations.join('\n') + '\n' + result.stdout.text } } : result };
   };
   run.dispose = processes.dispose;
+  // Private in-process surface. No tool schema, model result or HTTP route
+  // accepts custody, PID, generation, root, port or a replacement executor.
+  run.startWithCustody = async (args,execution) => {
+    const prepared=await prepare(args,execution,true),background=await processes.start(prepared,execution,args);
+    await processes.custodyFor(background.jobId,execution.agent.id,{signal:execution.signal});return background;
+  };
+  run.custodyFor = processes.custodyFor;
   return run;
 }
 

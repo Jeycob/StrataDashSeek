@@ -1,5 +1,6 @@
 import { WorkbenchError } from './policy.mjs';
 import { retainHeavyToolLease } from '../efficiency/heavy-tool-lease.mjs';
+import {launchFor,custodyReader} from './project-custody.mjs';
 
 export const DEFAULT_PROJECT_JOB_LIFETIME_MS = 300000;
 export const MAX_PROJECT_JOB_LIFETIME_MS = 600000;
@@ -35,6 +36,10 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     if (!jobs || typeof jobs.start !== 'function') throw new WorkbenchError('PROJECT_JOBS_UNAVAILABLE', 'Background commands require the SDK job registry and job_output/job_kill controller. Use a bounded foreground command until they are available.', 503);
     const lifetimeMs = projectJobLifetime(args.timeoutMs);
     const releaseAdmission = retainHeavyToolLease(execution);
+    const launch=launchFor(spec);
+    let resolveCapture,rejectCapture,identity,stdout;
+    const captured=launch?new Promise((resolve,reject)=>{resolveCapture=resolve;rejectCapture=reject;}):null;
+    void captured?.catch(()=>{});
     const controller = new AbortController(); let process, id, timer, done, settled = false, stopReason;
     const cancel = reason => {
       if (settled || controller.signal.aborted) return;
@@ -51,7 +56,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
         kind: 'bash', owner, label: args.description.replace(/\s+/gu, ' ').slice(0, 240),
         toolCall: { callId: execution.callId, rootCallId: execution.rootCallId ?? execution.callId }, outputLimitBytes: 16000,
         output: ['stdout', 'stderr'].map(channel => ({ channel, read(fromByte) {
-          return process === undefined ? { text: '', nextOffset: fromByte, lossy: false } : process.observed[channel].readFrom(fromByte);
+          return process === undefined || launch&&channel==='stdout'&&!stdout ? { text: '', nextOffset: fromByte, lossy: false } : (channel==='stdout'&&stdout?stdout:process.observed[channel]).readFrom(fromByte);
         } })),
         run(handle) {
           // Defer spawning until synchronous registry admission/commit completes.
@@ -64,6 +69,10 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
               process = await execute({ ...spec, onExpiry: 'none', timeoutMs: lifetimeMs, signal: controller.signal });
               if (controller.signal.aborted) process.kill();
               assertActive();
+              if(launch){
+                const reader=custodyReader(process,launch,{signal:controller.signal});stdout=reader.stdout;
+                identity=await reader.ready;controller.signal.throwIfAborted();assertActive();resolveCapture(identity);
+              }
               await process.done;
               const result = { exitCode: process.exitCode, signal: process.signal ?? null, lifetimeMs, lifetimeExpired: stopReason?.startsWith('project job lifetime limit') ?? false,
                 ...(process.sandbox ? { sandbox: { mode: process.sandbox.mode, denied: Boolean(process.sandbox.denied), runnerFailed: Boolean(process.sandbox.runnerFailed) } } : {}) };
@@ -72,10 +81,12 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
                 ? { status: 'killed', detail: (stopReason ?? (process.signal ? 'signal: ' + process.signal : 'killed before exit')) + sandboxNote, result }
                 : { status: 'completed', detail: 'exit code: ' + process.exitCode + sandboxNote, result };
             } catch (error) {
+              rejectCapture?.(error);
               // A failed preparation must release any handle it published.
               if (process) { process.kill(); await process.done; }
               return { status: controller.signal.aborted ? 'killed' : 'failed', detail: stopReason ?? (error instanceof Error ? error.message : String(error)) };
             } finally {
+              rejectCapture?.(new WorkbenchError('PROJECT_CUSTODY_EXITED','Custody process is no longer active.'));
               settled = true; if (timer !== undefined) clearTimer(timer);
               if (id !== undefined) active.delete(id);
               releaseAdmission();
@@ -95,7 +106,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       catch { cancel('tool call aborted before background acknowledgement'); }
       await done; execution.signal.throwIfAborted();
     }
-    const entry = { id, owner, jobs, done, cancel }; active.set(id, entry);
+    const entry = { id, owner, jobs, done, cancel, captured, launch, identity:()=>identity, current:()=>!settled&&!controller.signal.aborted&&process?.status==='running' }; active.set(id, entry);
     timer = setTimer(() => {
       if (settled) return;
       const reason = 'project job lifetime limit reached after ' + lifetimeMs + 'ms';
@@ -104,5 +115,23 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     timer?.unref?.();
     return { kind: 'background', jobId: id, cwd };
   }
-  return { start, dispose };
+  async function custodyFor(id,owner,{signal}={}){
+    const entry=active.get(id);
+    if(!entry||entry.owner!==owner||!entry.captured)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No private custody for this exact owned job.');
+    let abort;
+    const cancelled=signal?new Promise((_,reject)=>{
+      abort=()=>{try{entry.jobs.kill(id,owner,'custody acknowledgement aborted');}catch{entry.cancel('custody acknowledgement aborted');}void entry.done.then(()=>reject(new WorkbenchError('PROJECT_CUSTODY_ABORTED','Custody acknowledgement aborted.')));};
+      if(signal.aborted)abort();else signal.addEventListener('abort',abort,{once:true});
+    }):null;
+    try{
+      await (cancelled?Promise.race([entry.captured,cancelled]):entry.captured);
+      if(signal?.aborted)throw new WorkbenchError('PROJECT_CUSTODY_ABORTED','Custody acknowledgement aborted.');
+      const assertCurrent=()=>{assertActive();if(active.get(id)!==entry||!entry.current())throw new WorkbenchError('PROJECT_CUSTODY_EXPIRED','Captured wrapper is no longer current.');};
+      assertCurrent();return Object.freeze({jobId:id,owner,identity:entry.identity(),context:entry.launch.context,done:entry.done,assertCurrent});
+    }catch(error){
+      try{entry.jobs.kill(id,owner,'custody capture failed');}catch{entry.cancel('custody capture failed');}
+      await entry.done;throw error;
+    }finally{if(abort)signal.removeEventListener('abort',abort);}
+  }
+  return { start, dispose, custodyFor };
 }

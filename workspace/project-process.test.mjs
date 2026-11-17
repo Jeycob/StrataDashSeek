@@ -13,6 +13,7 @@ import { FairGate } from '../efficiency/gate.mjs';
 import { bindHeavyToolLease } from '../efficiency/heavy-tool-lease.mjs';
 import {createHash} from 'node:crypto';
 import {createProjectExecutionMode} from './execution-mode-service.mjs';
+import custodyProtocol from '../development/project-custody.cjs';
 function hostMode(){const policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},policySha256=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(policy).sort(([a],[b])=>a.localeCompare(b))))).digest('hex'),snapshot={...policy,policySha256,sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'};return createProjectExecutionMode({snapshot,assertUnchanged:()=>snapshot}).service;}
 
 let modules;
@@ -37,7 +38,7 @@ async function eventually(check) {
 }
 const args = Object.freeze({ command: 'node preview.mjs', description: 'Start the assigned project preview', run_in_background: true });
 
-async function fixture(t, { controller = true, admission = false } = {}) {
+async function fixture(t, { controller = true, admission = false, custody = false } = {}) {
   const S = await sdk(), directory = await fs.mkdtemp(path.join(os.tmpdir(), 'owned-project-jobs-'));
   const root = path.join(directory, 'project'); await fs.mkdir(root);
   const ctx = new S.Context(); new S.SystemPrompt(ctx, {}); new S.Tools(ctx);
@@ -52,7 +53,7 @@ async function fixture(t, { controller = true, admission = false } = {}) {
       sandbox: { mode: spec.sandboxPolicy.mode, denied: false },
       done: new Promise(resolve => { release = resolve; }),
       observed: Object.fromEntries(['stdout', 'stderr'].map(channel => [channel, { readFrom(from) {
-        const value = channel === 'stdout' ? 'preview-ready\n' : '';
+        const value = channel === 'stdout' ? (custody?custodyProtocol.frame(JSON.parse(spec.stdin),{pid:1234,ppid:12,pgrp:12,startTicks:'987654',pidNamespace:'pid:[12345]'}).toString():'')+'preview-ready\n' : '';
         return { text: Buffer.from(value).subarray(from).toString('utf8'), nextOffset: Buffer.byteLength(value), lossy: false };
       } }])),
       finish(code = 0) { if (this.status !== 'running') return; this.status = 'completed'; this.exitCode = code; release(); },
@@ -99,6 +100,15 @@ async function fixture(t, { controller = true, admission = false } = {}) {
   });
   return { ...S, ctx, root, directory, manager, native, managed, run, agent, call, processes, calls, timers, events, notices };
 }
+
+test('actual pinned SDK jobs pump only filtered app output for a trusted custody start',async t=>{
+ const f=await fixture(t,{custody:true}),owner=f.agent('custody-owner');
+ const result=await f.run.startWithCustody(args,{agent:owner,callId:'custody-internal',signal:new AbortController().signal});
+ const capture=await f.run.custodyFor(result.jobId,owner.id);assert.equal(capture.identity.pid,1234);assert.equal(f.ctx.jobs.get(result.jobId,owner.id).owner,owner.id);
+ let output='';await eventually(()=>{output+=JSON.stringify(f.ctx.jobs.read(result.jobId,owner.id).chunks);return output.includes('preview-ready');});
+ assert(!output.includes('HOMEAI_CUSTODY'));assert(!output.includes(capture.identity.generation));
+ f.ctx.jobs.kill(result.jobId,owner.id);await capture.done;assert.throws(capture.assertCurrent,{code:'PROJECT_CUSTODY_EXPIRED'});
+});
 
 test('two SDK projects share heavy admission for managed bash and project_exec through background process settlement', async t => {
   const f = await fixture(t, { admission: true }), a = f.agent('heavy-a'), b = f.agent('heavy-b');

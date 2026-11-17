@@ -1,0 +1,119 @@
+First HOST custody block (source candidate only)
+
+This opt-in captures a fixed wrapper's first frame through documented SDK
+stdout. It does not verify an application listener, expose a port, add a preview
+route, change a benchmark, or qualify H06/H11. Normal project_exec/bash calls
+retain their original command/environment, result and lifecycle paths.
+
+Private interface for a later trusted controller
+
+  const background = await run.startWithCustody(args, execution);
+  const capture = await run.custodyFor(background.jobId, execution.agent.id);
+  capture.assertCurrent();
+  // capture.identity: stage='wrapper-frame', generation, pid, ppid, pgrp,
+  //                   startTicks, pidNamespace
+  // capture.context: captured projectSessionId / workspaceId / projectRoot
+  // capture.done: original owned producer's completion promise
+
+args uses the unchanged command schema and MUST explicitly request background
+execution. The interface is in-process only; it is not installed as a model
+tool or HTTP route. The future caller must retain existing tool permission,
+guard and heavy-admission requirements. Tool data cannot request custody or
+supply a PID, port, host, root, generation or replacement executor.
+
+assertCurrent checks the captured job/handle and execution-mode lifetime, not
+current filesystem/workspace membership or kernel peer ownership. Context is
+a snapshot, not a permission grant. A later connector must revalidate actual
+project/workspace/access and positive kernel socket ownership before sending
+bytes. Namespace identity is explicit: never interpret a namespace PID as a
+host PID by guessing. No process is discovered or adopted in this block.
+
+Launch and protocol
+
+Only the trusted opt-in adds --host-custody-v1 to the fixed absolute Node and
+project-run wrapper command. Startup overrides suppress inherited Bash
+functions/hooks, Node hooks and loader hooks before the outer shell starts.
+PATH is fixed to /usr/bin:/bin at that boundary. Normal projectEnvironment
+then supplies the existing prepared tool paths to the later child. No global
+process environment is mutated. The ordinary non-custody environment remains
+unchanged. The SDK and immutable release launcher remain trusted prerequisites.
+
+The documented stdin data field carries a controller nonce/generation envelope
+of at most256 bytes and then EOF. The wrapper reads its own Linux stat and PID
+namespace, writes one complete synchronous ASCII frame (at most512 bytes), and
+only then reads mutable project configuration or spawns the original quoted
+command. Short writes and invalid input start no user child. The child remains
+non-detached in the existing provider-managed range with original signals and
+exit behavior. This does not add an unconfined subprocess path or patch SDK.
+
+The process starter retains the original SDK handle for kill/done/sandbox facts.
+A separate non-consuming reader requires the frame at exact stdout offset0
+within2 seconds. Leading bytes, loss, offset inconsistencies, malformed or
+noncanonical fields, wrong nonce/generation, overlength, timeout, early exit
+and abort reject. No scan-ahead/tail recovery is allowed. Job stdout hides the
+protocol prefix and maps subsequent byte offsets without consuming app data;
+stderr remains separate. Later frame-looking app output is ordinary output.
+Raw SDK spill files contain the protocol and are not exposed through this
+filtered view; loss flags remain truthful. Non-custody spill behavior is intact.
+
+Failure or acknowledgement abort cancels only the exact owned job and waits
+for its original handle to finish. A returned capture outlives its caller's
+tool signal as existing committed jobs do; its actual job/mode lifetime still
+invalidates it. Original job deadlines start at admission and never reset for
+the handshake. Unknown process completion must not become a settlement claim.
+
+Validation and Root-only Linux fixture
+
+Local pure tests cover split/lost/leading/malformed frames, canonical decoding,
+startup hooks, synchronous wrapper ordering, failed writes, output filtering,
+exact-owner lifetime, pre-dispatch and acknowledgement abort, and delayed real
+handle settlement. Existing project executor and pinned SDK registry tests
+also run with mocked processes; a new actual SDK jobs-pump case checks that
+the private prefix never enters ordinary job output.
+
+Root's prepared nonproduction Linux check (NOT run by B):
+  HOMEAI_RUNTIME=/path/to/already-installed-pinned-runtime \
+    node --test workspace/project-custody-linux.test.mjs
+
+It uses the actual installed SDK local subprocess + sandbox + bash + jobs,
+not an unconfined substitute. It exercises startup-hook injection, first-frame
+capture, host PID namespace/stat consistency, filesystem write confinement,
+filtered real job output and owned shutdown. Missing confinement fails on
+Linux. It requires no model, Native server/bundle, VM, network or installation.
+The Windows authoring lane syntax-checks this file only; it is not Linux proof.
+
+Concrete existing HTTPS-origin provisioning surface (source inspection)
+
+workspace/execution-composition.mjs reads exactly:
+  appsConfig.projectRuntime.editorBrowser = {
+    ownerOrigin: 'https://OWNER-ORIGIN',
+    endpoints: [{origin:'https://SEPARATE-ORIGIN',listenerPort:FIXED_LOOPBACK_PORT}]
+  }
+The current editor adapter is constructed only in isolated mode when Apps,
+VM and projectRuntime are enabled. HOST returns earlier. EditorOrigins takes
+a persistent assignment file, validates HTTPS/separate origins and unique
+listener ports, then permanently reserves an entry to its session. It neither
+creates hostnames/certificates nor configures network/TLS routing.
+
+The checked-in apps-config.example.json supplies no editorBrowser pool.
+docs/WORKSPACE_EXECUTION_COMPOSITION.md explicitly treats provisioned origins
+and certificates as a separate Root integration dependency. Existing source
+does NOT demonstrate that an unused distinct app hostname is available.
+Only Root's later nonsecret configuration inspection can establish that.
+
+The existing free wake-page service does not carry app traffic. README.md:72
+and vast/supervisor.cjs:54 configure Tailscale Serve HTTPS for the existing
+Native bridge at127.0.0.1:3081. vast/preview_settings.py separately configures
+eight raw TCP app ports18080..18087 to18180..18187; these do not provide the
+missing HOST HTTPS origin or create a distinct hostname.
+
+A separate HTTPS origin can in principle reuse an existing ts.net hostname
+on an explicitly configured TLS port, without intrinsically needing a newly
+purchased domain/service; the inspected source does not configure such an app
+endpoint. Distinct ports share cookie hostname, so that option MUST retain
+the reviewed per-origin cookie names, exact Host/Origin and fetch-metadata
+checks, credential stripping and permanent origin reservation. It is not a
+same-origin path proxy. A distinct hostname requires an already provisioned
+pool entry or additional Root-controlled tailnet/DNS/TLS provisioning; no
+automatic hostname provisioner or claim about current account capacity was
+found in this source. Nothing in this first block changes those settings.
