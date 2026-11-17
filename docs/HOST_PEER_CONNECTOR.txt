@@ -118,28 +118,95 @@ UID races, ambiguity, permission/truncation/caps, exact context/generation,
 pre/post-await expiry, abort/deadline, late handle acquisition and peer close
 while a proc read is pending. These are not Linux/runtime acceptance.
 
-Prepared Root-only Linux fixture (NOT RUN in this source task):
-  HOMEAI_HOST_PEER_LINUX_FIXTURE=1 HOMEAI_RUNTIME=/already/installed/runtime \
-    node --test workspace/host-peer-connector-linux.test.mjs
+Root-prepared nonroot Linux fixture (source followup, NOT RUN by its author)
 
-Use the exact reviewed pinned SDK/runtime. It loads actual SDK subprocess,
-sandbox, Bash and jobs, then starts a fixed loopback server through B's real
-startWithCustody/custodyFor. No execute/process boundary is mocked. It creates
-only a new owned /var/lib/homeai-host-peer-fixture-* tree and ephemeral127.0.0.1
-listeners; no model, HTTP request, Native server, VM, download or installation.
-It proves zero early bytes, exact accepted descendant socket, later explicit
-fixture-only data exchange, refusal of a separate parent-owned listener with
-zero bytes and that listener still alive, plus revocation/lease.done closure.
-All owned connections/jobs settle before recursive own-tree removal.
+Root first selects the EXISTING account/UID/GID (e.g.1000 locally,1001 for the
+production service). No account, HOME, policy, service or parent directory is
+created/changed by the fixture. Root prepares one fresh empty private outer:
+  homeai_fixture_root=$(mktemp -d /var/lib/homeai-host-peer-fixture-XXXXXXXXXXXX)
+  chown -- "$SERVICE_UID:$SERVICE_GID" "$homeai_fixture_root"
+  chmod 0700 "$homeai_fixture_root"
+SERVICE_UID / SERVICE_GID are Root's verified existing account IDs. Then run
+INSIDE that nonroot account's ordinary existing environment (including HOME),
+using the exact reviewed readable source closure and installed pinned runtime:
+  HOMEAI_HOST_PEER_LINUX_FIXTURE=1 \
+  HOMEAI_HOST_PEER_FIXTURE_ROOT="$homeai_fixture_root" \
+  HOMEAI_RUNTIME=/already/installed/runtime \
+    /already/installed/node --test \
+      /reviewed/source/workspace/host-peer-connector-linux.test.mjs
 
-This explicit Root fixture requires UID0 and an actual selected confinement
-Landlock backend preserving the host PID/network namespaces. The fixture
-calls the real SDK probeRunner('landlock') before pinning internals.chain to
-['landlock'], refuses unavailable/unexpected probe results, and checks the
-actual cached selectedRunner after launch. No fake successful probe or backend
-fallback is installed. The small selection helper is fixture-only.
-A supported bwrap PID-isolated SDK backend is intentionally refused by this
-HOST connector; the fixture must not waive or relabel that failure. No outside
-write sentinel under the SDK's globally writable /tmp is used. Root UID0 proof
-does NOT qualify production UID1001 proc visibility/ptrace permissions; that
-remains a separate exact-runtime qualification prerequisite before use.
+The outer must be exactly /var/lib/homeai-host-peer-fixture-<12 ALNUM>, canonical
+without symlinks, owned by the running UID/GID, mode0700 and initially empty.
+UID0, arbitrary paths, wrong ownership/mode and populated roots refuse before
+creating a child. The fixture cannot create/write /var/lib or another privileged
+parent. It creates one new0700 run-<6 ALNUM> child and remembers both directory
+identities. Cleanup checks canonical path, unchanged owner/mode/device/inode,
+and removes ONLY that exact child after settling its own sockets and SDK job.
+The outer survives. After actual fixture exit/settlement, Root may remove the
+now-empty prepared outer with:
+  rmdir -- "$homeai_fixture_root"
+An unsuccessful/nonempty cleanup is retained for Root; never recursively remove
+an outer belonging to an unknown or active run. No arbitrary cleanup root is
+accepted. The helper's filesystem injection is for pure in-memory tests only.
+
+The fixture uses process.getuid()/getgid() for both prepared-root checks and
+its exact target UID. It loads actual SDK subprocess, sandbox, Bash and jobs,
+then starts a fixed loopback server through B's real startWithCustody/custodyFor.
+No execute/process boundary is mocked. It creates only synthetic files under
+its own run child and ephemeral127.0.0.1 listeners; no model, HTTP request,
+Native server, VM, download or installation. The same positive/foreign-peer,
+zero-early-byte, explicit later fixture data, revocation and lease.done closure
+assertions remain. Its foreign listener is fixture-owned in the parent process;
+it must receive zero bytes and remain listening after refusal.
+
+The selected actual confinement backend must be Landlock with the same host
+PID/network namespaces. The real SDK probeRunner('landlock') runs before
+pinning internals.chain=['landlock']; unavailable/unexpected probe results
+fail, and the actual selectedRunner is checked after launch. No fake successful
+probe, backend fallback or unconfined substitute is installed. A bwrap PID
+namespace cannot be relabelled as host custody. No outside-write sentinel
+under globally writable /tmp is used.
+
+A local UID1000 pass does NOT qualify UID1001 /proc visibility/ptrace permissions
+or a different runtime/host. Root must run the exact source and runtime as the
+actual intended UID; denied/incomplete observations stay a failure. The earlier
+UID0 proof likewise cannot stand in for this nonroot qualification. Production
+connector bytes and API are unchanged by the fixture-root followup.
+
+Minimal local source closure for Root's reviewed assembled candidate (18 files):
+  workspace/host-peer-connector-linux.test.mjs
+  workspace/host-peer-connector.mjs
+  workspace/project-tool.mjs
+  workspace/project-process.mjs
+  workspace/project-custody.mjs
+  workspace/execution-mode.mjs
+  workspace/policy.mjs
+  workspace/tool-recovery.mjs
+  workspace/shell-status.mjs
+  workspace/automatic-review.mjs
+  workspace/verification-guidance.mjs
+  workspace/fixtures/execution-binding.mjs
+  workspace/fixtures/host-peer-backend.mjs
+  workspace/fixtures/host-peer-root.mjs
+  efficiency/heavy-tool-lease.mjs
+  vast/project-execution-mode.cjs
+  development/project-run.cjs
+  development/project-custody.cjs
+
+Keep those relative paths. Root must take this closure from its assembled
+reviewed integration INCLUDING B's UTF8 fix, not restore older B production
+files from this fixture author's base. Every source file must be readable and
+every source ancestor searchable by the executing nonroot UID; no private
+root-secrets placement/permission relaxation. Node invokes the wrapper, so
+project-run.cjs needs readability, not its own executable bit. Explicit .mjs/
+.cjs paths need no package.json. The mode contract's lazy production factories
+are not invoked by this fixture binding, so runtime-paths/runtime-release are
+not part of this executed closure.
+
+The existing pinned HOMEAI_RUNTIME supplies these SDK entry packages and their
+already-installed dependency/native-helper graph, also readable/executable
+where appropriate by that UID: cordis,dsh-system-prompt,dsh-tools,dsh-jobs-local,
+dsh-scope,dsh-subprocess-local,dsh-sandbox-local,dsh-bash-sandbox. Use the existing
+Node and Bash; no compiler, payload download, SDK patch or install is needed.
+The pure root/backend helper tests are optional authoring inputs, not required
+in the minimal executed Linux fixture closure.

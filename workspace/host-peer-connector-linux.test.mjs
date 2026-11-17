@@ -1,4 +1,4 @@
-// ROOT-ONLY SOURCE FIXTURE; no execution authorization. Real owned loopback only.
+// Root-prepared NONROOT source fixture; no execution authorization. Owned loopback only.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -9,16 +9,17 @@ import {createProjectCommandRunner} from './project-tool.mjs';
 import {hostExecutionBinding} from './fixtures/execution-binding.mjs';
 import {createOwnPeerConnector} from './host-peer-connector.mjs';
 import {pinRealLandlock} from './fixtures/host-peer-backend.mjs';
+import {createPreparedPeerRun} from './fixtures/host-peer-root.mjs';
 const quote=value=>"'"+value.replaceAll("'","'\\''")+"'";
 async function until(check,ms=3000){const end=Date.now()+ms;while(true){const result=await check();if(result)return result;assert(Date.now()<end,'bounded fixture wait expired');await new Promise(resolve=>setTimeout(resolve,10));}}
 function readReply(socket){return new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('fixture response timeout')),1000);socket.once('data',data=>{clearTimeout(timer);resolve(data.toString());});socket.once('error',reject);socket.resume();socket.write('OWNED_FIXTURE_ONLY');});}
-test('Root actual confined SDK peer attribution rejects foreign tuple and forwards no early bytes',{skip:process.platform!=='linux',timeout:30000},async t=>{
- assert.equal(process.getuid(),0,'Root must explicitly own the fixture');assert.equal(process.env.HOMEAI_HOST_PEER_LINUX_FIXTURE,'1','explicit inert-loopback fixture selection required');
+test('nonroot actual confined SDK peer attribution rejects foreign tuple and forwards no early bytes',{skip:process.platform!=='linux',timeout:30000},async t=>{
+ assert.notEqual(process.getuid(),0,'Root prepares the outer directory; run as the existing nonroot service/test account');assert.equal(process.env.HOMEAI_HOST_PEER_LINUX_FIXTURE,'1','explicit inert-loopback fixture selection required');
  const runtime=process.env.HOMEAI_RUNTIME;assert(runtime&&path.isAbsolute(runtime),'explicit already-installed pinned runtime required');
  const sdkRoot=path.join(runtime,'node_modules/@deepseek-ai'),load=name=>import(pathToFileURL(path.join(sdkRoot,name,'lib/index.js')));
  const [C,P,T,J,S,SP,SB,B]=await Promise.all(['cordis','dsh-system-prompt','dsh-tools','dsh-jobs-local','dsh-scope','dsh-subprocess-local','dsh-sandbox-local','dsh-bash-sandbox'].map(load));
- const directory=await fs.mkdtemp('/var/lib/homeai-host-peer-fixture-'),root=path.join(directory,'project');let run,scope,ctx,foreign;const retained=new Set(),foreignSockets=new Set();
- t.after(async()=>{for(const peer of retained)peer.close();for(const socket of foreignSockets)socket.destroy();if(foreign)await new Promise(resolve=>foreign.close(resolve));if(run)await run.dispose();if(scope)await scope.dispose();if(ctx)await ctx.fiber.dispose();assert.equal(path.dirname(directory),'/var/lib');assert(path.basename(directory).startsWith('homeai-host-peer-fixture-'));assert.equal(await fs.realpath(directory),directory);await fs.rm(directory,{recursive:true,force:true});});
+ const prepared=await createPreparedPeerRun(process.env.HOMEAI_HOST_PEER_FIXTURE_ROOT,{uid:process.getuid(),gid:process.getgid()}),directory=prepared.directory,root=path.join(directory,'project');let run,scope,ctx,foreign;const retained=new Set(),foreignSockets=new Set();
+ t.after(async()=>{for(const peer of retained)peer.close();await Promise.all([...retained].map(peer=>peer.done));for(const socket of foreignSockets)socket.destroy();if(foreign)await new Promise(resolve=>foreign.close(resolve));if(run)await run.dispose();if(scope)await scope.dispose();if(ctx)await ctx.fiber.dispose();await prepared.cleanup();});
  await fs.mkdir(path.join(root,'.harness'),{recursive:true});await fs.writeFile(path.join(root,'.harness/project.json'),JSON.stringify({ports:[21000,21001,21002,21003],databasePath:path.join(root,'.harness/data/app.sqlite')}));
  ctx=new C.Context();new P.default(ctx,{});new T.default(ctx);const agents=new Map();ctx.provide('agents',{get:id=>agents.get(id),list:()=>[...agents.values()]});ctx.provide('shellEnv',{collect:()=>({})});ctx.provide('sandboxPolicy',{defaultMode:'workspace-write',resolve:()=>({mode:'workspace-write',workspaceRoot:root,additionalWritableRoots:[]})});
  new SP.default(ctx);const sandbox=new SB.default(ctx,{runnerCommand:[],runnerFailureSignatures:[],probeTimeoutMs:5000});
