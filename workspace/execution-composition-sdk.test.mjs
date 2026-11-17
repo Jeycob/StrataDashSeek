@@ -18,6 +18,7 @@ import {createProjectCommandRunner} from './project-tool.mjs';
 import {bindHeavyToolLease,retainHeavyToolLease} from '../efficiency/heavy-tool-lease.mjs';
 import {apply as applyEfficiency,inject as efficiencyInject} from '../efficiency/plugin.mjs';
 import {WorkspaceManager} from './manager.mjs';
+import {inject as workspaceInject} from './plugin.mjs';
 const SDK=process.env.EFFICIENCY_SDK_ROOT??'/data/harness/runtime/node_modules';
 const load=(name,file='index.js')=>import(pathToFileURL(path.join(SDK,'@deepseek-ai',name,'lib',file)));
 const [{Context},{default:SystemPrompt},{default:Tools},{ToolExecutionPipeline,executeToolBatch},{createScope},{default:LocalJobs}]=await Promise.all([load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-tools','pipeline.js'),load('dsh-scope'),load('dsh-jobs-local')]);
@@ -89,6 +90,10 @@ test('isolated actual scoped definitions reject captured native sets and unknown
 });
 test('real sibling composition consumes the declared root binding and unloading its fiber leaves the permanent slot closed',async t=>{
  const f=await fixture(t);assert.equal((await f.call('read',{file_path:'a.js'})).isError,true);const consumer=f.ctx.plugin({name:'actual-workspace-composition-consumer',inject:['agents','tools','projectExecutionMode','sessionQuery','connection','workspaceRegistry','sandboxPolicy','shell','shellEnv'],apply(owner){const composition=f.compose({context:owner});owner.effect(()=>()=>composition.dispose());}});await consumer.await();assert.equal((await f.call('read',{file_path:'a.js'})).isError,false);await consumer.dispose();assert.equal((await f.call('read',{file_path:'a.js'})).isError,true);assert.equal(f.state.native,0);assert.equal(f.state.hostShell,0);
+});
+for(const mode of ['host-compat','isolated-guest'])test('exact workspace inject preserves AppsOFF startup with missing optional conversation services in '+mode,async t=>{
+ const f=await fixture(t,{mode,off:true});for(const name of workspaceInject)if(f.ctx.get(name)===undefined)f.ctx.provide(name,{});let ready=false;
+ const consumer=f.ctx.plugin({name:'exact-workspace-inject-missing-optionals-'+mode,inject:workspaceInject,async apply(owner){assert.equal(owner.get('sessionProjections'),undefined);assert.equal(owner.get('userQuestions'),undefined);const composition=f.compose({context:owner});owner.effect(()=>()=>composition.dispose());if(composition.isolated)await composition.ready;ready=true;}});await consumer.await();assert.equal(ready,true);assert.equal(f.ctx.tools.get('todo_write',f.owner),undefined);assert.equal(f.ctx.tools.get('ask_user_question',f.owner),undefined);assert.equal((await f.call('read',{file_path:'a.js'})).isError,mode==='isolated-guest');if(mode==='host-compat'){assert.equal(f.state.guestFactories,0);assert.equal(f.state.hostRunner,1);}assert.equal(f.state.rpc,0);assert.equal(f.state.hostShell,0);await consumer.dispose();
 });
 test('new, seeded, legacy and child scopes are shadowed before resolution, including their earlier native snapshots',async t=>{
  const f=await fixture(t),composition=f.compose();

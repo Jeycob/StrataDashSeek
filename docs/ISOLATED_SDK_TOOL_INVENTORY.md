@@ -119,3 +119,21 @@ its post-question mutation, and constrained service-level delegation/session
 query facades. They must compare actual captured definition objects, retain
 their existing authority rules, and check binding at later effects. This unit
 does not grant any of them by name.
+
+## Optional-service injection regression
+
+Pinned Cordis `lib/index.js:1340–1349` explicitly defines `ctx.get(name)` as a
+service read without the inject requirement; its `strict:true` default means
+the providing fiber must be active. This differs from undeclared
+`ctx.serviceName` property access. The helper's explicit optional lookups do not
+require adding `sessionProjections` or `userQuestions` to workspace's mandatory
+inject array.
+
+The regression fixture imports the actual exported `workspace/plugin.mjs`
+inject contract and uses it for a real sibling consumer. Actual projection and
+UserQuestionService providers live in separate sibling fibers: direct
+undeclared properties throw, explicit get calls succeed, and native todo plus
+ordinary question dispatch succeeds. Two more consumers use that same inject
+array with both optionals absent and confirm AppsOFF initialization in host and
+isolated modes, leaving absent helper definitions closed. Full workspace.apply,
+UI and live startup are not claimed by those isolated source fixtures.
