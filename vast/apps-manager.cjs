@@ -24,7 +24,7 @@ class AppsManager {
   this.save();this.archivedCleanup=new (require('./apps-archived-cleanup.cjs').ArchivedDockerCleanup)(this);this.heartbeat();
  }
  save(){this.store.jobs=retainJobs(this.store.jobs,this.store.projects);atomic(this.storeFile,this.store);}
- heartbeat(){const w=this.worker?.status();atomic(this.cfg.activityFile||path.join(this.cfg.stateDir,'activity.json'),{at:Date.now(),active:this.busy||this.previewRequests||this.holdUntil>Date.now()?1:0,lastActivity:this.lastActivity,holdUntil:this.holdUntil,previewRequests:this.previewRequests,servicePid:process.pid,worker:w||null,draining:!!this.sleepToken()});}
+ heartbeat(){const w=this.worker?.status();atomic(this.cfg.activityFile||path.join(this.cfg.stateDir,'activity.json'),{at:Date.now(),enabled:this.cfg.enabled===true,active:this.busy||this.previewRequests||this.holdUntil>Date.now()?1:0,lastActivity:this.lastActivity,holdUntil:this.holdUntil,previewRequests:this.previewRequests,servicePid:process.pid,worker:w||null,draining:!!this.sleepToken()});}
  setBusy(value){this.busy=value;this.lastActivity=Date.now();this.heartbeat();}
  requireEnabled(){if(this.serviceClosing)throw Object.assign(Error('Application service is shutting down'),{status:503,code:'APPS_SERVICE_CLOSING'});if(this.archivedCleanup?.data.operation&&['running','reconciliation_required'].includes(this.archivedCleanup.data.operation.state))throw Object.assign(Error('CLEANUP_RECONCILIATION_REQUIRED'),{status:409,code:'CLEANUP_RECONCILIATION_REQUIRED'});if(!this.cfg.enabled)throw Object.assign(Error('Docker worker is not enabled'),{status:409,code:'APPS_WORKER_DISABLED'});}
  sleepToken(){if(this.drain&&this.drain.until<=Date.now())this.drain=null;return this.drain?.token;}
@@ -58,6 +58,7 @@ class AppsManager {
   if(this.worker.phase==='recovering'||this.worker.phase==='ready'&&Date.now()-this.worker.lastUsed>(this.cfg.vm.idleSeconds||120)*1000){
    this.ticking=true;try{assertStartOutcomesKnown(this);assertDeploymentIdle(this,{allowCurrent:false});if(this.worker.phase==='recovering')await this.worker.ensure();else await this.worker.stop();}catch(e){this.worker.error=e.message;}finally{this.ticking=false;this.heartbeat();}
   }
+  else await require('./apps-storage-telemetry.cjs').refreshStorage(this);
  }
  async beginPreview(port){
   this.requireEnabled();this.acceptActivity();const p=Object.values(this.store.projects).find(p=>(p.previewPort??p.hostPort)===port&&p.containerId);if(!p)throw Object.assign(Error('No application is deployed on this port'),{status:404});

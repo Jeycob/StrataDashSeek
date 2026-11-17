@@ -57,7 +57,7 @@ function publicValue(name,value){
   'service-health.json':['version','at','sourceCommit','phase','reasonCode','failedService'],
   'runtime-recovery.json':['version','sourceCommit','phase','reasonCode','observedAt','candidateCommit','servingCommit','lastGoodCommit','acceptedWork','deadline'],
   'startup-update.json':['version','enabled','phase','checkedAt','appliedCommit','targetCommit','error','signatureVerified','bootstrapUpgradeRequired'],
-  'telemetry.json':['at','source','gpu','cpu','ram','disk','model','agentQueue','last','requests','history','liveTokensPerSecond','energyWhSinceMonitorStart','monitorStartedAt','idle'],
+  'telemetry.json':['at','source','gpu','cpu','ram','disk','storage','model','agentQueue','last','requests','history','liveTokensPerSecond','energyWhSinceMonitorStart','monitorStartedAt','idle'],
   'idle-status.json':['at','canStop','reason','idleTimeoutSeconds','idleSeconds'],
   'preview-status.json':['configured','enabled','verified','ports','scope','at','requestId','error'],
   'billing-status.json':['at','pid','lastObservationAt','source']
