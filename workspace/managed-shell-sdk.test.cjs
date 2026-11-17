@@ -17,7 +17,7 @@ async function fixture(t,run){
  ctx.provide('sandboxPolicy',{resolve:()=>({mode:'workspace-write',workspaceRoot:'/managed/project'})});
  ctx.provide('shellEnv',{collect:()=>({})});ctx.provide('workingDirectory',{ensure:async()=>'/legacy'});
  S.applyNativeBash(ctx,{enableRunInBackground:false});const native=ctx.tools.get('bash');assert(native?.output?.schema);
- const manager={execution:(await import('./fixtures/execution-binding.mjs')).hostExecutionBinding(),existing:new Set(),data:{installedAt:1000,sessions:{},trash:{}},ownerAgent:a=>a};
+ const manager={existing:new Set(),data:{installedAt:1000,sessions:{},trash:{}},ownerAgent:a=>a};
  const managed=S.createManagedShell(ctx,manager,async(args,exec)=>{calls.push({args,exec});return run?run(args,exec):outcome();});
  const pipeline=new S.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>S.executeToolBatch(input,pipeline,()=>1)});
  t.after(async()=>{managed.dispose();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();});

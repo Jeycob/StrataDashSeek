@@ -1,7 +1,6 @@
 'use strict';
 const crypto=require('node:crypto');
 const {LABEL}=require('./apps-engine.cjs');
-const {assertAppsExecution}=require('./apps-execution-mode.cjs');
 const {prepareManagedCreate,bindManagedCreate}=require('./apps-managed-resources.cjs');
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 const unresolved=record=>['pending','unknown','cleanup-pending'].includes(record.state);
@@ -9,7 +8,7 @@ const legacyPending=job=>job.status==='failed'&&job.stage==='candidate'&&job.act
 const SLOT=/^[a-z][a-z0-9-]{0,31}$/;
 function recordName(record){return 'sdsh-'+(record.role==='test'?'test-':'')+record.projectId+'-'+record.jobId+(record.slot?'-'+record.slot:'');}
 function validRecord(record,job){return record&&/^[a-f0-9]{16}$/.test(record.projectId||'')&&record.jobId===job.id&&/^[a-f0-9]{16}$/.test(job.id||'')&&['test','candidate'].includes(record.role)&&(record.slot===undefined||typeof record.slot==='string'&&SLOT.test(record.slot))&&record.name===recordName(record)&&/^[a-f0-9]{32}$/.test(record.token||'')&&/^sha256:[a-f0-9]{64}$/.test(record.imageId||'');}
-function retainJobs(jobs,projects={}){const recent=new Set(jobs.slice(-100)),published=Object.values(projects),releases=new Set(published.map(p=>p.releaseId).filter(Boolean)),containers=new Set(published.map(p=>p.containerId).filter(Boolean));return jobs.filter(job=>recent.has(job)||job.projectRuntime&&job.projectRuntime.state!=='stopped'||releases.has(job.id)||(job.creations||[]).some(c=>containers.has(c.containerId))||legacyPending(job)||(job.creations||[]).some(unresolved)||(job.creations||[]).some(c=>['pending','unknown'].includes(c.resourceStart?.state))||job.deploymentPhase==='recovery_required'||job.dataOperations&&(!job.dataOperations.operations||Object.values(job.dataOperations.operations).some(operation=>operation?.state!=='complete')));}
+function retainJobs(jobs,projects={}){const recent=new Set(jobs.slice(-100)),published=Object.values(projects),releases=new Set(published.map(p=>p.releaseId).filter(Boolean)),containers=new Set(published.map(p=>p.containerId).filter(Boolean));return jobs.filter(job=>recent.has(job)||releases.has(job.id)||(job.creations||[]).some(c=>containers.has(c.containerId))||legacyPending(job)||(job.creations||[]).some(unresolved)||(job.creations||[]).some(c=>['pending','unknown'].includes(c.resourceStart?.state))||job.deploymentPhase==='recovery_required'||job.dataOperations&&(!job.dataOperations.operations||Object.values(job.dataOperations.operations).some(operation=>operation?.state!=='complete')));}
 function matches(record,c){
  const labels=c?.Config?.Labels||{};
  return /^[a-f0-9]{64}$/.test(c?.Id||'')&&c.Image===record.imageId&&c.Name==='/'+record.name&&labels[LABEL]==='managed'&&labels[LABEL+'.project']===record.projectId&&labels[LABEL+'.job']===record.jobId&&labels[LABEL+'.create']===record.token&&(record.slot===undefined||labels[LABEL+'.slot']===record.slot);
@@ -17,8 +16,7 @@ function matches(record,c){
 function neverStarted(c){return c?.State?.Status==='created'&&c.State.Running===false&&/^0001-01-01T/.test(c.State.StartedAt||'');}
 async function inspect(manager,record,timeout=15000){try{return await manager.engine.json('GET','/containers/'+record.name+'/json',{timeout});}catch(e){if(e.dockerStatus===404)return null;throw e;}}
 function unknown(record,cause){record.state='unknown';return new Error('Container creation outcome is unresolved for '+record.name+'; inspect the existing operation before retrying',{cause});}
-async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,reconcileMs=30000,intervalMs=250,slot,runtimeGrant}={}){
-  assertAppsExecution(manager,{isolated:Boolean(runtimeGrant)});
+async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,reconcileMs=30000,intervalMs=250,slot}={}){
  const projectId=json?.Labels?.[LABEL+'.project'];
  if(!/^[a-f0-9]{16}$/.test(projectId||'')||!/^[a-f0-9]{16}$/.test(job?.id||'')||!/^sha256:[a-f0-9]{64}$/.test(json?.Image||'')||json.Labels[LABEL]!=='managed')throw Error('Managed container creation requires immutable image and project/job identities');
  if(!Number.isInteger(createTimeoutMs)||createTimeoutMs<1||createTimeoutMs>120000||!Number.isInteger(reconcileMs)||reconcileMs<1||reconcileMs>30000||!Number.isInteger(intervalMs)||intervalMs<1||intervalMs>1000)throw Error('Invalid bounded creation timing');
@@ -29,8 +27,7 @@ async function createManagedContainer(manager,job,json,{createTimeoutMs=120000,r
  const body={...json,Labels:{...json.Labels,[LABEL+'.job']:job.id,[LABEL+'.create']:record.token,...(slot?{[LABEL+'.slot']:slot}:{})}};
  manager.log(job,'Creating '+role+' container; bounded Docker deadline '+createTimeoutMs+' ms.\n');
  let createIssued=false;try{
-  await prepareManagedCreate(manager,record,body,runtimeGrant);
-  assertAppsExecution(manager,{isolated:Boolean(runtimeGrant)});
+  await prepareManagedCreate(manager,record,body);
   let created;
   try{createIssued=true;created=await manager.engine.json('POST','/containers/create?name='+record.name,{json:body,timeout:createTimeoutMs});}
   catch(cause){

@@ -1,4 +1,3 @@
-import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -17,7 +16,7 @@ async function fixture(t, mode = 'workspace-write') {
   const agent = { id: 'one', session: { id: 'one' } }, execution = { agent, signal: new AbortController().signal };
   const manager = { ownerAgent: value => value?.owner ?? value, data: { sessions: { one: { root, gitWritableRoots: [other] }, two: { root: other } } } };
   const calls = [], ctx = { sandboxPolicy: { resolve: () => ({ mode, workspaceRoot: directory, additionalWritableRoots: [directory] }) }, shellEnv: { collect: () => ({ DSH_PROJECT_ROOT: '/untrusted-stale-root' }) }, shell: { sandboxMode: 'workspace-write', resolve(request) { calls.push(request); return request; }, async execute(spec) { return { async result() { return { exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: spec.timeoutMs, stdout: { text: 'ok', truncated: false }, stderr: { text: '', truncated: false }, sandbox: { mode: spec.sandboxPolicy.mode, denied: false } }; } }; } } };
-  return { directory, root, other, agent, execution, manager, ctx, calls, run: createProjectCommandRunner(ctx, manager, {}, hostExecutionBinding()) };
+  return { directory, root, other, agent, execution, manager, ctx, calls, run: createProjectCommandRunner(ctx, manager) };
 }
 const args = { command: 'printf "%s" "hello; $(not-executed-by-wrapper)"', description: 'Inspect the assigned project' };
 
@@ -70,7 +69,7 @@ test('exit codes and timeouts are retained, while caller cancellation is drained
 });
 
 test('the trusted managed-shell marker never overrides Trash, repair stops or outside paths', () => {
-  const manager = new WorkspaceManager({}, {}, hostExecutionBinding()); manager.data = { sessions: { one: { root: path.resolve('project') } }, trash: {} };
+  const manager = new WorkspaceManager({}); manager.data = { sessions: { one: { root: path.resolve('project') } }, trash: {} };
   const exec = { name: 'bash', agent: { id: 'one' }, arguments: { command: 'pwd' }, managedProjectShell: true };
   assert.equal(manager.toolGuard(exec), undefined);
   assert.ok(manager.toolGuard({ ...exec, managedProjectShell: false }));

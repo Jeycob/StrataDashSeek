@@ -4,7 +4,8 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WorkspaceManager } from './manager.mjs';
 import { WorkbenchError, DEFAULTS } from './policy.mjs';
-import { composeProjectExecution } from './execution-composition.mjs';
+import { createProjectCommandRunner, registerProjectTool } from './project-tool.mjs';
+import { createManagedShell } from './managed-shell.mjs';
 import { sameRequestOrigin, boundedJSON } from './http.mjs';
 import { createRequire } from 'node:module';
 import { createRuntimeCapabilities } from './runtime-capabilities.mjs';
@@ -18,34 +19,22 @@ import { installModelSelection } from './model-selection.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
-export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt', 'sessionController', 'sessionQuery', 'projectExecutionMode'];
+export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt', 'sessionController'];
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 export async function apply(ctx, config = {}) {
-  return applyTrustedWorkspace(ctx, config, undefined);
-}
-// Source-only composition seam for full runtime fixtures. Plugin/HTTP config
-// cannot select factories or redirect the production SDK.
-export async function applyTrustedWorkspace(ctx, config = {}, compositionFactories) {
   const sourceCommit = path.basename(await fs.realpath(root));
   const admission = installRuntimeAdmission(ctx, { expectedCommit: sourceCommit });
-  const execution = ctx.projectExecutionMode;
-  execution.assertUnchanged();
-  const manager = new WorkspaceManager(ctx, config, execution); await manager.initialize();
+  const manager = new WorkspaceManager(ctx, config); await manager.initialize();
   const models = installModelSelection(ctx, manager, { lifecycle: false });
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
-  execution.assertUnchanged();
-  installDockerCleanup(ctx,manager,appsConfig,callApps,execution);
+  installDockerCleanup(ctx,manager,appsConfig,callApps);
   const capabilities = createRuntimeCapabilities({ workspaceRoot: config.appsWorkspaceRoot ?? appsConfig?.workspaceRoot ?? path.dirname(manager.projectsRoot), capacityPath: appsConfig?.stateDir ?? '/data/harness/state/applications', minFreeBytes: appsConfig?.minFreeBytes ?? 2 * 1024 ** 3,
-    ...(appsConfig ? { readAppsState: ({ signal }) => callApps('/state', undefined, { ...appsConfig, signal, timeoutMs: 1500 }) } : {}) }, execution);
+    ...(appsConfig ? { readAppsState: ({ signal }) => callApps('/state', undefined, { ...appsConfig, signal, timeoutMs: 1500 }) } : {}) });
   registerRuntimeCapabilities(ctx, manager, capabilities);
-  const composition=composeProjectExecution(ctx,manager,{appsConfig,callApps,capabilities},compositionFactories),managedShell=composition;
-  ctx.effect(()=>()=>composition.dispose());
-  if(composition.isolated)await composition.ready;
   let lastCacheCleanup = 0, cacheCleanupPending;
   const cleanupCaches = () => {
-    if (composition.isolated) return;
     if (cacheCleanupPending || Date.now() - lastCacheCleanup < 60000) return cacheCleanupPending;
     lastCacheCleanup = Date.now();
     cacheCleanupPending = manager.inOrder(async () => {
@@ -58,12 +47,16 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   ctx.effect(() => () => manager.changes.dispose());
   // Local, bounded checks only: never install or download during a cold start.
   const environmentReport = config.environmentReport ?? '/data/harness/state/development.json';
-  const preflight = composition.isolated ? undefined : doctor({ output: environmentReport, directory: path.join(path.dirname(environmentReport), 'development') }).catch(error => ({ browser: { ok: false, error: error.message }, dotnet: { available: false } }));
+  const preflight = doctor({ output: environmentReport, directory: path.join(path.dirname(environmentReport), 'development') }).catch(error => ({ browser: { ok: false, error: error.message }, dotnet: { available: false } }));
   manager.environmentReady = preflight;
+  const runProjectCommand = createProjectCommandRunner(ctx, manager);
+  registerProjectTool(ctx, manager, runProjectCommand);
+  const managedShell = createManagedShell(ctx, manager, runProjectCommand);
   // SDK tool admission precedes pre-step. Register at creation and enrollment,
   // including seeded future projects, before the first tool-set snapshot.
-  for (const agent of ctx.agents.list()) { if(composition.isolated)composition.install(agent);await models.restore(agent);execution.assertUnchanged();if(!composition.isolated)composition.install(agent); }
-  ctx.on('agent/created', async ({ agent, source, signal }) => { if(composition.isolated)composition.install(agent);await models.restoreAfterDefaults(agent, source, (a, s) => manager.applyDefaults(a, s));execution.assertUnchanged();if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal);execution.assertUnchanged();if(!composition.isolated)composition.install(agent); }, { global: true });
+  for (const agent of ctx.agents.list()) { await models.restore(agent); managedShell.install(agent); }
+  ctx.effect(() => () => managedShell.dispose());
+  ctx.on('agent/created', async ({ agent, source, signal }) => { await models.restoreAfterDefaults(agent, source, (a, s) => manager.applyDefaults(a, s)); if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal); managedShell.install(agent); }, { global: true });
   ctx.on('agent/pre-step', async (input, next) => {
     await manager.preStep(input); manager.frozenSettings.set(input.agent.id, { ...manager.settings(manager.ownerAgent(input.agent).session) });
     const decision = await next(), id = manager.ownerAgent(input.agent).id, message = manager.pendingNotices.get(id), diagnostics = manager.pendingDiagnostics.get(id);
@@ -75,12 +68,12 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
     }
     return decision;
   }, { prepend: true, global: true });
-  ctx.tools.guard(exec => manager.toolGuard(composition.managerExecution(exec)));
+  ctx.tools.guard(exec => manager.toolGuard({ ...exec, agent: manager.ownerAgent(exec.agent), managedProjectShell: managedShell.handles(exec) }));
   ctx.on('tools/result', (exec, result) => {
-    manager.observeToolResult(composition.managerExecution(exec), result);
+    manager.observeToolResult({ ...exec, agent: manager.ownerAgent(exec.agent), managedProjectShell: managedShell.handles(exec) }, result);
   }, { global: true });
   ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
-  ctx.on('workspace-runtime/review', async ({ sessionId,execution:actual }, next) => {execution.assertUnchanged();const owner=actual?manager.ownerAgent(actual.agent)?.id:sessionId;if(!owner)return next();const value=await manager.review(owner);execution.assertUnchanged();return value?{...value,sessionId:owner}:next();});
+  ctx.on('workspace-runtime/review', async ({ sessionId }, next) => (await manager.review(sessionId)) ?? next());
   ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.releaseIfIdle(session.id).then(cleanupCaches).catch(() => {}), 0); });
   ctx.on('agent/disposed', ({ agent }) => { managedShell.remove(agent); manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); manager.pendingDiagnostics.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
   const timer = setInterval(() => { for (const id of manager.running.keys()) void manager.releaseIfIdle(id).catch(() => {}); }, 10000); timer.unref();
@@ -129,10 +122,6 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
     catch (error) { return reply({ error: error.message }, error.status ?? 400); }
   } }));
   // Kept as a separate static contribution for a native client in addition to /phone/.
-  ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/execution', methods: ['GET'], requestBody: 'buffered', fetch: () => {
-    try { execution.assertUnchanged(); return reply({ version: 1, mode: execution.snapshot.mode, available: true }); }
-    catch { return reply({ version: 1, mode: null, available: false, code: 'PROJECT_EXECUTION_UNAVAILABLE' }, 503); }
-  } }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/health', methods: ['GET'], requestBody: 'buffered', fetch: async () => reply({ version: 1, workspaceReady: true, sourceCommit: /^[a-f0-9]{40}$/u.test(sourceCommit) ? sourceCommit : null, admission: admission.snapshot(), activeAgents: ctx.agents.list().filter(agent => agent.status === 'running').length }) }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/client', methods: ['GET'], requestBody: 'buffered', fetch: async () => new Response(await fs.readFile(path.join(root, 'workspace/client.js')), { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' } }) }));
   await fs.writeFile(path.join(manager.root, 'loaded.json'), JSON.stringify({ at: Date.now(), pid: process.pid, loaded: true, installedAt: manager.data.installedAt }), { mode: 0o600 });

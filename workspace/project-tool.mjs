@@ -3,16 +3,13 @@ import fs from 'node:fs/promises';
 import { WorkbenchError, within } from './policy.mjs';
 import { normalizeVerificationCommand, nodeTestCommandRecipe } from './tool-recovery.mjs';
 import { createProjectProcessStarter, projectBackgroundSchema, projectJobLifetime, renderProjectBackground } from './project-process.mjs';
-import {bindProjectExecution} from './execution-mode.mjs';
 const quote = text => "'" + String(text).replaceAll("'", "'\\''") + "'";
 export const projectCommandParameters = { type: 'object', properties: { command: { type: 'string', description: 'Run verification as a single direct foreground command, or use verify_project. Output is already bounded by Harness; do not add grep/head/tail pipes, log redirections, status echoes or force-exit just to shorten it. Read retained diagnostics separately when needed.' }, description: { type: 'string' }, workdir: { type: 'string' }, timeoutMs: { type: 'number', description: 'Foreground deadline (default 60000ms, maximum 120000ms); for explicit background execution, lifetime (default 300000ms, maximum 600000ms).' }, run_in_background: { type: 'boolean', description: 'Explicitly start an owned, confined background job. Collect with job_output; stop with job_kill. Maximum lifetime is ten minutes. No automatic timeout promotion.' } }, required: ['command', 'description'], additionalProperties: false };
 
 // Both model-facing command names enter the same bounded, confining executor.
-export function createProjectCommandRunner(ctx, manager, config = {}, binding = manager.execution ?? ctx.projectExecutionMode) {
-  const mode=bindProjectExecution(binding),check=()=>{if(mode.assertUnchanged().mode!=='host-compat')throw new WorkbenchError('PROJECT_EXECUTION_MODE_MISMATCH','The host executor requires explicit host compatibility.');};check();
-  const processes = createProjectProcessStarter(ctx, {...config.processTimers,assertActive:check});
+export function createProjectCommandRunner(ctx, manager, config = {}) {
+  const processes = createProjectProcessStarter(ctx, config.processTimers);
   async function prepare(args, execution) {
-    check();
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !Object.hasOwn(projectCommandParameters.properties, key))) throw new WorkbenchError('INVALID_COMMAND', 'Only command, description, workdir, timeoutMs and run_in_background are supported for managed commands.', 400);
     if (typeof args.command !== 'string' || !args.command.trim() || args.command.length > 65536 || typeof args.description !== 'string' || !args.description.trim()) throw new WorkbenchError('INVALID_COMMAND', 'A bounded command and description are required.', 400);
     if (args.workdir !== undefined && typeof args.workdir !== 'string' || args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) || args.run_in_background !== undefined && typeof args.run_in_background !== 'boolean') throw new WorkbenchError('INVALID_COMMAND', 'Invalid command directory, timeout or background flag.', 400);
@@ -21,7 +18,6 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
     const cwd = path.resolve(project.root, args.workdir ?? '.');
     if (!within(project.root, cwd)) throw new WorkbenchError('OUTSIDE_PROJECT', 'Command directory is outside the project.', 403);
     const [realRoot, realCwd] = await Promise.all([fs.realpath(project.root), fs.realpath(cwd)]);
-    check();
     if (!within(realRoot, realCwd)) throw new WorkbenchError('OUTSIDE_PROJECT', 'Command directory resolves outside the project.', 403);
     if (ctx.shell.sandboxMode === undefined || !ctx.sandboxPolicy) throw new WorkbenchError('NO_PROJECT_SANDBOX', 'A filesystem-confining shell and policy are required; refusing unconfined execution.', 503);
     const standing = ctx.sandboxPolicy.resolve({ session: execution.agent.session });
@@ -45,11 +41,9 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
   }
   const run = async (args, execution) => {
     const prepared = await prepare(args, execution);
-    check();
     execution.signal.throwIfAborted();
     if (args.run_in_background === true) return { ...prepared, background: await processes.start(prepared, execution, args) };
     const result = await (await ctx.shell.execute(prepared.spec)).result();
-    check();
     execution.signal.throwIfAborted();
     if (result.aborted) { const error = Error('Project command aborted'); error.name = 'AbortError'; throw error; }
     return { ...prepared, result: prepared.adaptations.length ? { ...result, stdout: { ...result.stdout, text: prepared.adaptations.join('\n') + '\n' + result.stdout.text } } : result };
@@ -58,22 +52,18 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
   return run;
 }
 
-export function registerProjectTool(ctx, manager, run = createProjectCommandRunner(ctx, manager), binding = manager.execution ?? ctx.projectExecutionMode) {
-  const mode=bindProjectExecution(binding);
+export function registerProjectTool(ctx, manager, run = createProjectCommandRunner(ctx, manager)) {
   const tool = {
     name: 'project_exec',
     description: 'Run a shell command inside this isolated project, using the same executor as managed bash. Writes remain confined; assigned ports, database and prepared tools are preserved. Use direct verification commands without exit-masking pipelines. Foreground commands stop after at most120000ms. Explicit run_in_background starts a session-owned SDK job with a five-minute default and ten-minute maximum lifetime; use job_output/job_list/job_kill by its returned job ID, never nohup, setsid or process-name kills. There is no automatic timeout promotion.',
     parameters: projectCommandParameters,
     output: { schema: { oneOf: [{ type: 'object', properties: { cwd: { type: 'string' }, exitCode: { oneOf: [{ type: 'integer' }, { type: 'null' }] }, stdout: { type: 'string' }, stderr: { type: 'string' }, timedOut: { type: 'boolean' } }, required: ['cwd', 'exitCode', 'stdout', 'stderr', 'timedOut'], additionalProperties: false }, projectBackgroundSchema] }, render: (args, v) => v.kind === 'background' ? renderProjectBackground(args, v) : [{ type: 'text', text: `Exit code: ${v.exitCode}${v.timedOut ? ' (timed out)' : ''}\n${v.stdout}${v.stderr ? '\n[stderr]\n' + v.stderr : ''}` }] },
     async execute(args, execution) {
-      mode.assertUnchanged();
       const value = await run(args, execution);
-      mode.assertUnchanged();
       if (value.background) return value.background;
       const { cwd, result } = value;
       return { cwd, exitCode: result.exitCode, stdout: result.stdout.text, stderr: result.stderr.text, timedOut: result.timedOut };
     },
   };
-  const dispose=ctx.tools.register(tool, { when: ({ agent }) => { const p = manager.data.sessions[manager.ownerAgent(agent)?.id]; return Boolean(p && !p.legacy); } });
-  return {definition:tool,handles:exec=>exec.name==='project_exec'&&ctx.tools.get(exec.name,exec.agent,exec.toolSet)===tool,dispose};
+  ctx.tools.register(tool, { when: ({ agent }) => { const p = manager.data.sessions[manager.ownerAgent(agent)?.id]; return Boolean(p && !p.legacy); } });
 }

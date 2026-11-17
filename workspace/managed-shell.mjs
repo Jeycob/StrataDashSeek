@@ -1,6 +1,5 @@
 import { createProjectCommandRunner, projectCommandParameters } from './project-tool.mjs';
 import { renderProjectBackground } from './project-process.mjs';
-import {bindProjectExecution} from './execution-mode.mjs';
 
 const stream = value => ({ text: value.text, truncated: Boolean(value.truncated), ...(value.spillPath === undefined ? {} : { spillPath: value.spillPath }) });
 function foreground({ cwd, spec, result }) {
@@ -22,22 +21,18 @@ function render(args, value) {
 
 // Scoped registrations are a supported SDK seam. No frozen tool execution is
 // rewritten and no pre-execute/approval middleware is bypassed.
-export function createManagedShell(ctx, manager, run, binding = manager.execution ?? ctx.projectExecutionMode) {
-  const mode=bindProjectExecution(binding),isolated=mode.snapshot.mode==='isolated-guest';
-  if(!run){if(isolated)throw Error('PROJECT_RUNTIME_EXECUTOR_REQUIRED');run=createProjectCommandRunner(ctx,manager,{},mode);}
+export function createManagedShell(ctx, manager, run = createProjectCommandRunner(ctx, manager)) {
   const registrations = new Map(), definitions = new WeakSet();
   function candidate(agent) {
     const owner = manager.ownerAgent(agent); if (!owner) return false;
-    if(isolated)return true;
     const record = manager.data.sessions[owner.id]; if (record) return !record.legacy;
     const created = typeof owner.session.header.createdAt === 'number' ? owner.session.header.createdAt : Date.parse(owner.session.header.createdAt);
     return !manager.existing.has(owner.id) && Number.isFinite(created) && created >= manager.data.installedAt;
   }
   function install(agent) {
-    mode.assertUnchanged();
     if (registrations.has(agent) || !candidate(agent)) return;
-    const original = ctx.tools.get('bash', agent); if ((!original&&!isolated) || definitions.has(original)) return;
-    const definition = { ...(isolated?{}:original), name:'bash', description: 'Run a confined bash command in this isolated project with its assigned ports, database and prepared tools, using the same executor as project_exec. Foreground commands stop after at most120000ms. Explicit run_in_background returns an owned SDK job ID with a five-minute default and ten-minute maximum lifetime; use job_output/job_list/job_kill, never nohup, setsid or broad process-name kills. No timeout promotion or permission escalation. Inspect real exit codes.', parameters: projectCommandParameters, isConcurrencySafe: () => false, output: { ...(isolated?{schema:{type:'object',additionalProperties:true}}:original.output), render }, async execute(args, execution) { mode.assertUnchanged();const value = await run(args, execution);mode.assertUnchanged();return value.background ?? foreground(value); } };
+    const original = ctx.tools.get('bash', agent); if (!original || definitions.has(original)) return;
+    const definition = { ...original, description: 'Run a confined bash command in this isolated project with its assigned ports, database and prepared tools, using the same executor as project_exec. Foreground commands stop after at most120000ms. Explicit run_in_background returns an owned SDK job ID with a five-minute default and ten-minute maximum lifetime; use job_output/job_list/job_kill, never nohup, setsid or broad process-name kills. No timeout promotion or permission escalation. Inspect real exit codes.', parameters: projectCommandParameters, isConcurrencySafe: () => false, output: { ...original.output, render }, async execute(args, execution) { const value = await run(args, execution); return value.background ?? foreground(value); } };
     const dispose = agent.ctx.tools.register(definition); definitions.add(definition); registrations.set(agent, { definition, dispose });
   }
   function handles(exec) { return exec.name === 'bash' && Boolean(exec.agent) && definitions.has(ctx.tools.get('bash', exec.agent, exec.toolSet)); }

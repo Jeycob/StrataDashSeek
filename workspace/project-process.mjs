@@ -11,7 +11,7 @@ export function renderProjectBackground(args, value) {
 
 // Only SDK-owned handles are retained. Never discover/adopt arbitrary PIDs or
 // use a process name as an authority to signal another program.
-export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearTimer = clearTimeout, execute = spec => ctx.shell.execute(spec), assertActive = () => {} } = {}) {
+export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
   const active = new Map(); let disposed = false;
   async function dispose() {
     if (disposed && active.size === 0) return;
@@ -26,7 +26,6 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
   ctx.effect?.(() => dispose, 'managed project background processes');
 
   async function start({ cwd, spec, adaptations = [] }, execution, args) {
-    assertActive();
     execution.signal.throwIfAborted();
     if (disposed) throw new WorkbenchError('PROJECT_EXECUTOR_DISPOSED', 'Project command execution is shutting down.');
     const owner = execution.agent?.id;
@@ -45,7 +44,6 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     const abortBeforeCommit = () => cancel('tool call aborted before background ownership was committed');
     execution.signal.addEventListener('abort', abortBeforeCommit, { once: true });
     try {
-      assertActive();
       execution.signal.throwIfAborted();
       id = jobs.start({
         kind: 'bash', owner, label: args.description.replace(/\s+/gu, ' ').slice(0, 240),
@@ -59,11 +57,9 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
           done = Promise.resolve().then(async () => {
             try {
               controller.signal.throwIfAborted();
-              assertActive();
               for (const adaptation of adaptations) handle.append(adaptation + '\n', { channel: 'stdout' });
-              process = await execute({ ...spec, onExpiry: 'none', timeoutMs: lifetimeMs, signal: controller.signal });
+              process = await ctx.shell.execute({ ...spec, onExpiry: 'none', timeoutMs: lifetimeMs, signal: controller.signal });
               if (controller.signal.aborted) process.kill();
-              assertActive();
               await process.done;
               const result = { exitCode: process.exitCode, signal: process.signal ?? null, lifetimeMs, lifetimeExpired: stopReason?.startsWith('project job lifetime limit') ?? false,
                 ...(process.sandbox ? { sandbox: { mode: process.sandbox.mode, denied: Boolean(process.sandbox.denied), runnerFailed: Boolean(process.sandbox.runnerFailed) } } : {}) };

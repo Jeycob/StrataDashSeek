@@ -1,5 +1,4 @@
 'use strict';
-const {hostExecutionBinding}=require('./fixtures/execution-binding.cjs');
 const {supportedInfo,inspection}=require('./resource-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),fsp=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),http=require('node:http'),crypto=require('node:crypto'),{execFile}=require('node:child_process'),{promisify}=require('node:util'),{DatabaseSync}=require('node:sqlite');
 const {DockerSqliteData,planOf}=require('./apps-deployment-data.cjs'),{DockerEngine,LABEL}=require('./apps-engine.cjs'),exec=promisify(execFile);
@@ -29,7 +28,7 @@ async function fixture(t,{first=false,helperTimeoutMs=2000}={}){
    if(match[2]==='stop'||match[2]==='kill'){c.State.Running=false;return send({});}
   }catch(error){send({message:'fixture error'},500);}
  });await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
- const manager={execution:hostExecutionBinding(),cfg:{dataHelperImageId:image},engine:new DockerEngine({url:'http://127.0.0.1:'+server.address().port}),store:{projects:{},jobs:[job]},busy:release,save(){},log(){}};
+ const manager={cfg:{dataHelperImageId:image},engine:new DockerEngine({url:'http://127.0.0.1:'+server.address().port}),store:{projects:{},jobs:[job]},busy:release,save(){},log(){}};
  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));const real=await fsp.realpath(directory);assert.equal(path.dirname(real),await fsp.realpath(os.tmpdir()));assert(path.basename(real).startsWith('apps-data-adapter-'));assert.equal((await fsp.lstat(directory)).isSymbolicLink(),false);await fsp.rm(real,{recursive:true,force:true});});
  return{directory,volumes,containers,calls,bodies,job,plan,manager,adapter:new DockerSqliteData(manager,job,{helperTimeoutMs,cleanupTimeoutMs:50}),volume,setHang(){hang=true;},setAmbiguousVolume(){ambiguousVolume=true;},file:name=>path.join(volumes.get(name).dir,'app.sqlite')};
 }

@@ -1,15 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { WorkspaceManager } from './manager.mjs';
-import { bindProjectExecution } from './execution-mode.mjs';
-import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import { RepairBudget } from './policy.mjs';
 import { operationFingerprint } from './policy.mjs';
 import path from 'node:path';
 
 function fixture() {
   const manager = Object.create(WorkspaceManager.prototype), budget = new RepairBudget({ stage: 3, steps: 22 });
-  Object.defineProperty(manager, 'execution', { value: bindProjectExecution(hostExecutionBinding()), enumerable: true });
   manager.data = { sessions: { one: { budget, root: path.resolve('project') } }, trash: {} };
   manager.budgets = new Map([['one', budget]]); manager.pendingDiagnostics = new Map();
   manager.ctx = { logger: { warn() {} } }; manager.resultWork = new Map();

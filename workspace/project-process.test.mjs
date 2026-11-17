@@ -1,4 +1,3 @@
-import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -11,9 +10,6 @@ import { createProjectProcessStarter } from './project-process.mjs';
 import { apply as applyEfficiency } from '../efficiency/plugin.mjs';
 import { FairGate } from '../efficiency/gate.mjs';
 import { bindHeavyToolLease } from '../efficiency/heavy-tool-lease.mjs';
-import {createHash} from 'node:crypto';
-import {createProjectExecutionMode} from './execution-mode-service.mjs';
-function hostMode(){const policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},policySha256=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(policy).sort(([a],[b])=>a.localeCompare(b))))).digest('hex'),snapshot={...policy,policySha256,sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'};return createProjectExecutionMode({snapshot,assertUnchanged:()=>snapshot}).service;}
 
 let modules;
 function sdk() {
@@ -41,7 +37,6 @@ async function fixture(t, { controller = true, admission = false } = {}) {
   const S = await sdk(), directory = await fs.mkdtemp(path.join(os.tmpdir(), 'owned-project-jobs-'));
   const root = path.join(directory, 'project'); await fs.mkdir(root);
   const ctx = new S.Context(); new S.SystemPrompt(ctx, {}); new S.Tools(ctx);
-  ctx.provide('projectExecutionMode',hostMode());
   const agents = new Map(), scopes = [], events = [], notices = [], calls = [], processes = [], timers = new Set();
   ctx.provide('agents', { get: id => agents.get(id), list: () => [...agents.values()] });
   ctx.provide('workingDirectory', { ensure: async () => root }); ctx.provide('shellEnv', { collect: () => ({ DSH_APP_PORT: '21000' }) });
@@ -68,8 +63,8 @@ async function fixture(t, { controller = true, admission = false } = {}) {
   S.applyBash(ctx, { enableRunInBackground: false }); const native = ctx.tools.get('bash');
   const manager = { existing: new Set(), data: { installedAt: 1000, sessions: {} }, ownerAgent: agent => agent?.owner ?? agent };
   const processTimers = { setTimer(fn, ms) { const token = { fn, ms, unref() {} }; timers.add(token); return token; }, clearTimer(token) { timers.delete(token); } };
-  const run = createProjectCommandRunner(ctx, manager, { processTimers }, hostExecutionBinding());
-  const managed = createManagedShell(ctx, manager, run, hostExecutionBinding()); registerProjectTool(ctx, manager, run, hostExecutionBinding());
+  const run = createProjectCommandRunner(ctx, manager, { processTimers });
+  const managed = createManagedShell(ctx, manager, run); registerProjectTool(ctx, manager, run);
   if (admission) await applyEfficiency(ctx, { stateDirectory: path.join(directory, 'efficiency'), engineMetrics: false });
   const pipeline = new S.ToolExecutionPipeline(ctx);
   ctx.tools.setExecutor({ describe: defs => ({ schemas: defs.map(({ name, description, parameters }) => ({ name, description, parameters })) }),
