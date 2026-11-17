@@ -19,19 +19,21 @@ import { installModelSelection } from './model-selection.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
-export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt', 'sessionController'];
+export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt', 'sessionController', 'projectExecutionMode'];
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 export async function apply(ctx, config = {}) {
   const sourceCommit = path.basename(await fs.realpath(root));
   const admission = installRuntimeAdmission(ctx, { expectedCommit: sourceCommit });
-  const manager = new WorkspaceManager(ctx, config); await manager.initialize();
+  const execution = ctx.projectExecutionMode;
+  execution.assertUnchanged();
+  const manager = new WorkspaceManager(ctx, config, execution); await manager.initialize();
   const models = installModelSelection(ctx, manager, { lifecycle: false });
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
   installDockerCleanup(ctx,manager,appsConfig,callApps);
   const capabilities = createRuntimeCapabilities({ workspaceRoot: config.appsWorkspaceRoot ?? appsConfig?.workspaceRoot ?? path.dirname(manager.projectsRoot), capacityPath: appsConfig?.stateDir ?? '/data/harness/state/applications', minFreeBytes: appsConfig?.minFreeBytes ?? 2 * 1024 ** 3,
-    ...(appsConfig ? { readAppsState: ({ signal }) => callApps('/state', undefined, { ...appsConfig, signal, timeoutMs: 1500 }) } : {}) });
+    ...(appsConfig ? { readAppsState: ({ signal }) => callApps('/state', undefined, { ...appsConfig, signal, timeoutMs: 1500 }) } : {}) }, execution);
   registerRuntimeCapabilities(ctx, manager, capabilities);
   let lastCacheCleanup = 0, cacheCleanupPending;
   const cleanupCaches = () => {
@@ -122,6 +124,10 @@ export async function apply(ctx, config = {}) {
     catch (error) { return reply({ error: error.message }, error.status ?? 400); }
   } }));
   // Kept as a separate static contribution for a native client in addition to /phone/.
+  ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/execution', methods: ['GET'], requestBody: 'buffered', fetch: () => {
+    try { execution.assertUnchanged(); return reply({ version: 1, mode: execution.snapshot.mode, available: true }); }
+    catch { return reply({ version: 1, mode: null, available: false, code: 'PROJECT_EXECUTION_UNAVAILABLE' }, 503); }
+  } }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/health', methods: ['GET'], requestBody: 'buffered', fetch: async () => reply({ version: 1, workspaceReady: true, sourceCommit: /^[a-f0-9]{40}$/u.test(sourceCommit) ? sourceCommit : null, admission: admission.snapshot(), activeAgents: ctx.agents.list().filter(agent => agent.status === 'running').length }) }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/client', methods: ['GET'], requestBody: 'buffered', fetch: async () => new Response(await fs.readFile(path.join(root, 'workspace/client.js')), { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' } }) }));
   await fs.writeFile(path.join(manager.root, 'loaded.json'), JSON.stringify({ at: Date.now(), pid: process.pid, loaded: true, installedAt: manager.data.installedAt }), { mode: 0o600 });

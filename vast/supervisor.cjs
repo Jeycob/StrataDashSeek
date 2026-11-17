@@ -6,13 +6,17 @@ const R='/data/harness',cfg=JSON.parse(fs.readFileSync(R+'/config.json','utf8'))
 const uid=Number(cp.execFileSync('id',['-u','harness'],{stdio:runtime.withoutRootLease()}).toString()),gid=Number(cp.execFileSync('id',['-g','harness'],{stdio:runtime.withoutRootLease()}).toString());
 runtime.prepare(R,{uid,gid});
 const sourceStatus=runtime.adoptSignedStatus(R);
+// Publish once from the signed root supervisor before any service is created.
+// Child restarts retain this launch identity; a new supervisor publishes a new
+// identity. Admission epochs change independently and must not be used here.
+const projectExecution=require('./project-execution-mode.cjs').createExecutionModeContract().publishForSupervisor({sourceCommit:sourceStatus.appliedCommit});
 const admissionPatch=R+'/runtime-status/native-admission-patch.json';
 runtime.atomic(admissionPatch,[{insert:[{id:'root-runtime-admission',name:'file://'+R+'/releases/'+sourceStatus.appliedCommit+'/workspace/runtime-admission-plugin.mjs'}]}],0o644);
 const children=new Map();let closing=false;
 const previousRestarts=runtime.readPrivate(R,'service-restarts.json',{});
 const lifecycle=new ServiceLifecycle({initial:previousRestarts.sourceCommit===sourceStatus.appliedCommit?previousRestarts:{},changed:state=>{const report={...state,sourceCommit:sourceStatus.appliedCommit};runtime.writePrivate(R,'service-restarts.json',report);runtime.publish(R,'service-health.json',report);}});
 const healthTimer=setInterval(()=>runtime.publish(R,'service-health.json',{...lifecycle.snapshot(),sourceCommit:sourceStatus.appliedCommit}),3000);healthTimer.unref();
-const env={...process.env,HOME:R+'/home',DSH_HOME:R+'/home/.dsh',PATH:R+'/node/bin:/usr/local/bin:/usr/bin:/bin',STRATA_GATEWAY_KEY:'local-strata'};
+const env={...process.env,HOME:R+'/home',DSH_HOME:R+'/home/.dsh',PATH:R+'/node/bin:/usr/local/bin:/usr/bin:/bin',STRATA_GATEWAY_KEY:'local-strata',HARNESS_PROJECT_EXECUTION_LAUNCH_ID:projectExecution.launchId};
 delete env.VAST_API_KEY;delete env.CLOUDFLARE_API_TOKEN;
 function save(){const current=[...children].filter(([,p])=>Number.isInteger(p.pid));const state={pids:current.map(([,p])=>p.pid),names:Object.fromEntries(current.map(([name,p])=>[name,p.pid]))};runtime.writePrivate(R,'services.json',state);runtime.publish(R,'services.json',state);}
 function launch(name,exe,args,asRoot=false){
