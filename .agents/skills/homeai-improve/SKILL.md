@@ -32,6 +32,12 @@ U změny SDK integrace ověř nejmenší skutečnou cestu co nejdříve, před d
 
 Po milníku pokračuj zbývajícím autorizovaným rozsahem. Pokud další krok blokuje prostředí, pokračuj nezávislou částí. Opakování nákladného buildu či stejné chyby vyžaduje novou hypotézu nebo změněné podmínky; nejprve využij malou reprodukci.
 
+## Odstraň čekání před prvním použitelným během
+
+U každého blockeru nejbližšího milníku uveď pozorovaný dopad, vlastníka, další výstup a podmínku uzavření. Nález bez vazby na tento milník patří do zbývajícího backlogu; povinné přijetí tím neruš. Jediný live operátor neznamená jediného autora oprav, revizí a sběru výsledků. Připravenému QA předej konkrétní slot nebo událost, která jej uvolní, a další krok; obecné „čeká na koordinátora“ nestačí.
+
+Po opravě známých překážek ověř dotčené chování a skutečné propojení, potom proveď první autorizovaný pilot. Nový obalový skript nebo další kontrolu přidávej kvůli konkrétnímu chybějícímu chování; dokončený smoke bez změny neopakuj. Při úpravě ukončování běhů použij část „Řízení prvního běhu“ workflow nebo `docs/homeai-delivery.md`: uzavřené preview nemusí znamenat ukončený proces a timeout pozorovatele nemusí zastavit operaci.
+
 ## Použij podrobnosti podle činnosti
 
 - **Nasazení:** použij aktuální staging rozhodnutí a postup návratu. V existujícím předání uveď konkrétní lidskou autorizaci, povolený účinek a cíl pro push, nasazení či přenos souborů. Již povolenou akci neschvaluj znovu jen kvůli postupu. Pomocné kroky připrav před maintenance oknem. Zachovej fungující nástroje, ověř podávanou verzi a skutečnou uživatelskou cestu; dočasné provozní nastavení obnov i po selhání.
@@ -44,4 +50,4 @@ Po milníku pokračuj zbývajícím autorizovaným rozsahem. Pokud další krok 
 
 Vykazuj zvlášť **nasazeno**, **funkčně přijato** a **změřeno benchmarkem**, s verzí, prostředím, časem pozorování a odkazem na důkaz. Neprovedené, blokované a uživatelem odložené části zůstávají rozlišené.
 
-Koordinátor nahradí zastaralý snapshot. Uveď poslední skutečný uživatelský výsledek a jeho čas; odděl aktivní práci, přípravy a čekání. Čas do prvního pilotu není rychlost modelu a nečinný chat není běžící práce. Používej existující evidenci. Předání zakonči dalším krokem a vlastníkem; procento a odhad času opři o zbývající přijetí.
+Koordinátor při uzavření milníku sjednotí dotčené současné snapshoty: souhrn, řádek úkolu, registry a benchmarkový report. Historické důkazy zachová. Rozliš připravené session, skutečně odeslaná zadání a dokončené běhy; rozpor v textu sám znovu neotevírá již ověřenou závadu. Uveď poslední skutečný uživatelský výsledek a jeho čas; odděl aktivní práci, přípravy a čekání. Čas do prvního pilotu není rychlost modelu a nečinný chat není běžící práce. Používej existující evidenci. Předání zakonči dalším krokem a vlastníkem; procento a odhad času opři o zbývající přijetí.
