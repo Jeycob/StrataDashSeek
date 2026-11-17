@@ -5,6 +5,7 @@ import {launchFor,custodyReader} from './project-custody.mjs';
 export const DEFAULT_PROJECT_JOB_LIFETIME_MS = 300000;
 export const MAX_PROJECT_JOB_LIFETIME_MS = 600000;
 export const projectJobLifetime = timeoutMs => Math.min(MAX_PROJECT_JOB_LIFETIME_MS, Math.max(1000, timeoutMs ?? DEFAULT_PROJECT_JOB_LIFETIME_MS));
+const evidenceId=value=>typeof value==='string'&&/^[\x21-\x7e]{1,256}$/.test(value)?value:null;
 export const projectBackgroundSchema = { type: 'object', properties: { kind: { type: 'string', const: 'background' }, jobId: { type: 'string' }, cwd: { type: 'string' } }, required: ['kind', 'jobId', 'cwd'], additionalProperties: false };
 export function renderProjectBackground(args, value) {
   return [{ type: 'text', text: `Started background job ${value.jobId}. Maximum lifetime: ${projectJobLifetime(args.timeoutMs)}ms. Read status/logs with job_output or job_list; stop this owned job with job_kill. Do not use nohup, setsid or process-name kills.` }];
@@ -31,6 +32,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     execution.signal.throwIfAborted();
     if (disposed) throw new WorkbenchError('PROJECT_EXECUTOR_DISPOSED', 'Project command execution is shutting down.');
     const owner = execution.agent?.id;
+    const call=Object.freeze({callId:evidenceId(execution.callId),rootCallId:evidenceId(execution.rootCallId??execution.callId),toolName:evidenceId(execution.name)});
     if (!owner) throw new WorkbenchError('PROJECT_JOB_OWNER_REQUIRED', 'Background commands require their executing conversation.');
     const jobs = typeof ctx.get === 'function' ? ctx.get('jobs') : ctx.jobs;
     if (!jobs || typeof jobs.start !== 'function') throw new WorkbenchError('PROJECT_JOBS_UNAVAILABLE', 'Background commands require the SDK job registry and job_output/job_kill controller. Use a bounded foreground command until they are available.', 503);
@@ -108,7 +110,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       catch { cancel('tool call aborted before background acknowledgement'); }
       await done; execution.signal.throwIfAborted();
     }
-    const entry = { id, owner, jobs, done, cancel, captured, launch, expiresAt,identity:()=>identity, current:()=>!settled&&!controller.signal.aborted&&process?.status==='running' }; active.set(id, entry);
+    const entry = { id, owner, jobs, done, cancel, captured, launch, expiresAt,call,identity:()=>identity, current:()=>!settled&&!controller.signal.aborted&&process?.status==='running' }; active.set(id, entry);
     timer = setTimer(() => {
       if (settled) return;
       const reason = 'project job lifetime limit reached after ' + lifetimeMs + 'ms';
@@ -129,13 +131,13 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       await (cancelled?Promise.race([entry.captured,cancelled]):entry.captured);
       if(signal?.aborted)throw new WorkbenchError('PROJECT_CUSTODY_ABORTED','Custody acknowledgement aborted.');
       const assertCurrent=()=>{assertActive();if(active.get(id)!==entry||!entry.current())throw new WorkbenchError('PROJECT_CUSTODY_EXPIRED','Captured wrapper is no longer current.');};
-      assertCurrent();return Object.freeze({jobId:id,owner,identity:entry.identity(),context:entry.launch.context,done:entry.done,assertCurrent,expiresAt:entry.expiresAt,restartSeed:entry.launch.restartSeed});
+      assertCurrent();return Object.freeze({jobId:id,owner,identity:entry.identity(),context:entry.launch.context,done:entry.done,assertCurrent,expiresAt:entry.expiresAt,restartSeed:entry.launch.restartSeed,call:entry.call});
     }catch(error){
       try{entry.jobs.kill(id,owner,'custody capture failed');}catch{entry.cancel('custody capture failed');}
       await entry.done;throw error;
     }finally{if(abort)signal.removeEventListener('abort',abort);}
   }
-  function producerFor(id,owner){const entry=active.get(id);if(!entry||entry.owner!==owner||!entry.launch)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No exact owned producer.');return Object.freeze({done:entry.done,expiresAt:entry.expiresAt});}
+  function producerFor(id,owner){const entry=active.get(id);if(!entry||entry.owner!==owner||!entry.launch)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No exact owned producer.');return Object.freeze({done:entry.done,expiresAt:entry.expiresAt,call:entry.call});}
   async function stopOwned(id,owner){const entry=active.get(id);if(!entry||entry.owner!==owner)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No exact owned producer.');try{entry.jobs.kill(id,owner,'owned preview cleanup');}catch{entry.cancel('owned preview cleanup');}await entry.done;}
   return { start, dispose, custodyFor,producerFor,stopOwned };
 }

@@ -75,6 +75,7 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
  }});}
  const view=entry=>({version:1,state:entry.state,sessionId:entry.sessionId,previewId:entry.id,jobId:entry.jobId,generation:entry.generation,url:entry.endpoint.origin+'/',expiresAt:entry.deadline,workSettled:entry.workSettled===true,reopenInstructions:'Use project_preview open with this own job ID to obtain a fresh link before the displayed expiry.'});
  const issue=entry=>{const grant=entry.broker.issue();return{...view(entry),url:grant.url,grantExpiresAt:grant.grantExpiresAt};};
+ const ownerStatus=entry=>({...view(entry),correlation:{version:1,sessionId:entry.sessionId,ownerAgentId:entry.owner,jobId:entry.jobId,previewId:entry.id,generation:entry.generation,expiresAt:entry.deadline,originalCall:entry.originalCall??null,producerCall:entry.producerCall??null}});
  function revoke(entry){entry.abort.abort();entry.target.abort();entry.relay?.destroyConnections();try{entry.broker?.close();}catch{}if(entry.broker?.server.listening){entry.broker.server.closeAllConnections();entry.broker.server.close();}clearTimeout(entry.timer);}
  async function closeEntry(entry){
   entry.state='closing';revoke(entry);
@@ -96,7 +97,7 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
   need(fresh.record===project.record&&fresh.workspaceId===project.workspaceId&&fresh.port===project.port&&fresh.root===project.root&&fresh.dev===project.dev&&fresh.ino===project.ino,'PREVIEW_PROJECT_CHANGED');
   need(capture.context.projectSessionId===sessionId&&capture.context.workspaceId===project.workspaceId&&capture.context.projectRoot===project.root&&Number.isSafeInteger(capture.expiresAt)&&capture.expiresAt>f.now()&&capture.restartSeed,'PREVIEW_CUSTODY_MISMATCH');
   if(!origins)origins=f.origins(path.join(manager.root,'host-preview-origins.json'),settings);
-  const endpoint=origins.allocate(project.projectId),entry={id:randomBytes(16).toString('hex'),sessionId,owner,access,project,capture,producerDone:capture.done,generation:capture.identity.generation,seed:capture.restartSeed,jobId,deadline:capture.expiresAt,endpoint,state:'opening',openSignal:signal,abort:new AbortController(),target:new AbortController(),restarts:new Map()};entries.set(sessionId,entry);
+  const endpoint=origins.allocate(project.projectId),entry={id:randomBytes(16).toString('hex'),sessionId,owner,access,project,capture,producerDone:capture.done,originalCall:capture.call,producerCall:capture.call,generation:capture.identity.generation,seed:capture.restartSeed,jobId,deadline:capture.expiresAt,endpoint,state:'opening',openSignal:signal,abort:new AbortController(),target:new AbortController(),restarts:new Map()};entries.set(sessionId,entry);
   const abortOpen=()=>revoke(entry);signal?.addEventListener('abort',abortOpen,{once:true});if(signal?.aborted)abortOpen();
   try{
    const own=connector(entry),probe=await own.connect({deadline:Math.min(entry.deadline,f.now()+2500),signal});probe.close();await probe.done;await validateEntry(entry);
@@ -132,7 +133,7 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
   const agent=ctx.agents.get(entry.owner);need(agent===entry.access,'PREVIEW_OWNER_CHANGED');
   const modelSelection=agent.model?.current();need(modelSelection?.provider&&modelSelection?.model,'PREVIEW_MODEL_CONTEXT_REQUIRED');
   const resolveContext={agent,modelSelection,signal:signal??new AbortController().signal},tickets=new WeakSet([resolveContext]);let used=false;
-  const remove=agent.ctx.tools.register({name:'project_preview_restart',description:'Internal exact admitted application restart.',parameters:{type:'object',properties:{},additionalProperties:false},output:{schema:projectBackgroundSchema,render:(_args,value)=>[{type:'text',text:'Owned application restart job: '+value.jobId}]},async execute(args,actual){need(!used&&actual.agent===agent&&Object.keys(args).length===0,'PREVIEW_RESTART_TICKET_INVALID');used=true;return run.startCaptured(entry.seed,actual,{deadline:entry.deadline,onAdmitted(background,producer){entry.jobId=background.jobId;entry.producerDone=producer.done;need(!entry.abort.signal.aborted,'PREVIEW_RESTART_CHANGED');}});}},{when:value=>tickets.has(value)});
+  const remove=agent.ctx.tools.register({name:'project_preview_restart',description:'Internal exact admitted application restart.',parameters:{type:'object',properties:{},additionalProperties:false},output:{schema:projectBackgroundSchema,render:(_args,value)=>[{type:'text',text:'Owned application restart job: '+value.jobId}]},async execute(args,actual){need(!used&&actual.agent===agent&&Object.keys(args).length===0,'PREVIEW_RESTART_TICKET_INVALID');used=true;return run.startCaptured(entry.seed,actual,{deadline:entry.deadline,onAdmitted(background,producer){entry.jobId=background.jobId;entry.producerDone=producer.done;entry.producerCall=producer.call;need(!entry.abort.signal.aborted,'PREVIEW_RESTART_CHANGED');}});}},{when:value=>tickets.has(value)});
   let toolSet;
   try{toolSet=await ctx.tools.resolve(resolveContext);const report=await ctx.tools.execute({agent,signal:resolveContext.signal,toolSet,calls:[{id:randomUUID(),name:'project_preview_restart',arguments:'{}'}]});const result=report.results?.[0]?.result;need(result&&!result.isError&&result.value?.kind==='background','PREVIEW_RESTART_ADMISSION_FAILED');return result.value;}
   finally{toolSet?.dispose();remove();}
@@ -150,7 +151,7 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
    if(!available)return{version:1,sessionId,state:'unavailable',code:'PREVIEW_NOT_CONFIGURED'};
    if(input.operation==='open'){need(typeof input.jobId==='string'&&input.jobId.length<=256,'PREVIEW_JOB_REQUIRED');return bounded(s=>open(sessionId,input.jobId,access,s),f.now()+f.operationMs,signal);}
    if(input.operation==='restart'){need(entry,'PREVIEW_NOT_OPEN');return restart(entry,input,signal);}
-   await context(sessionId,access);if(!entry)return{version:1,sessionId,state:'closed',workSettled:true};if(entry.state==='ready')await validateEntry(entry);return view(entry);
+   await context(sessionId,access);if(!entry)return{version:1,sessionId,state:'closed',workSettled:true};if(entry.state==='ready')await validateEntry(entry);return ownerControl?ownerStatus(entry):view(entry);
   });
  }
  function install(agent){

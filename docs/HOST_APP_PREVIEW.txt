@@ -74,6 +74,19 @@ captured backend wrapper and changes on successful restart.
 
 Owner control and exact restart
 
+Trusted owner-control status additionally includes correlation with version,
+sessionId/ownerAgentId/jobId/previewId/current generation/original expiresAt and
+two call records: originalCall and producerCall. Each retains the actual SDK
+execution callId, rootCallId and toolName. The first admission record stays
+fixed across restart; the current producer record changes immediately on exact
+new SDK admission. Call evidence is retained privately with that own producer,
+not inferred from native JobView or rendered job text. Missing/non-printable/
+over256-byte identifiers are null (unknown). Correlation is evidence only: no
+caller fields, selector or authority are added. Model tool open/status/close
+and owner open/restart/close outputs do not expose this status-only record.
+An observer must bind the complete ready-state fingerprint and both real
+history identifiers; absent/mismatched correlation cannot excuse unsettled work.
+
 The existing owner-Peer authenticated connection service registers exactly
 POST /api/workbench/preview with buffered JSON at most2048 bytes and a second
 sameRequestOrigin mutation fence. The public internet broker has no control API.
