@@ -1,6 +1,7 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createAppsLifetime } from './project-apps-lifetime.mjs';
+import {bindProjectExecution} from './execution-mode.mjs';
 const HEX=/^[a-f0-9]{16}$/;
 const statuses=new Set(['queued','running','passed','failed','interrupted','recovery_required']);
 const actions=new Set(['verify','build','deploy','check','compose','rollback']);
@@ -16,7 +17,9 @@ export const projectAppsParameters={type:'object',properties:{operation:{type:'s
 
 // Trusted Native module only. callApps retains credentials on the host; nothing
 // is mounted into the guest or accepted as model-selected transport/authority.
-export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHeavyToolLease,receiptStore,pollMs=1500,monitorMs=600000}={}){
+export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHeavyToolLease,receiptStore,pollMs=1500,monitorMs=600000}={},binding=manager.execution??ctx.projectExecutionMode){
+ const mode=bindProjectExecution(binding),check=()=>{if(mode.assertUnchanged().mode!=='isolated-guest')throw fail('PROJECT_EXECUTION_MODE_MISMATCH');};check();
+ function ready(){check();if(appsConfig?.enabled!==true||appsConfig.vm?.enabled!==true||appsConfig.projectRuntime?.enabled!==true)throw fail('PROJECT_APPS_UNAVAILABLE');}
  if(!Number.isInteger(pollMs)||pollMs<10||pollMs>5000||!Number.isInteger(monitorMs)||monitorMs<100||monitorMs>600000)throw fail('PROJECT_APPS_CONFIG_INVALID');
  let disposed=false,closing=false;const active=new Set(),pending=new Map();
  function owner(execution){const a=manager.ownerAgent(execution.agent);if(!a?.id||!execution.agent?.id)throw fail('PROJECT_APPS_OWNER_REQUIRED');return a;}
@@ -28,10 +31,11 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
   }
  }
  async function rpc(route,data,execution,signal,{write=false,binding}={}){
+  ready();
   signal.throwIfAborted();if(disposed||typeof callApps!=='function'||!appsConfig?.workspaceRoot||typeof manager.withProjectRuntimeAuthority!=='function')throw fail('PROJECT_APPS_UNAVAILABLE');
   const a=owner(execution);
   try{return await manager.withProjectRuntimeAuthority({sessionId:a.id,accessSessionId:execution.agent.id,op:'execute',kind:'executor',generation:crypto.randomBytes(16).toString('hex')},async()=>{
-   signal.throwIfAborted();if(write)readonly(execution,a);
+   signal.throwIfAborted();ready();if(write)readonly(execution,a);
    const record=manager.data.sessions[a.id];
    if(!record||record.legacy||manager.data.trash?.[a.id]||typeof record.root!=='string'||!path.isAbsolute(record.root))throw fail('PROJECT_APPS_PROJECT_UNAVAILABLE');
    const relative=path.relative(appsConfig.workspaceRoot,record.root);
@@ -42,6 +46,7 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
    let endpoint=route;
    if(!body){const query=new URLSearchParams({_contextProjectId:projectId});if(data?.id)query.set('id',data.id);endpoint+='?'+query;}
    let response;try{response=await callApps(endpoint,body,{...appsConfig,signal,timeoutMs:8000});}catch{signal.throwIfAborted();throw fail('PROJECT_APPS_REQUEST_FAILED_CHECK_STATUS');}
+   check();
    return{response,projectId};
   });}catch(error){signal.throwIfAborted();if(/^PROJECT_APPS_[A-Z_]+$/.test(error?.code??''))throw error;throw fail('PROJECT_APPS_AUTHORITY_UNAVAILABLE');}
  }
@@ -134,7 +139,7 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
        if(registered.response?.id!==registered.projectId)throw fail('PROJECT_APPS_REGISTRATION_INVALID');
        admission={ownerId:owner(execution).id,projectId:registered.projectId,requestId:crypto.randomBytes(16).toString('hex'),startedAt:Date.now(),lifetime};pending.set(id,admission);
        await receiptStore.save({ownerId:admission.ownerId,projectId:admission.projectId,requestId:admission.requestId,startedAt:admission.startedAt,appsJobId:null});
-       controller.signal.throwIfAborted();lifetime.attempted();
+       controller.signal.throwIfAborted();ready();lifetime.attempted();
        try{
         const accepted=await rpc('/project-action',{requestId:admission.requestId},execution,controller.signal,{write:true,binding:registered.projectId});
         if(!HEX.test(accepted.response?.id??'')||accepted.response.projectId!==registered.projectId)throw fail('PROJECT_APPS_JOB_INVALID');
@@ -168,6 +173,7 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
   return{sdkJobId:id,monitorOnly:true,note:'Use job_output/job_list for progress. Apps cannot be safely canceled here: job_kill/monitor timeout waits for the exact Apps operation to settle and retains heavy admission. On uncertain enqueue, status is incomplete and absence cannot justify retrying.'};
  }
  async function execute(args,execution){
+  ready();
   execution.signal.throwIfAborted();owner(execution);
   if(disposed||closing||!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(k=>!['operation','jobId'].includes(k))||!['register','verify_deploy','status','job_status','job_log'].includes(args.operation)||(['job_status','job_log'].includes(args.operation)?!HEX.test(args.jobId??''):args.jobId!==undefined))throw fail('PROJECT_APPS_ARGUMENT_INVALID');
   if(args.operation==='status'){await reconcilePending(execution);execution.signal.throwIfAborted();return state(execution,execution.signal);}
@@ -178,5 +184,5 @@ export function createProjectAppsTools(ctx,manager,{callApps,appsConfig,retainHe
  }
  const definition={name:'project_apps',description:'Manage the current isolated project application through the authenticated Apps controller, without guest credentials or arbitrary CLI. Prepare .harness-app.json (version:1, name, port1024..65535, testCommand, healthPath and the existing Dockerfile/Compose declaration) and real health/browser checks; register reads that manifest. verify_deploy registers and starts the existing verify-and-deploy workflow as an owned SDK monitoring job. Inspect progress using job_output/job_list; status returns this project only and its real applicationUrl. job_status/job_log take an owned Apps job ID; job_log returns bounded existing controller-redacted diagnostics. Apps cannot be canceled here: SDK kill/timeout retains admission until exact Apps settlement, or requires reconciliation after uncertainty. Status contains only own rows among the last 30 global jobs; absence never proves enqueue failed. No global power, settings, delete, export, rollback or arbitrary target operations.',parameters:projectAppsParameters,isConcurrencySafe:()=>false,output:{schema:{type:'object'},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]},execute};
  const disposeRegistration=ctx.tools.register(definition,{when:({agent})=>{const a=manager.ownerAgent(agent),p=manager.data.sessions[a?.id];return Boolean(p&&!p.legacy);}});
- return{execute,reconcileStored,reconcilePending,async beforeHeavy(){const report=await reconcileStored();if(report.reconciliationRequired)throw fail('PROJECT_APPS_RECONCILIATION_REQUIRED');},pendingAdmissions:()=>[...pending.values()].map(p=>({ownerId:p.ownerId,projectId:p.projectId,requestId:p.requestId,...p.lifetime.snapshot()})),async dispose(){if(disposed)return;closing=true;disposeRegistration();for(const entry of active){try{entry.registry.kill(entry.id,entry.owner,'Apps monitor disposed');}catch{entry.cancel();}}await Promise.all([...active].map(entry=>entry.done));disposed=true;}};
+ return{execute,handles:execution=>execution.name==='project_apps'&&ctx.tools.get(execution.name,execution.agent,execution.toolSet)===definition,reconcileStored,reconcilePending,async beforeHeavy(){ready();const report=await reconcileStored();check();if(report.reconciliationRequired)throw fail('PROJECT_APPS_RECONCILIATION_REQUIRED');},pendingAdmissions:()=>[...pending.values()].map(p=>({ownerId:p.ownerId,projectId:p.projectId,requestId:p.requestId,...p.lifetime.snapshot()})),async dispose(){if(disposed)return;closing=true;disposeRegistration();for(const entry of active){try{entry.registry.kill(entry.id,entry.owner,'Apps monitor disposed');}catch{entry.cancel();}}await Promise.all([...active].map(entry=>entry.done));disposed=true;}};
 }

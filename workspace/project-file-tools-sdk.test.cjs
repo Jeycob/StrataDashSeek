@@ -21,7 +21,7 @@ async function fixture(t,handlers={}){
  // Attachment-dependent image and optional editor definitions are represented
  // by schema-valid tripwire registrations; all other six are native SDK tools.
  for(const name of ['read_image','str_replace_editor'])ctx.tools.register({name,description:name,parameters:{type:'object',properties:{file_path:{type:'string'},path:{type:'string'},command:{type:'string'}},additionalProperties:false},output:{schema:{type:'string'},render:tripwire(name+'.render')},execute:tripwire(name+'.execute')});
- const manager={existing:new Set(),data:{installedAt:1000,sessions:{}},ownerAgent:a=>a?.owner??a};
+ const manager={execution:(await import('./fixtures/execution-binding.mjs')).isolatedExecutionBinding(),existing:new Set(),data:{installedAt:1000,sessions:{}},ownerAgent:a=>a?.owner??a};
  const adapter=S.createProjectFileTools(ctx,manager,handlers);
  const pipeline=new S.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>S.executeToolBatch(input,pipeline,()=>1)});
  function agent(id,{legacy=false,record=true,existing=false,createdAt=2000,owner}={}){

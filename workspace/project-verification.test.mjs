@@ -1,9 +1,10 @@
+import {isolatedExecutionBinding} from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {installProjectVerification} from './project-verification.mjs';
 function fixture(){
  let handler;const calls=[],owner={id:'owner'},execution={agent:{id:'child'},signal:new AbortController().signal};
- const ctx={on(name,fn){assert.equal(name,'workspace-runtime/verify-command');handler=fn;}},record={root:'/projects/owner',independentRepository:true,ports:[4000,4001,4002,4003]},manager={ownerAgent:()=>owner,data:{sessions:{owner:record}},review:async()=>({sourceHash:'source'})};
+ const ctx={on(name,fn){assert.equal(name,'workspace-runtime/verify-command');handler=fn;}},record={root:'/projects/owner',independentRepository:true,ports:[4000,4001,4002,4003]},manager={execution:isolatedExecutionBinding(),ownerAgent:()=>owner,data:{sessions:{owner:record}},review:async()=>({sourceHash:'source'})};
  installProjectVerification(ctx,manager,async(args,actual)=>{calls.push({args,execution:actual});return{result:{exitCode:0}};});
  return{run:input=>handler({kind:'all',projectRoot:record.root,sourceHash:'source',execution,...input}),calls,record,manager,execution};
 }

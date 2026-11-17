@@ -1,3 +1,4 @@
+import {executionBindingFixture} from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
@@ -7,10 +8,10 @@ function memoryReceipts(){
  return{async list(){return [...rows.values()].map(r=>({...r}));},async save(row){rows.set(row.generation,{...row});},async remove(generation){rows.delete(generation);},claim(generation,{reconciling=false}={}){if(live.has(generation))throw Object.assign(Error('ALREADY_LIVE'),{code:'PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED'});live.set(generation,{reconciling});return()=>live.delete(generation);},isLive:generation=>live.has(generation)&&!live.get(generation).reconciling,simulateRestart(){live.clear();}};
 }
 function fixture({receiptStore=memoryReceipts()}={}){
- let clock=100000,failStop=false,failTouch=false,abortAfterEnsure,ensureFault,stopFault;
+ let clock=100000,failStop=false,failTouch=false,abortAfterEnsure,ensureFault,stopFault,identityHook;const source=executionBindingFixture('isolated-guest');
  const calls=[],bridges=[],proofs=new Map(),input={sessionId:'project-A',projectRoot:'/projects/A',readOnly:false},grants=[];
- const manager={async withProjectRuntimeAuthority(context,action){grants.push(context);return action('private-authority');}};
- const adapter=createProjectEditorAdapter(manager,{appsConfig:{projectRuntime:{enabled:true}},receiptStore,callApps:async(route,data)=>{
+ const manager={execution:source.binding,async withProjectRuntimeAuthority(context,action){grants.push(context);return action('private-authority');}};
+ const adapter=createProjectEditorAdapter(manager,{appsConfig:{enabled:true,vm:{enabled:true},projectRuntime:{enabled:true}},receiptStore,callApps:async(route,data)=>{
   assert.equal(route,'/project-runtime');calls.push(data);
   if(data.op==='stop'){if(failStop)throw Error('OFFLINE');return{version:1,state:'stopped',sessionId:data.sessionId,generation:data.generation,operationId:'c'.repeat(32),...stopFault};}
   if(data.op==='touch'){if(failTouch)throw Error('POLICY_DENIED');const proof=proofs.get(data.generation);assert.equal(data.stopToken,proof.stopToken);return{...proof,expiresAt:Math.min(clock+300000,proof.hardDeadline)};}
@@ -19,9 +20,12 @@ function fixture({receiptStore=memoryReceipts()}={}){
   assert.equal((await receiptStore.list()).find(r=>r.generation===data.generation)?.stopToken,data.stopToken,'durable receipt precedes admission');
   const proof={version:1,state:'ready',...input,generation:data.generation,scopeId,isolation:{enforced:true,...input},transport:{host:'127.0.0.1',guestAddress:'10.0.2.15',hostPort:19180,guestPort:19180,bootPid:42,mtls:true,serverName:scopeId+'.'+data.generation+'.editor.homeai.invalid'},containerIds:{editor:'a'.repeat(64),relay:'b'.repeat(64)},operationId:'c'.repeat(32),stopToken:data.stopToken,expiresAt:clock+300000,hardDeadline:clock+1800000};
   proofs.set(data.generation,proof);abortAfterEnsure?.abort(Error('CANCELLED'));if(ensureFault==='lost')throw Error('RESPONSE_LOST');return ensureFault==='swapped'?{...proof,stopToken:'x'.repeat(43)}:proof;
- },socketDirectory:'/private',transportIdentity:async({scopeId,generation})=>({serverName:scopeId+'.'+generation+'.editor.homeai.invalid'}),bridgeFactory:async()=>{const bridge={socketPath:'/private/fixture.sock',closed:false,async close(){this.closed=true;}};bridges.push(bridge);return bridge;},now:()=>clock});
- return{adapter,input,calls,bridges,proofs,grants,receiptStore,advance:ms=>clock+=ms,setFailStop:value=>failStop=value,setFailTouch:value=>failTouch=value,abortWith:controller=>abortAfterEnsure=controller,setEnsureFault:value=>ensureFault=value,setStopFault:value=>stopFault=value};
+ },socketDirectory:'/private',transportIdentity:async({scopeId,generation})=>{await identityHook?.();return{serverName:scopeId+'.'+generation+'.editor.homeai.invalid'};},bridgeFactory:async()=>{const bridge={socketPath:'/private/fixture.sock',closed:false,async close(){this.closed=true;}};bridges.push(bridge);return bridge;},now:()=>clock});
+ return{adapter,input,calls,bridges,proofs,grants,receiptStore,source,setIdentityHook:fn=>identityHook=fn,advance:ms=>clock+=ms,setFailStop:value=>failStop=value,setFailTouch:value=>failTouch=value,abortWith:controller=>abortAfterEnsure=controller,setEnsureFault:value=>ensureFault=value,setStopFault:value=>stopFault=value};
 }
+test('a binding change during awaited transport identity stops the exact admitted editor before any bridge is constructed',async()=>{
+ const f=fixture();f.setIdentityHook(async()=>f.source.fail());await assert.rejects(f.adapter.ensureEditor(f.input),/BINDING_CHANGED/);assert.deepEqual(f.calls.map(call=>call.op),['ensure','stop']);assert.equal(f.bridges.length,0);assert.deepEqual(await f.receiptStore.list(),[]);await f.adapter.dispose();
+});
 test('reopening reuses the bridge with fresh touch authority and never repeats admission',async()=>{
  const f=fixture(),first=await f.adapter.ensureEditor(f.input),again=await f.adapter.ensureEditor(f.input);
  assert.deepEqual(again,first);assert.deepEqual(f.calls.map(c=>c.op),['ensure','touch']);assert.equal(f.bridges.length,1);assert.equal(f.grants.length,2);assert.equal(JSON.stringify(first).includes('private-authority'),false);assert.equal(JSON.stringify(first).includes('d'.repeat(43)),false);

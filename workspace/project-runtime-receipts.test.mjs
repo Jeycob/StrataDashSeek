@@ -5,13 +5,20 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createProjectRuntimeReceiptStore, reconcileProjectRuntimeReceipts } from './project-runtime-receipts.mjs';
+import {executionBindingFixture} from './fixtures/execution-binding.mjs';
 const sample=(generation='a'.repeat(32),kind='executor')=>({kind,sessionId:'owner',accessSessionId:'child',generation,stopToken:'s'.repeat(43),startedAt:1,operationId:null,jobId:null});
-async function fixture(t) {
- const root=await fs.mkdtemp(path.join(os.tmpdir(),'homeai-runtime-receipts-')),store=createProjectRuntimeReceiptStore(root),directory=path.join(root,'project-runtime-private'),file=path.join(directory,'pending.json');
+async function fixture(t,options) {
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'homeai-runtime-receipts-')),store=createProjectRuntimeReceiptStore(root,options),directory=path.join(root,'project-runtime-private'),file=path.join(directory,'pending.json');
  t.after(async()=>{const real=await fs.realpath(root);assert.equal(path.dirname(real),await fs.realpath(os.tmpdir()));assert(path.basename(real).startsWith('homeai-runtime-receipts-'));await fs.rm(real,{recursive:true,force:true});});
  return{root,store,directory,file};
 }
 const stopped=data=>({version:1,state:'stopped',sessionId:data.sessionId,generation:data.generation,operationId:'c'.repeat(32)});
+test('bound receipts refuse stale publication, retain exact cleanup and support only same-launch provider reload',async t=>{
+ const source=executionBindingFixture('isolated-guest'),f=await fixture(t,{executionBinding:source.binding}),row=sample();await f.store.save(row);const saved=await fs.readFile(f.file,'utf8');source.fail();await assert.rejects(f.store.save({...row,operationId:'b'.repeat(32)}),/BINDING_CHANGED/);assert.equal(await fs.readFile(f.file,'utf8'),saved);
+ const snapshot=source.binding.snapshot,replacement={snapshot,assertUnchanged:()=>snapshot};assert.equal(createProjectRuntimeReceiptStore(f.root,{executionBinding:replacement}),f.store);await f.store.save({...row,operationId:'b'.repeat(32)});
+ assert.throws(()=>createProjectRuntimeReceiptStore(f.root),/RECEIPT_BINDING_CHANGED/);const changed=executionBindingFixture('isolated-guest').binding;assert.throws(()=>createProjectRuntimeReceiptStore(f.root,{executionBinding:changed}),/RECEIPT_BINDING_CHANGED/);
+ await f.store.remove(row.generation);assert.deepEqual(await f.store.list(),[]);
+});
 
 test('editor and executor share one private durable store with immutable capability bindings',async t=>{
  const f=await fixture(t),row=sample();assert.equal(createProjectRuntimeReceiptStore(f.root),f.store);

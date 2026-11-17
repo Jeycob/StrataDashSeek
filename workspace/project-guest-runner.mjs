@@ -6,6 +6,7 @@ import { createProjectProcessStarter, projectJobLifetime } from './project-proce
 import { normalizeVerificationCommand } from './tool-recovery.mjs';
 import { retainHeavyToolLease } from '../efficiency/heavy-tool-lease.mjs';
 import { createProjectRuntimeReceiptStore, reconcileProjectRuntimeReceipts } from './project-runtime-receipts.mjs';
+import {bindProjectExecution} from './execution-mode.mjs';
 const fail = code => new WorkbenchError(code, code, 409);
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const pause = ms => new Promise(resolve => { const timer = setTimeout(resolve, ms); timer.unref?.(); });
@@ -22,12 +23,14 @@ function outputBuffer() {
 
 // Adapter for SDK-owned process/job handles. The only command execution is the
 // authenticated Apps executor. All authority/stop tokens stay in this closure.
-export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, callApps, pollMs = 1000, wait = pause, receiptStore = manager.root ? createProjectRuntimeReceiptStore(manager.root) : undefined } = {}) {
+export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, callApps, pollMs = 1000, wait = pause, receiptStore = manager.root ? createProjectRuntimeReceiptStore(manager.root,{executionBinding:manager.execution??ctx.projectExecutionMode}) : undefined } = {}, binding = manager.execution ?? ctx.projectExecutionMode) {
+  const mode=bindProjectExecution(binding),check=()=>{if(mode.assertUnchanged().mode!=='isolated-guest')throw fail('PROJECT_EXECUTION_MODE_MISMATCH');};check();
+  const ready=()=>{check();if(appsConfig?.enabled!==true||appsConfig.vm?.enabled!==true||appsConfig.projectRuntime?.enabled!==true)throw fail('PROJECT_RUNTIME_ISOLATION_UNAVAILABLE');};
   const active = new Set(), admitting = new Set(), epochs = new Map(); let disposed = false;
   const matches = (spec, id) => spec.sessionId === id || spec.accessSessionId === id;
   const epoch = id => epochs.get(id) ?? 0;
   const archived = id => { const ids = ctx.workspaceRegistry?.archivedSessionIds; return Boolean(manager.data.trash?.[id] || (ids?.has ? ids.has(id) : ids?.includes(id))); };
-  const accessChanged = spec => disposed || archived(spec.sessionId) || archived(spec.accessSessionId) || epoch(spec.sessionId) !== spec.ownerEpoch || epoch(spec.accessSessionId) !== spec.accessEpoch;
+  const accessChanged = spec => {try{check();}catch{return true;}return disposed || archived(spec.sessionId) || archived(spec.accessSessionId) || epoch(spec.sessionId) !== spec.ownerEpoch || epoch(spec.accessSessionId) !== spec.accessEpoch;};
   function revoke(id) {
     epochs.set(id, epoch(id) + 1);
     for (const entry of admitting) if (matches(entry.spec, id)) { entry.revoked = true; entry.controller.abort(fail('PROJECT_RUNTIME_ACCESS_REVOKED')); }
@@ -44,6 +47,7 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
   ];
   const rpc = (route, data, options = {}) => callApps(route, data, { ...appsConfig, timeoutMs: 5000, ...options });
   async function execute(spec) {
+    check();
     if (disposed) throw fail('PROJECT_RUNTIME_DISPOSED');
     spec.signal?.throwIfAborted();
     if (accessChanged(spec)) throw fail('PROJECT_RUNTIME_ACCESS_REVOKED');
@@ -55,6 +59,7 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
     let admission, admissionError, dispatched = false;
     try {
       await receiptStore.save(receipt);
+      check();
       admission = await manager.withProjectRuntimeAuthority({ sessionId: spec.sessionId, accessSessionId: spec.accessSessionId, op: 'execute', kind: 'executor', generation }, token => {
         if (accessChanged(spec) || entry.revoked) throw fail('PROJECT_RUNTIME_ACCESS_REVOKED');
         dispatched = true;
@@ -127,14 +132,16 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
     timer = setTimeout(() => { process.timedOut = true; stopRequested = true; void stop().catch(() => { stderr.append('[PROJECT_RUNTIME_RECONCILIATION_REQUIRED: lifetime stop is unconfirmed]\n'); }); }, spec.timeoutMs); timer.unref?.();
     return process;
   }
-  const processes = createProjectProcessStarter(ctx, { execute });
+  const processes = createProjectProcessStarter(ctx, { execute,assertActive:check });
   async function prepare(args, execution) {
+    ready();
     if (!appsConfig?.projectRuntime?.enabled || typeof callApps !== 'function' || typeof manager.withProjectRuntimeAuthority !== 'function') throw fail('PROJECT_RUNTIME_ISOLATION_UNAVAILABLE');
     if (!receiptStore) throw fail('PROJECT_RUNTIME_RECEIPT_UNAVAILABLE');
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !Object.hasOwn(projectCommandParameters.properties, key)) || typeof args.command !== 'string' || !args.command.trim() || args.command.length > 65536 || args.command.includes('\0') || typeof args.description !== 'string' || !args.description.trim() || args.workdir !== undefined && typeof args.workdir !== 'string' || args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0) || args.run_in_background !== undefined && typeof args.run_in_background !== 'boolean') throw fail('PROJECT_RUNTIME_COMMAND_INVALID');
     const owner = manager.ownerAgent(execution.agent), project = manager.data.sessions[owner?.id];
     if (!project || project.legacy || project.nativeWorktree || project.independentRepository !== true) throw fail('PROJECT_RUNTIME_NOT_ISOLATED');
-    const cwd = path.resolve(project.root, args.workdir ?? '.');
+    const workdir=args.workdir==='/workspace'?'.':args.workdir?.startsWith('/workspace/')?args.workdir.slice('/workspace/'.length):args.workdir??'.';
+    const cwd = path.resolve(project.root, workdir);
     if (!within(project.root, cwd)) throw fail('PROJECT_RUNTIME_OUTSIDE_PROJECT');
     const relative = path.relative(project.root, cwd).split(path.sep).join('/'), guestCwd = '/workspace' + (relative ? '/' + relative : '');
     const ownerMode = ctx.sandboxPolicy?.resolve({ session: owner.session })?.mode, accessMode = ctx.sandboxPolicy?.resolve({ session: execution.agent.session })?.mode;
@@ -145,14 +152,17 @@ export function createGuestProjectCommandRunner(ctx, manager, { appsConfig, call
   }
   const run = async (args, execution) => {
     const prepared = await prepare(args, execution); execution.signal.throwIfAborted();
+    check();
     await run.beforeHeavy(execution.signal); execution.signal.throwIfAborted();
+    check();
     if (args.run_in_background) return { ...prepared, background: await processes.start(prepared, execution, args) };
     const release = retainHeavyToolLease(execution); let process;
-    try { process = await execute(prepared.spec); void process.done.finally(release); const result = await process.result(); execution.signal.throwIfAborted(); return { ...prepared, result }; }
+    try { process = await execute(prepared.spec); void process.done.finally(release); const result = await process.result(); execution.signal.throwIfAborted();check();return { ...prepared, result }; }
     catch (error) { if (!process) release(); throw error; }
   };
-  run.reconcileStored = signal => reconcileProjectRuntimeReceipts(receiptStore,{callApps,appsConfig,signal});
+  run.reconcileStored = async signal => {ready();const value=await reconcileProjectRuntimeReceipts(receiptStore,{callApps,appsConfig,signal});check();return value;};
   run.beforeHeavy = async signal => { const value = await run.reconcileStored(signal); if (value.reconciliationRequired) throw fail('PROJECT_RUNTIME_RECONCILIATION_REQUIRED'); };
+  run.assertAvailable = ready;
   run.revoke = revoke;
   run.dispose = async () => { disposed = true; const pending = [...admitting].map(entry => entry.done); for (const entry of admitting) { entry.revoked = true; entry.controller.abort(fail('PROJECT_RUNTIME_DISPOSED')); } for (const process of active) process.kill(); await processes.dispose(); await Promise.all([...pending, ...[...active].map(process => process.done)]); for (const remove of hooks) if (typeof remove === 'function') remove(); };
   ctx.effect?.(() => run.dispose, 'isolated guest project executor');

@@ -1,3 +1,4 @@
+import {isolatedExecutionBinding} from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
@@ -7,7 +8,7 @@ function fixture() {
   const owner={id:'owner',session:{mode:'workspace-write'}},child={id:'child',owner,session:{mode:'read-only'}},root=path.resolve('/synthetic-project');
   const hooks=new Map(),calls=[],authorities=[],ctx={on(name,fn){const list=hooks.get(name)??[];list.push(fn);hooks.set(name,list);return()=>{const at=list.indexOf(fn);if(at>=0)list.splice(at,1);};},workspaceRegistry:{archivedSessionIds:[]},sandboxPolicy:{resolve:({session})=>({mode:session.mode})},shell:{execute(){assert.fail('Host shell must never execute');}}};
   let runtime,jobStatus='running',code=0,holdStop=false,releaseStop,holdAdmission=false,releaseAdmission,failStops=0,loseAdmission=false;
-  const manager={ownerAgent:a=>a.owner||a,data:{sessions:{owner:{root,independentRepository:true}}},async withProjectRuntimeAuthority(input,action){authorities.push(input);return action('a'.repeat(32));}};
+  const manager={execution:isolatedExecutionBinding(),ownerAgent:a=>a.owner||a,data:{sessions:{owner:{root,independentRepository:true}}},async withProjectRuntimeAuthority(input,action){authorities.push(input);return action('a'.repeat(32));}};
   const callApps=async(route,data,cfg)=>{
     calls.push({route,data,cfg});
     if(data?.op==='execute'){assert.equal(rows.get(data.generation)?.stopToken,data.stopToken,'receipt must precede RPC');runtime={version:1,state:'running',sessionId:data.sessionId,generation:data.generation,jobId:'b'.repeat(16),operationId:'c'.repeat(32),stopToken:data.stopToken};if(holdAdmission)await new Promise(r=>releaseAdmission=r);if(loseAdmission)throw Error('SYNTHETIC_LOST_ADMISSION_REPLY');return runtime;}
@@ -17,7 +18,7 @@ function fixture() {
     assert.fail('Unexpected RPC');
   };
   const rows=new Map(),live=new Set(),receiptStore={async list(){return[...rows.values()].map(row=>({...row}));},async save(row){rows.set(row.generation,{...row});},async remove(generation){rows.delete(generation);},claim(generation){assert(!live.has(generation));live.add(generation);return()=>live.delete(generation);},isLive:generation=>live.has(generation)};
-  const run=createGuestProjectCommandRunner(ctx,manager,{appsConfig:{projectRuntime:{enabled:true}},callApps,pollMs:1,wait:()=>new Promise(r=>setTimeout(r,1)),receiptStore});
+  const run=createGuestProjectCommandRunner(ctx,manager,{appsConfig:{enabled:true,vm:{enabled:true},projectRuntime:{enabled:true}},callApps,pollMs:1,wait:()=>new Promise(r=>setTimeout(r,1)),receiptStore});
   const controller=new AbortController(),execution={agent:child,signal:controller.signal,callId:'tool1'};
   return{run,ctx,manager,owner,child,calls,authorities,controller,execution,receiptStore,emit(name,...args){for(const fn of hooks.get(name)??[])fn(...args);},finish(value=0){code=value;jobStatus=value===0?'passed':'failed';},holdStop(){holdStop=true;},releaseStop(){holdStop=false;releaseStop?.();},holdAdmission(){holdAdmission=true;},releaseAdmission(){holdAdmission=false;releaseAdmission?.();},failStops(count){failStops=count;},loseAdmission(){loseAdmission=true;}};
 }
@@ -28,6 +29,9 @@ test('guest foreground command passes real child authority and retains actual ex
   assert.equal(result.result.exitCode,19);assert.equal(result.result.stdout.text,'actual synthetic output\n');assert.equal(result.result.sandbox.mode,'read-only');
   assert.equal(f.authorities[0].accessSessionId,'child');assert.equal(f.authorities[0].sessionId,'owner');
   const create=f.calls.find(c=>c.data?.op==='execute');assert.match(create.data.command,/^cd -- '\/workspace' && node check.mjs$/);assert(!create.data.command.includes(f.manager.data.sessions.owner.root));await f.run.dispose();
+});
+test('guest absolute workspace cwd maps inside the same project and traversal is refused',async()=>{
+ const f=fixture(),pending=f.run({...args,workdir:'/workspace/src'},f.execution);await eventually(()=>f.authorities.length>0);f.finish();await pending;assert.match(f.calls.find(c=>c.data?.op==='execute').data.command,/^cd -- '\/workspace\/src' &&/);await assert.rejects(f.run({...args,workdir:'/workspace/../../outside'},f.execution),{code:'PROJECT_RUNTIME_OUTSIDE_PROJECT'});await f.run.dispose();
 });
 test('cancellation does not release heavy lease until exact generation stop is confirmed',async()=>{
   const f=fixture();f.holdStop();let released=0;const releaseTool=bindHeavyToolLease(f.execution,{release(){released++;}});

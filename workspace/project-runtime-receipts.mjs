@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { acquireProcessLock } from './process-lock.mjs';
+import {bindProjectExecution} from './execution-mode.mjs';
 const { atomicJson } = createRequire(import.meta.url)('../mobile/private-json.cjs');
 const stores = new Map(), id = /^[A-Za-z0-9_-]{1,128}$/, hex32 = /^[a-f0-9]{32}$/;
 const keys = ['kind','sessionId','accessSessionId','generation','stopToken','startedAt','operationId','jobId'];
@@ -13,10 +14,20 @@ function valid(row) {
 // Private cancellation capabilities, never a model/UI DTO or a second job
 // registry. Atomic fsync precedes RPC; one shared queue and OS lock protect
 // editor/executor writers. Live claims are deliberately NOT restored on boot.
-export function createProjectRuntimeReceiptStore(privateRoot) {
+export function createProjectRuntimeReceiptStore(privateRoot,{assertActive=()=>{},executionBinding}={}) {
   if (typeof privateRoot !== 'string' || !path.isAbsolute(privateRoot)) throw fail('PROJECT_RUNTIME_RECEIPT_ROOT_INVALID');
   const root = path.resolve(privateRoot), directory = path.join(root,'project-runtime-private'), file = path.join(directory,'pending.json');
-  if (stores.has(file)) return stores.get(file);
+  const bound=executionBinding?bindProjectExecution(executionBinding):null,identity=bound?JSON.stringify(bound.snapshot):null;
+  if(bound)assertActive=()=>bound.assertUnchanged();
+  if (stores.has(file)) {
+    const entry=stores.get(file);
+    if(identity!==entry.identity)throw fail('PROJECT_RUNTIME_RECEIPT_BINDING_CHANGED');
+    // Same immutable root launch may reload its service/provider. Keep the
+    // queue/live claims, but replace the closed old provider's guard.
+    if(bound)entry.assertActive=assertActive;
+    return entry.store;
+  }
+  const entry={identity,assertActive,store:null};
   let queue = Promise.resolve(); const live = new Map();
   async function safeDirectory() {
     const parent = await fs.lstat(root);
@@ -40,10 +51,10 @@ export function createProjectRuntimeReceiptStore(privateRoot) {
       return value.pending;
     } finally { await handle?.close(); }
   }
-  function mutate(action) {
+  function mutate(action,guard=false) {
     const result = queue.then(async()=>{
       await safeDirectory(); const lock = await acquireProcessLock(path.join(directory,'writer.lock'));
-      try { const rows = action(await read()); if (rows.length > 1024) throw fail('PROJECT_RUNTIME_RECEIPT_LIMIT'); atomicJson(file,{version:1,pending:rows}); }
+      try { const rows = action(await read()); if (rows.length > 1024) throw fail('PROJECT_RUNTIME_RECEIPT_LIMIT');if(guard)entry.assertActive();atomicJson(file,{version:1,pending:rows}); }
       finally { await lock.release(); }
     }); queue = result.catch(()=>{}); return result;
   }
@@ -51,13 +62,13 @@ export function createProjectRuntimeReceiptStore(privateRoot) {
     list:()=>queue.then(read),
     save(row) {
       if (!valid(row)) return Promise.reject(fail('PROJECT_RUNTIME_RECEIPT_INVALID')); const copy = {...row};
-      return mutate(rows=>{const prior=rows.find(item=>item.generation===copy.generation);if(prior && keys.some(key=>['operationId','jobId'].includes(key) ? prior[key]!==null && prior[key]!==copy[key] : prior[key]!==copy[key]))throw fail('PROJECT_RUNTIME_RECEIPT_MISMATCH');return[...rows.filter(item=>item.generation!==copy.generation),copy];});
+      return mutate(rows=>{const prior=rows.find(item=>item.generation===copy.generation);if(prior && keys.some(key=>['operationId','jobId'].includes(key) ? prior[key]!==null && prior[key]!==copy[key] : prior[key]!==copy[key]))throw fail('PROJECT_RUNTIME_RECEIPT_MISMATCH');return[...rows.filter(item=>item.generation!==copy.generation),copy];},true);
     },
     remove(generation) { if(!hex32.test(generation ?? ''))return Promise.reject(fail('PROJECT_RUNTIME_RECEIPT_INVALID'));return mutate(rows=>rows.filter(row=>row.generation!==generation)); },
     claim(generation,{reconciling=false}={}) { if(!hex32.test(generation ?? '') || live.has(generation))throw fail('PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED');const identity={reconciling};live.set(generation,identity);return()=>{if(live.get(generation)===identity)live.delete(generation);}; },
     isLive:generation=>live.has(generation)&&live.get(generation).reconciling!==true,
   };
-  stores.set(file,store);return store;
+  entry.store=store;stores.set(file,entry);return store;
 }
 
 export async function reconcileProjectRuntimeReceipts(store, { callApps, appsConfig, signal } = {}) {

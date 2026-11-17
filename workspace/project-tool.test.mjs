@@ -17,7 +17,7 @@ async function fixture(t, mode = 'workspace-write') {
   const agent = { id: 'one', session: { id: 'one' } }, execution = { agent, signal: new AbortController().signal };
   const manager = { ownerAgent: value => value?.owner ?? value, data: { sessions: { one: { root, gitWritableRoots: [other] }, two: { root: other } } } };
   const calls = [], ctx = { sandboxPolicy: { resolve: () => ({ mode, workspaceRoot: directory, additionalWritableRoots: [directory] }) }, shellEnv: { collect: () => ({ DSH_PROJECT_ROOT: '/untrusted-stale-root' }) }, shell: { sandboxMode: 'workspace-write', resolve(request) { calls.push(request); return request; }, async execute(spec) { return { async result() { return { exitCode: 0, signal: null, timedOut: false, aborted: false, timeoutMs: spec.timeoutMs, stdout: { text: 'ok', truncated: false }, stderr: { text: '', truncated: false }, sandbox: { mode: spec.sandboxPolicy.mode, denied: false } }; } }; } } };
-  return { directory, root, other, agent, execution, manager, ctx, calls, run: createProjectCommandRunner(ctx, manager) };
+  return { directory, root, other, agent, execution, manager, ctx, calls, run: createProjectCommandRunner(ctx, manager, {}, hostExecutionBinding()) };
 }
 const args = { command: 'printf "%s" "hello; $(not-executed-by-wrapper)"', description: 'Inspect the assigned project' };
 

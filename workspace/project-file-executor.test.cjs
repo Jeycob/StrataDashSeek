@@ -15,7 +15,7 @@ async function fixture(t){
    child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('exit',(code,signal)=>resolve({result:{exitCode:code,signal,timedOut:false,aborted:false,stdout:{text:stdout,truncated:false},stderr:{text:stderr,truncated:false}}}));
   });
  };
- const handlers=createProjectFileHandlers(execute),execution={agent:{id:'actual-child'},signal:new AbortController().signal};
+ const handlers=createProjectFileHandlers(execute,{executionBinding:(await import('./fixtures/execution-binding.mjs')).isolatedExecutionBinding(),beforeMutation:async()=>({})}),execution={agent:{id:'actual-child'},signal:new AbortController().signal};
  const call=(name,args)=>handlers[name]({name,arguments:args,project:{ownerId:'owner',root:'/trusted/projects/one'}},execution);
  return{root,calls,handlers,execution,call};
 }
@@ -74,9 +74,9 @@ test('guest worker rejects symlinks, hardlinks, FIFO, binary and ambiguous edits
 test('bounded command/result and aborted runner cannot return successful file outcomes',async()=>{
  const {createProjectFileHandlers}=await import('./project-file-executor.mjs');let count=0;
  const request={name:'write',arguments:{file_path:'a',content:'x'.repeat(40000)},project:{root:'/trusted/project',ownerId:'one'}},execution={signal:new AbortController().signal};
- const handlers=createProjectFileHandlers(async()=>{count++;return{result:{exitCode:0,stdout:{text:'{}',truncated:false}}};});
+ const handlers=createProjectFileHandlers(async()=>{count++;return{result:{exitCode:0,stdout:{text:'{}',truncated:false}}};},{executionBinding:(await import('./fixtures/execution-binding.mjs')).isolatedExecutionBinding(),beforeMutation:async()=>({})});
  await assert.rejects(handlers.write(request,execution));assert.equal(count,0);
  request.arguments.content='small';await assert.rejects(handlers.write(request,execution));assert.equal(count,1);
  const controller=new AbortController();controller.abort();await assert.rejects(handlers.write(request,{signal:controller.signal}));assert.equal(count,1);
- assert.deepEqual(createProjectFileHandlers(),{});
+ assert.throws(()=>createProjectFileHandlers(),/BINDING_REQUIRED/);
 });

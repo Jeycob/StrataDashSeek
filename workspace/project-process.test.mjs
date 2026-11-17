@@ -1,3 +1,4 @@
+import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -67,8 +68,8 @@ async function fixture(t, { controller = true, admission = false } = {}) {
   S.applyBash(ctx, { enableRunInBackground: false }); const native = ctx.tools.get('bash');
   const manager = { existing: new Set(), data: { installedAt: 1000, sessions: {} }, ownerAgent: agent => agent?.owner ?? agent };
   const processTimers = { setTimer(fn, ms) { const token = { fn, ms, unref() {} }; timers.add(token); return token; }, clearTimer(token) { timers.delete(token); } };
-  const run = createProjectCommandRunner(ctx, manager, { processTimers });
-  const managed = createManagedShell(ctx, manager, run); registerProjectTool(ctx, manager, run);
+  const run = createProjectCommandRunner(ctx, manager, { processTimers }, hostExecutionBinding());
+  const managed = createManagedShell(ctx, manager, run, hostExecutionBinding()); registerProjectTool(ctx, manager, run, hostExecutionBinding());
   if (admission) await applyEfficiency(ctx, { stateDirectory: path.join(directory, 'efficiency'), engineMetrics: false });
   const pipeline = new S.ToolExecutionPipeline(ctx);
   ctx.tools.setExecutor({ describe: defs => ({ schemas: defs.map(({ name, description, parameters }) => ({ name, description, parameters })) }),

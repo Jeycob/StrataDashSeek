@@ -4,6 +4,7 @@
 export async function projectFileWorker(input, root = '/workspace') {
   const fs = require('node:fs/promises'), C = require('node:fs').constants;
   const path = require('node:path'), crypto = require('node:crypto');
+  root=path.resolve(root);
   const fail = code => { throw Error(code); };
   const MAX = 1024 * 1024;
   const fingerprint = s => [s.dev,s.ino,s.size,s.mtimeNs,s.ctimeNs,s.mode,s.nlink].join(':');
@@ -32,6 +33,7 @@ export async function projectFileWorker(input, root = '/workspace') {
         before=new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,count));if(before.includes('\0'))fail('PATCH_BINARY');stamp=fingerprint(info);
       }finally{await fd.close();}
     }else{try{await fs.lstat(full);fail('PATCH_ADD_EXISTS');}catch(error){if(error.code!=='ENOENT')throw error;}}
+    if(input.expectedSha256!==undefined&&(before===null?null:crypto.createHash('sha256').update(before).digest('hex'))!==input.expectedSha256)fail('REWRITE_SOURCE_CHANGED');
     if(operation==='Delete') {
       if(lines.length)fail('PATCH_DELETE_BODY');
       if(fingerprint(await fs.lstat(full,{bigint:true}))!==stamp)fail('PATCH_SOURCE_CHANGED');
@@ -60,7 +62,7 @@ export async function projectFileWorker(input, root = '/workspace') {
       }
       content=output.join('\n')+(output.length?'\n':'');
     }
-    return projectFileWorker({name:'write',arguments:{file_path:relative,content},expectedStamp:stamp,expectAbsent:operation==='Add'},root);
+    return projectFileWorker({name:'write',arguments:{file_path:relative,content},expectedStamp:stamp,expectAbsent:operation==='Add',...(input.expectedSha256!==undefined?{expectedSha256:input.expectedSha256}:{})},root);
   }
   if (['glob','grep'].includes(input.name)) {
     const args=input.arguments,target=args.path??'.';
@@ -68,7 +70,7 @@ export async function projectFileWorker(input, root = '/workspace') {
     if(typeof args.pattern!=='string'||!args.pattern.trim()||args.pattern.length>4096||args.pattern.includes('\0'))fail('INVALID_SEARCH_PATTERN');
     if(args.include!==undefined&&(typeof args.include!=='string'||!args.include||args.include.startsWith('!')||args.include.length>4096||args.include.includes('\0')))fail('INVALID_SEARCH_INCLUDE');
     let at=root;
-    for(const part of path.relative(root,path.resolve(root,target)).split('/').filter(Boolean)){
+    for(const part of path.relative(root,path.resolve(root,target)).split(path.sep).filter(Boolean)){
       at=path.join(at,part);const info=await fs.lstat(at);if(info.isSymbolicLink())fail('PROJECT_LINK_REFUSED');
     }
     const flags=['--no-config','--no-follow','--max-depth=64'];
@@ -92,11 +94,11 @@ export async function projectFileWorker(input, root = '/workspace') {
   const args=input.arguments, relative=args.file_path;
   if (typeof relative!=='string'||!relative||relative.length>4096||relative.includes('\0')||relative.includes('\\')||path.isAbsolute(relative)||relative.split('/').some(p=>p==='..')) fail('INVALID_PROJECT_PATH');
   const full=path.resolve(root,relative);
-  if (!full.startsWith(root+'/')) fail('INVALID_PROJECT_PATH');
+  if (!full.startsWith(root+path.sep)) fail('INVALID_PROJECT_PATH');
   // No symlink components at inspection time. OS mount isolation remains the
   // security boundary against concurrent ancestor replacement by project code.
   let parent=root;
-  const parts=path.relative(root,full).split('/');
+  const parts=path.relative(root,full).split(path.sep);
   for(const part of parts.slice(0,-1)) {
     parent=path.join(parent,part);
     let info;try{info=await fs.lstat(parent);}catch(error){if(error.code!=='ENOENT'||input.name!=='write')throw error;await fs.mkdir(parent,{mode:0o700});info=await fs.lstat(parent);}
@@ -131,6 +133,7 @@ export async function projectFileWorker(input, root = '/workspace') {
     return {text:text||'(empty read window)',truncated};
   }
   const before=await snapshot(input.name==='write');
+  if(input.expectedSha256!==undefined&&(before===null?null:crypto.createHash('sha256').update(before.text).digest('hex'))!==input.expectedSha256)fail('REWRITE_SOURCE_CHANGED');
   if(input.expectAbsent&&before||input.expectedStamp!==undefined&&input.expectedStamp!==null&&before?.stamp!==input.expectedStamp)fail('PROJECT_FILE_CHANGED');
   let content=args.content;
   if(input.name==='edit') {

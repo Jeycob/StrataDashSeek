@@ -1,3 +1,4 @@
+import {isolatedExecutionBinding} from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -6,8 +7,8 @@ import path from 'node:path';
 import {createEditorSessions,installEditorSessions} from './editor-session.mjs';
 async function fixture(t){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'editor-sessions-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));const projectsRoot=await fs.realpath(root),sessions={};
- for(const id of['A','B']){const dir=path.join(projectsRoot,id);await fs.mkdir(dir);sessions[id]={root:dir};}
- const calls=[],ctx={on:()=>{},workspaceRegistry:{archivedSessionIds:new Set()},sandboxPolicy:{resolve:()=>({mode:'workspace-write'})}},manager={projectsRoot,data:{sessions,trash:{}},async projectFor(id){if(!sessions[id])throw Error('no session');return{root:sessions[id].root,header:{},live:{id,header:{}}};}};
+ for(const id of['A','B']){const dir=path.join(projectsRoot,id);await fs.mkdir(dir);sessions[id]={root:dir,independentRepository:true};}
+ const calls=[],ctx={on:()=>{},workspaceRegistry:{archivedSessionIds:new Set()},sandboxPolicy:{resolve:()=>({mode:'workspace-write'})}},manager={execution:isolatedExecutionBinding(),projectsRoot,data:{sessions,trash:{}},async projectFor(id){if(!sessions[id])throw Error('no session');return{root:sessions[id].root,header:{},live:{id,header:{}}};}};
  const adapter={async ensureEditor(input){calls.push({op:'ensure',...input});return{ready:true,generation:'g-'+input.sessionId,socketPath:'/synthetic/'+input.sessionId+'.sock',readOnly:input.readOnly,isolation:{enforced:true,sessionId:input.sessionId,projectRoot:input.projectRoot,readOnly:input.readOnly}};},async stopEditor(input){calls.push({op:'stop',...input});}};
  const origins={allocate:id=>({origin:'https://owner.test:'+(id==='A'?19443:19444),listenerPort:id==='A'?29443:29444})},brokers=[];
  const options={adapter,origins,ownerOrigin:'https://owner.test',bind:async()=>{},brokerFactory:input=>{const broker={...input,closed:false,issue:()=>({version:1,sessionId:input.sessionId,generation:input.generation,state:'ready',url:input.origin+'/fixture#synthetic'}),close(){this.closed=true;}};brokers.push(broker);return broker;}};
