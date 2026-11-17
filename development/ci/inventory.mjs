@@ -32,6 +32,8 @@ export function classify(name) {
   if (hostFixtures.has(name)) return {file: name, kind: 'existing-host-fixture', lane: 'outside-ci', required: false, outcome: 'unrunnable', reason: hostFixtures.get(name)};
   if (name === 'development/device-workerd-check.mjs') return {file: name, kind: 'workerd', lane: 'local-engine', required: true, timeoutMs: 120000};
   if (name === 'workspace/runtime-admission-native.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:180000,minTests:2};
+  if (name === 'development/project-execution-floor-root.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_EXECUTION_FLOOR_ROOT_TEST:'1'},minTests:10};
+  if (name === 'vast/startup-install-floor.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_EXECUTION_FLOOR_ROOT_TEST:'1'},minTests:6};
   if (name === 'vast/runtime-recovery.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_RECOVERY_ROOT_TEST:'1'},minTests:12};
   if (name === 'workspace/runtime-admission.test.mjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_ADMISSION_ROOT_TEST:'1'},minTests:9};
   if (name === 'vast/runtime-admission-server.test.cjs') return {file:name,kind:'node',lane:'linux-root',required:true,timeoutMs:120000,environment:{HARNESS_RUNTIME_ADMISSION_SERVER_ROOT_TEST:'1'},minTests:6};
