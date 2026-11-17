@@ -1,0 +1,143 @@
+HOST application preview controller (source integration)
+
+Purpose and default
+
+The HOST composition offers project_preview independently of Apps/VM enablement.
+It is disabled without a valid explicit hostPreview configuration and Linux
+little-endian/getuid capability. An unavailable configuration returns unavailable
+without creating a connector, relay or broker. Isolated-guest composition never
+constructs this HOST controller and has no fallback to a HOST process.
+
+Only the trusted apps-config.json file read by workspace/plugin.mjs supplies:
+
+  "hostPreview": {
+    "enabled": true,
+    "ownerOrigin": "https://EXISTING-OWNER.ts.net",
+    "endpoints": [
+      {"origin":"https://EXISTING-OWNER.ts.net:8443","listenerPort":18190}
+    ]
+  }
+
+This is a configuration example, not a provisioned endpoint. Root must select
+the actual unused private loopback listener and arrange HTTPS to it. The public
+HTTPS port and loopback listenerPort need not match. No domain, certificate,
+Tailscale, Serve/Funnel, firewall or runtime configuration is changed by this
+source. Origin and listener collisions with configured editor endpoints disable
+preview custody; malformed editor endpoints also fail closed. Every origin must
+differ from ownerOrigin. HTTPS on the same hostname at a different explicit port
+is allowed with the broker's cookie/fetch-metadata/origin/Host defenses below.
+
+Origins persist by canonical project-root hash in manager.root/
+host-preview-origins.json, separately from editor-origins.json. An allocation is
+never recycled to another project, even after a lease closes or a session ends.
+Retain this private state across upgrades; do not delete it to increase capacity.
+Exhaustion or incompatible origin configuration refuses a new preview. Only one
+active preview lease exists per project session. Origin capacity is finite.
+
+Application and model flow
+
+Start the application through ordinary project_exec (or managed bash) with
+run_in_background:true, listening on the project's assigned DSH_APP_PORT / first
+record port. The public command schema and background result remain unchanged.
+Only explicitly enabled, supported HOST preview composition automatically adds
+the private wrapper custody frame to these background commands. There is no
+model option to request custody, choose a PID, substitute an executor or bypass
+the confined SDK process policy.
+
+  project_preview {"operation":"open","jobId":"OWN-SDK-JOB-ID"}
+  project_preview {"operation":"status"}
+  project_preview {"operation":"close"}
+
+The actual executing SDK agent owns the job and preview. Root and child agents
+cannot open, observe or close each other's lease. The model cannot supply a
+session, host, target port, PID, root, URL, generation or command. Project,
+workspace membership, live access policy, canonical root/device/inode and unique
+assigned ports are derived and rechecked from the real manager/SDK state.
+
+Open probes attribution with zero HTTP bytes, then creates a private generated
+UDS/named-pipe relay and a loopback broker. Every broker HTTP connection requires
+a fresh verified same-socket connector result before any HTTP bytes cross the
+relay. Attribution refusal closes that connection and never kills or adopts the
+foreign listener. No permissive proxy or direct-port fallback exists.
+
+The normal tool renderer provides an Open application preview Markdown link;
+no Native bundle change is needed. Open again with the same own job ID for a
+fresh one-use link before expiry. Status contains no new bearer grant. The
+previewId identifies a stable broker lease; generation identifies the current
+captured backend wrapper and changes on successful restart.
+
+Owner control and exact restart
+
+The existing owner-Peer authenticated connection service registers exactly
+POST /api/workbench/preview with buffered JSON at most2048 bytes and a second
+sameRequestOrigin mutation fence. The public internet broker has no control API.
+Only the trusted owner route accepts a session selector and restart:
+
+  {"operation":"open","sessionId":"...","jobId":"..."}
+  {"operation":"status","sessionId":"..."}
+  {"operation":"close","sessionId":"..."}
+  {"operation":"restart","sessionId":"...","previewId":"...",
+   "generation":"...","requestId":"bounded-unique-id"}
+
+There are no replacement command/host/port/PID/root fields. A private opaque
+seed retains the originally admitted command arguments, owner, resolved policy,
+environment, paths and deadline. Restart refreshes real policy and requires the
+same resolved specification. It first revokes the old relay target and awaits
+the exact old SDK producer's done, then makes one new admission through the real
+SDK tools guard/approval/heavy-admission pipeline with a one-use private ticket.
+Ordinary tool resolution cannot obtain project_preview_restart. The shared
+heavy permit remains retained until the new producer actually settles.
+
+Up to16 restart request IDs are retained for idempotent results; a repeated ID
+returns the same operation, and a new stale generation refuses. A new producer
+is recorded immediately on SDK admission, before its custody acknowledgment,
+so a lost acknowledgment or cancellation can stop that exact new producer.
+Unknown old settlement blocks restart without a new start. Refusal, abort or
+proof failure never triggers a blind retry. Successful restart preserves the
+origin, broker lease/cookie, and original expiry; its new job deadline cannot
+extend the first admission. Close, archive, agent disposal, policy/context
+revocation, producer completion, runtime disposal and expiry revoke the broker
+and relay. Lifecycle cleanup uses only retained SDK-owned jobs.
+
+workSettled:true means this preview's retained SDK producer done was observed;
+it never means every Native/background job in the conversation has stopped.
+No-lease close/status is scoped to this preview. An unsuccessful open leaves the
+original owned application job available for job_output/job_kill. A cleanup
+timeout reports blocked/workSettled:false rather than asserting settlement.
+
+Browser boundary and supported first unit
+
+The broker reuses editor primitives with purpose=preview, /__preview controls,
+and __Secure-homeai-preview-<origin-hash> HttpOnly Secure SameSite=Strict cookies.
+Editor or Native owner cookies do not authorize it. Cookies alone cannot
+separate ports: exact Host, Origin and browser fetch metadata are checked before
+forwarding; sibling no-cors subresources are refused. Bootstrap grants are
+one-use, short lived and capped. Expiry never renews the producer lifetime.
+
+Cookie, Authorization, proxy/forwarded/Native/Tailscale identity headers are
+removed upstream. Upstream Set-Cookie, CORS and Service-Worker-Allowed are
+removed; response security headers and same-origin redirect checks apply.
+App-owned cookie/Bearer authentication is therefore not supported by this first
+unit. It supports ordinary HTML/assets and relative HTTP fetch APIs, including
+PATCH/DELETE, error statuses/JSON and attachment bytes/filename headers. WebSocket
+upgrades are explicitly refused for preview (existing editor WS is unchanged).
+The UI must show genuine unavailable/error output, not claim preview readiness
+merely because an app job ID exists.
+
+Qualification boundary
+
+HOST_PEER_CONNECTOR.txt describes the unchanged connector's bounds: Linux
+procfs, actual UID, same PID/network namespace, exact accepted reverse TCP
+four-tuple fd within the captured wrapper descendant graph, repeated bounded
+snapshots and zero early bytes. This is snapshot attribution, not atomic or
+exclusive kernel ownership. Unsupported namespaces (including a separate bwrap
+PID namespace) refuse; platform capability alone does not prove an admissible
+backend. There is no inference that bwrap behaves like Landlock.
+
+Source tests use actual pinned SDK registration/jobs/pipeline/OutputCollector
+with mocked subprocess handles. Separate tests use synthetic loopback HTTP/TCP
+servers and real brokers/private relays with explicitly mocked attribution.
+They prove source composition and refusal behavior, not real application,
+kernel, TLS/browser, UID1001 or deployed owner-Peer acceptance. Root owns those
+runtime qualifications, signed integration and configuration. Live preview
+acceptance and the frozen paired benchmark remain separate, unclaimed work.

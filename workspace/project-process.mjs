@@ -26,7 +26,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
   }
   ctx.effect?.(() => dispose, 'managed project background processes');
 
-  async function start({ cwd, spec, adaptations = [] }, execution, args) {
+  async function start({ cwd, spec, adaptations = [], hardDeadline }, execution, args) {
     assertActive();
     execution.signal.throwIfAborted();
     if (disposed) throw new WorkbenchError('PROJECT_EXECUTOR_DISPOSED', 'Project command execution is shutting down.');
@@ -34,7 +34,9 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     if (!owner) throw new WorkbenchError('PROJECT_JOB_OWNER_REQUIRED', 'Background commands require their executing conversation.');
     const jobs = typeof ctx.get === 'function' ? ctx.get('jobs') : ctx.jobs;
     if (!jobs || typeof jobs.start !== 'function') throw new WorkbenchError('PROJECT_JOBS_UNAVAILABLE', 'Background commands require the SDK job registry and job_output/job_kill controller. Use a bounded foreground command until they are available.', 503);
-    const lifetimeMs = projectJobLifetime(args.timeoutMs);
+    const admittedAt=Date.now();
+    if(hardDeadline!==undefined&&(!Number.isSafeInteger(hardDeadline)||hardDeadline-admittedAt<1000))throw new WorkbenchError('PROJECT_CUSTODY_DEADLINE','Original job lifetime has expired.');
+    const lifetimeMs = Math.min(projectJobLifetime(args.timeoutMs),hardDeadline===undefined?Infinity:hardDeadline-admittedAt),expiresAt=Math.floor(admittedAt+lifetimeMs);
     const releaseAdmission = retainHeavyToolLease(execution);
     const launch=launchFor(spec);
     let resolveCapture,rejectCapture,identity,stdout;
@@ -106,7 +108,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       catch { cancel('tool call aborted before background acknowledgement'); }
       await done; execution.signal.throwIfAborted();
     }
-    const entry = { id, owner, jobs, done, cancel, captured, launch, identity:()=>identity, current:()=>!settled&&!controller.signal.aborted&&process?.status==='running' }; active.set(id, entry);
+    const entry = { id, owner, jobs, done, cancel, captured, launch, expiresAt,identity:()=>identity, current:()=>!settled&&!controller.signal.aborted&&process?.status==='running' }; active.set(id, entry);
     timer = setTimer(() => {
       if (settled) return;
       const reason = 'project job lifetime limit reached after ' + lifetimeMs + 'ms';
@@ -127,11 +129,13 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       await (cancelled?Promise.race([entry.captured,cancelled]):entry.captured);
       if(signal?.aborted)throw new WorkbenchError('PROJECT_CUSTODY_ABORTED','Custody acknowledgement aborted.');
       const assertCurrent=()=>{assertActive();if(active.get(id)!==entry||!entry.current())throw new WorkbenchError('PROJECT_CUSTODY_EXPIRED','Captured wrapper is no longer current.');};
-      assertCurrent();return Object.freeze({jobId:id,owner,identity:entry.identity(),context:entry.launch.context,done:entry.done,assertCurrent});
+      assertCurrent();return Object.freeze({jobId:id,owner,identity:entry.identity(),context:entry.launch.context,done:entry.done,assertCurrent,expiresAt:entry.expiresAt,restartSeed:entry.launch.restartSeed});
     }catch(error){
       try{entry.jobs.kill(id,owner,'custody capture failed');}catch{entry.cancel('custody capture failed');}
       await entry.done;throw error;
     }finally{if(abort)signal.removeEventListener('abort',abort);}
   }
-  return { start, dispose, custodyFor };
+  function producerFor(id,owner){const entry=active.get(id);if(!entry||entry.owner!==owner||!entry.launch)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No exact owned producer.');return Object.freeze({done:entry.done,expiresAt:entry.expiresAt});}
+  async function stopOwned(id,owner){const entry=active.get(id);if(!entry||entry.owner!==owner)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No exact owned producer.');try{entry.jobs.kill(id,owner,'owned preview cleanup');}catch{entry.cancel('owned preview cleanup');}await entry.done;}
+  return { start, dispose, custodyFor,producerFor,stopOwned };
 }

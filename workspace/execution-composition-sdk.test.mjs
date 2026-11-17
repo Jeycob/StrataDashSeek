@@ -29,7 +29,7 @@ const pause=()=>new Promise(resolve=>setImmediate(resolve));
 const deferred=()=>{let resolve;return{promise:new Promise(r=>resolve=r),resolve:value=>resolve(value)};};
 function receipts(){const rows=new Map(),claims=new Set();return{async list(){return[...rows.values()];},async save(row){rows.set(row.generation??row.requestId,{...row});},async remove(id){rows.delete(id);},claim(id){assert(!claims.has(id));claims.add(id);return()=>claims.delete(id);},isLive:id=>claims.has(id)};}
 
-async function fixture(t,{mode='isolated-guest',off=false,guest,extraFactories={}}={}){
+async function fixture(t,{mode='isolated-guest',off=false,guest,hostPreview,editorBrowser,extraFactories={}}={}){
  const ctx=new Context();new SystemPrompt(ctx,{});new Tools(ctx);
  const agents=new Map(),scopes=[],routes=new Map(),source=executionBindingFixture(mode),state={native:0,hostRunner:0,guestRunner:0,guestFactories:0,rpc:0,reviews:0,hostShell:0,commands:[],files:new Map([['a.js','const original = true;\n']])};
  ctx.provide('agents',{list:()=>[...agents.values()],get:id=>agents.get(id)});
@@ -64,7 +64,7 @@ async function fixture(t,{mode='isolated-guest',off=false,guest,extraFactories={
  guestRun.assertAvailable=()=>{execution.assertUnchanged();if(off)throw Object.assign(Error('PROJECT_RUNTIME_ISOLATION_UNAVAILABLE'),{code:'PROJECT_RUNTIME_ISOLATION_UNAVAILABLE'});};
  guestRun.beforeHeavy=async()=>guestRun.assertAvailable();guestRun.dispose=async()=>{};
  const factories={hostRunner(){state.hostRunner++;const run=async()=>({cwd:'/host-project',spec:{timeoutMs:1000},result:result('host compatibility')});run.dispose=async()=>{};return run;},guestRunner(){state.guestFactories++;state.guestRunner++;return guestRun;},runtimeReceipts(){state.guestFactories++;return receipts();},appsReceipts(){state.guestFactories++;return receipts();},projectApps:createProjectAppsTools,editorSessions:installEditorSessions,editorAdapter(){throw Error('OFF_EDITOR_ADAPTER_MUST_NOT_BE_CONSTRUCTED');},...extraFactories};
- const appsConfig={enabled:!off,vm:{enabled:!off},projectRuntime:{enabled:!off},workspaceRoot:'/projects'};
+ const appsConfig={enabled:!off,vm:{enabled:!off},projectRuntime:{enabled:!off,...(editorBrowser?{editorBrowser}:{})},workspaceRoot:'/projects',hostPreview};
  const native=await admit();
  function compose({context=ctx}={}){composition=composeProjectExecution(context,manager,{appsConfig,callApps:async()=>{state.rpc++;throw Error('NO_LIVE_APPS');}},factories);ctx.tools.guard(actual=>WorkspaceManager.prototype.toolGuard.call(manager,composition.managerExecution(actual)));return composition;}
  t.after(async()=>{await composition?.dispose();native.dispose();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();});
@@ -78,6 +78,19 @@ test('host AppsOFF preserves native legacy tools and managed shell; constructs n
  const legacy=f.agent('legacy',{legacy:true});composition.install(legacy);assert.equal((await f.call('bash',{command:'pwd',description:'Inspect retained workspace'},{agent:legacy})).isError,false);
  assert.equal(f.state.native,2);assert.equal(f.state.hostRunner,1);assert.equal(f.state.guestFactories,0);assert.equal(f.state.rpc,0);assert.equal(f.routes.has('/api/workbench/editor'),false);
  f.source.fail();assert.equal((await f.call('read')).isError,true);assert.equal(f.state.native,2);
+});
+
+test('explicit supported HOST preview configuration enables custody with AppsOFF without constructing guest components',async t=>{
+ const config={enabled:true,ownerOrigin:'https://owner.test',endpoints:[{origin:'https://owner.test:8443',listenerPort:18190}]};let options,received,installed=0;
+ const f=await fixture(t,{mode:'host-compat',off:true,hostPreview:config,extraFactories:{previewSupported:()=>true,hostRunner(_ctx,_manager,value){options=value;const run=async()=>({cwd:'/host-project',spec:{timeoutMs:1000},result:result('host')});run.dispose=async()=>{};return run;},hostPreview(_ctx,_manager,_run,value){received=value;return{install(){installed++;},remove(){},handles:()=>false,async dispose(){}};}}});
+ const composition=f.compose();composition.install(f.owner);assert.deepEqual(options,{captureBackgroundCustody:true});assert.deepEqual(received,config);assert.equal(installed,1);assert.equal(f.state.guestFactories,0);assert.equal(f.state.rpc,0);
+});
+
+for(const conflict of ['origin','listener','malformed'])test('editor '+conflict+' configuration disables HOST preview custody before any capture',async t=>{
+ const endpoint={origin:'https://owner.test:8443',listenerPort:18190},config={enabled:true,ownerOrigin:'https://owner.test',endpoints:[endpoint]};let options,received;
+ const editor=conflict==='origin'?{...endpoint,listenerPort:18191}:conflict==='listener'?{...endpoint,origin:'https://owner.test:8444'}:null;
+ const f=await fixture(t,{mode:'host-compat',off:true,hostPreview:config,editorBrowser:{ownerOrigin:'https://owner.test',endpoints:[editor]},extraFactories:{previewSupported:()=>true,hostRunner(_ctx,_manager,value){options=value;const run=async()=>{};run.dispose=async()=>{};return run;},hostPreview(_ctx,_manager,_run,value){received=value;return{install(){},remove(){},handles:()=>false,async dispose(){}};}}});
+ f.compose();assert.deepEqual(options,{});assert.equal(received,null);
 });
 test('isolated actual scoped definitions reject captured native sets and unknown shell aliases; unload remains closed',async t=>{
  const f=await fixture(t),composition=f.compose();

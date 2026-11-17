@@ -8,9 +8,9 @@ const digest=v=>crypto.createHash('sha256').update(v).digest('hex');
 const token=()=>crypto.randomBytes(32).toString('base64url');
 const validToken=v=>typeof v==='string'&&/^[A-Za-z0-9_-]{43}$/.test(v);
 const hop=new Set(['connection','keep-alive','proxy-authenticate','proxy-authorization','te','trailer','transfer-encoding','upgrade']);
-const deniedPath=p=>/^\/(?:proxy|absproxy)(?:\/|$)/i.test(p)||p.startsWith('/__editor/');
-function safePath(raw){try{const u=new URL(raw,'http://local');if(!raw.startsWith('/')||raw.startsWith('//')||u.origin!=='http://local'||/%(?:2f|5c|00|0d|0a)/i.test(u.pathname)||raw.includes('\\')||deniedPath(decodeURIComponent(u.pathname)))return null;return u.pathname+u.search;}catch{return null;}}
-function safeRedirect(location,origin,route){try{const target=new URL(location,origin+route);if(target.origin!==origin||target.username||target.password)return null;const pathname=safePath(target.pathname+target.search);return pathname?pathname+target.hash:null;}catch{return null;}}
+const deniedPath=(p,control)=>/^\/(?:proxy|absproxy)(?:\/|$)/i.test(p)||p.startsWith(control+'/');
+function safePath(raw,control='/__editor'){try{const u=new URL(raw,'http://local');if(!raw.startsWith('/')||raw.startsWith('//')||u.origin!=='http://local'||/%(?:2f|5c|00|0d|0a)/i.test(u.pathname)||raw.includes('\\')||deniedPath(decodeURIComponent(u.pathname),control))return null;return u.pathname+u.search;}catch{return null;}}
+function safeRedirect(location,origin,route,control='/__editor'){try{const target=new URL(location,origin+route);if(target.origin!==origin||target.username||target.password)return null;const pathname=safePath(target.pathname+target.search,control);return pathname?pathname+target.hash:null;}catch{return null;}}
 function incoming(req,host,websocket=false){
  const out={host};for(const[k,v]of Object.entries(req.headers))if(!hop.has(k)&&!['host','cookie','authorization','origin','referer','forwarded'].includes(k)&&!k.startsWith('x-forwarded-')&&!k.startsWith('tailscale-')&&!k.startsWith('x-harness-'))out[k]=v;
  // Do not negotiate compression through this byte-forwarding boundary. This
@@ -24,14 +24,16 @@ function outgoing(headers,ownerOrigin){
  const csp=String(out['content-security-policy']||'').split(';').map(x=>x.trim()).filter(x=>x&&!/^frame-ancestors(?:\s|$)/i.test(x));csp.push('frame-ancestors '+ownerOrigin);out['content-security-policy']=csp.join('; ');out['permissions-policy']='document-domain=()';
  return out;
 }
-function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,onActivity=async()=>{},runtimeDeadline=Infinity,now=Date.now,grantMs=60000,sessionMs=30*60000,requestMs=30000,maxGrants=16}){
+function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,onActivity=async()=>{},runtimeDeadline=Infinity,now=Date.now,grantMs=60000,sessionMs=30*60000,requestMs=30000,maxGrants=16,purpose='editor'}){
+ if(!['editor','preview'].includes(purpose))throw Error('BROKER_PURPOSE_INVALID');
+ const control='/__'+purpose,routeFor=raw=>safePath(raw,control);
  const u=new URL(origin),owner=new URL(ownerOrigin);
- if(u.protocol!=='https:'||owner.protocol!=='https:'||u.origin!==origin||owner.origin!==ownerOrigin||origin===ownerOrigin||!/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)||typeof generation!=='string'||!generation||typeof socketPath!=='string'||!(socketPath.startsWith('/')||process.platform==='win32'&&socketPath.startsWith('\\\\.\\pipe\\homeai-editor-'))||![grantMs,sessionMs,requestMs,maxGrants].every(x=>Number.isSafeInteger(x)&&x>0)||grantMs>120000||sessionMs>3600000)throw Error('EDITOR_CONFIGURATION_INVALID');
- const cookieName='__Secure-homeai-editor-'+digest(origin).slice(0,20),grants=new Map(),sessions=new Map(),sockets=new Set();let closed=false;
+ if(u.protocol!=='https:'||owner.protocol!=='https:'||u.origin!==origin||owner.origin!==ownerOrigin||origin===ownerOrigin||!/^[a-zA-Z0-9_-]{1,128}$/.test(sessionId)||typeof generation!=='string'||!generation||typeof socketPath!=='string'||!(socketPath.startsWith('/')||process.platform==='win32'&&socketPath.startsWith('\\\\.\\pipe\\homeai-'+purpose+'-'))||![grantMs,sessionMs,requestMs,maxGrants].every(x=>Number.isSafeInteger(x)&&x>0)||grantMs>120000||sessionMs>3600000)throw Error('EDITOR_CONFIGURATION_INVALID');
+ const cookieName='__Secure-homeai-'+purpose+'-'+digest(origin).slice(0,20),grants=new Map(),sessions=new Map(),sockets=new Set();let closed=false;
  if(runtimeDeadline!==Infinity&&(!Number.isSafeInteger(runtimeDeadline)||runtimeDeadline<=now()||runtimeDeadline>now()+3600000))throw Error('EDITOR_RUNTIME_DEADLINE_INVALID');
  const sessionExpiry=()=>Math.min(now()+sessionMs,runtimeDeadline);
  const sweep=()=>{for(const map of[grants,sessions])for(const[k,v]of map)if(v<=now())map.delete(k);};
- const denied=(res,status=403,code='EDITOR_ACCESS_DENIED')=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify({code}));};
+ const denied=(res,status=403,code='EDITOR_ACCESS_DENIED')=>{res.writeHead(status,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify({code:purpose==='preview'?code.replace(/^EDITOR_/,'PREVIEW_'):code}));};
  // SameSite cookies do not separate ports: a sibling editor can send this
  // editor's cookie on a no-cors script/image request with no Origin header.
  // Permit authenticated subresources only from this exact origin. Native may
@@ -46,27 +48,28 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
   if(closed||now()>=runtimeDeadline||!authority(req))return false;sweep();const values=String(req.headers.cookie||'').split(';').map(x=>x.trim()).filter(x=>x.startsWith(cookieName+'='));
   if(values.length!==1)return false;const value=values[0].slice(cookieName.length+1);return validToken(value)&&sessions.get(digest(value));
  }
- const bootstrapScript="const t=location.hash.slice(1);history.replaceState(null,'','/__editor/bootstrap');if(!/^[A-Za-z0-9_-]{43}$/.test(t))document.body.textContent='Editor link expired. Reopen it from the conversation.';else fetch('/__editor/claim',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({grant:t})}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.body.textContent='Editor link expired. Reopen it from the conversation.');";
+ const bootstrapScript="const t=location.hash.slice(1);history.replaceState(null,'','/__editor/bootstrap');if(!/^[A-Za-z0-9_-]{43}$/.test(t))document.body.textContent='Editor link expired. Reopen it from the conversation.';else fetch('/__editor/claim',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({grant:t})}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>document.body.textContent='Editor link expired. Reopen it from the conversation.');".replaceAll('/__editor/',control+'/').replaceAll('Editor link',purpose==='preview'?'Preview link':'Editor link');
  const scriptHash=crypto.createHash('sha256').update(bootstrapScript).digest('base64');
  const server=http.createServer(async(req,res)=>{
   if(closed||now()>=runtimeDeadline||!authority(req))return denied(res);
-  if(req.method==='GET'&&req.url==='/__editor/bootstrap'){
+  if(req.method==='GET'&&req.url===control+'/bootstrap'){
    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','Origin-Agent-Cluster':'?1','Content-Security-Policy':"default-src 'none'; script-src 'sha256-"+scriptHash+"'; connect-src 'self'; frame-ancestors "+ownerOrigin});
-   return res.end('<!doctype html><meta charset="utf-8"><title>Opening editor</title><body>Opening editor…<script>'+bootstrapScript+'</script>');
+   return res.end('<!doctype html><meta charset="utf-8"><title>Opening '+purpose+'</title><body>Opening '+purpose+'…<script>'+bootstrapScript+'</script>');
   }
-  if(req.method==='POST'&&req.url==='/__editor/claim'){
+  if(req.method==='POST'&&req.url===control+'/claim'){
    if(req.headers.origin!==origin||String(req.headers['content-type']).split(';')[0]!=='application/json')return denied(res);
    let raw='',size=0;req.setTimeout(5000,()=>req.destroy());try{for await(const chunk of req){size+=chunk.length;if(size>512)return denied(res,413);raw+=chunk;}const v=JSON.parse(raw);sweep();if(!validToken(v.grant)||!grants.delete(digest(v.grant)))return denied(res);const credential=token();if(sessions.size>=maxGrants)return denied(res,429,'EDITOR_SESSION_LIMIT');const expiresAt=sessionExpiry();sessions.set(digest(credential),expiresAt);res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store','Set-Cookie':cookieName+'='+credential+'; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age='+Math.floor((expiresAt-now())/1000)});return res.end('{"ok":true}');}catch{return denied(res,400);}
   }
-  if(!authorized(req))return denied(res,401);const route=safePath(req.url);if(!route)return denied(res,404);
+  if(!authorized(req))return denied(res,401);const route=routeFor(req.url);if(!route)return denied(res,404);
   if(!['GET','HEAD','OPTIONS'].includes(req.method)&&req.headers.origin!==origin)return denied(res);
   try{await onActivity();}catch{return denied(res,503,'EDITOR_RUNTIME_UNAVAILABLE');}if(closed||res.destroyed)return;
-  const upstream=http.request({socketPath,path:route,method:req.method,headers:incoming(req,u.host)},reply=>{
-   const location=reply.headers.location;if(location){const normalized=safeRedirect(location,origin,route);if(!normalized){reply.destroy();return denied(res,502,'EDITOR_REDIRECT_REFUSED');}reply.headers.location=normalized;}
+  const upstream=http.request({socketPath,path:route,method:req.method,headers:incoming(req,u.host),...(purpose==='preview'?{agent:false}:{})},reply=>{
+   const location=reply.headers.location;if(location){const normalized=safeRedirect(location,origin,route,control);if(!normalized){reply.destroy();return denied(res,502,'EDITOR_REDIRECT_REFUSED');}reply.headers.location=normalized;}
    res.writeHead(reply.statusCode,outgoing(reply.headers,ownerOrigin));reply.on('error',()=>res.destroy());reply.pipe(res);
   });upstream.setTimeout(requestMs,()=>upstream.destroy());upstream.on('error',()=>{if(res.headersSent)res.destroy();else denied(res,502,'EDITOR_UPSTREAM_UNAVAILABLE');});req.on('aborted',()=>upstream.destroy());res.on('close',()=>upstream.destroy());req.pipe(upstream);
  });
  server.on('upgrade',async(req,socket,head)=>{
+  if(purpose==='preview'){socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
   const expires=authorized(req);if(!expires||req.headers.origin!==origin||req.headers.upgrade?.toLowerCase()!=='websocket'||!safePath(req.url)){socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
   socket.pause();try{await onActivity();}catch{socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');return;}if(closed||socket.destroyed){socket.destroy();return;}
   let peer,deadline;const request=http.request({socketPath,path:safePath(req.url),method:'GET',headers:incoming(req,u.host,true)});sockets.add(socket);
@@ -82,6 +85,6 @@ function createEditorBroker({sessionId,generation,origin,ownerOrigin,socketPath,
    socket.pipe(peer).pipe(socket);socket.resume();deadline=setTimeout(remove,Math.max(1,expires-now()));deadline.unref?.();
   });request.end();
  });
- return{server,sessionId,generation,origin,cookieName,issue(){if(closed||now()>=runtimeDeadline)throw Error('EDITOR_CLOSED');sweep();if(grants.size>=maxGrants)throw Error('EDITOR_GRANT_LIMIT');const v=token(),grantExpiresAt=Math.min(now()+grantMs,runtimeDeadline);grants.set(digest(v),grantExpiresAt);return{version:1,sessionId,generation,state:'ready',url:origin+'/__editor/bootstrap#'+v,grantExpiresAt,expiresAt:sessionExpiry()};},close(){closed=true;grants.clear();sessions.clear();for(const s of sockets)s.destroy();server.closeAllConnections();server.close();}};
+ return{server,sessionId,generation,origin,cookieName,issue(){if(closed||now()>=runtimeDeadline)throw Error('EDITOR_CLOSED');sweep();if(grants.size>=maxGrants)throw Error('EDITOR_GRANT_LIMIT');const v=token(),grantExpiresAt=Math.min(now()+grantMs,runtimeDeadline);grants.set(digest(v),grantExpiresAt);return{version:1,sessionId,generation,state:'ready',url:origin+control+'/bootstrap#'+v,grantExpiresAt,expiresAt:sessionExpiry()};},close(){if(closed)return;closed=true;grants.clear();sessions.clear();for(const s of sockets)s.destroy();server.closeAllConnections();server.close();}};
 }
 module.exports={createEditorBroker,safePath,safeRedirect,incoming,outgoing};

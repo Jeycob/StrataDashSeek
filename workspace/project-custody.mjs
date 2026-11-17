@@ -2,9 +2,9 @@ import {randomBytes} from 'node:crypto';
 import protocol from '../development/project-custody.cjs';
 const launches=new WeakMap(),failure=code=>Object.assign(Error(code),{code});
 // Trusted in-process opt-in only. Neither tool parameters nor HTTP accepts it.
-export function custodyLaunch(spec,context){
+export function custodyLaunch(spec,context,restartSeed){
  const control={version:1,nonce:randomBytes(32).toString('hex'),generation:randomBytes(16).toString('hex')};
- const launch=Object.freeze({...control,context:Object.freeze({...context})});launches.set(spec,launch);return JSON.stringify(control);
+ const launch=Object.freeze({...control,context:Object.freeze({...context}),restartSeed});launches.set(spec,launch);return JSON.stringify(control);
 }
 export const launchFor=spec=>launches.get(spec);
 export const startupEnvironment=protocol.startupEnvironment;

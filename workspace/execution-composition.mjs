@@ -16,18 +16,27 @@ import {installEditorSessions} from './editor-session.mjs';
 import {createProjectEditorAdapter} from './editor-runtime-adapter.mjs';
 import {retainHeavyToolLease} from '../efficiency/heavy-tool-lease.mjs';
 import {requireProjectExecutionMode} from './execution-mode-service.mjs';
+import {createHostPreview,previewSettings,previewSupported} from './host-preview.mjs';
 const require=createRequire(import.meta.url);
-const defaults=Object.freeze({hostRunner:createProjectCommandRunner,guestRunner:createGuestProjectCommandRunner,runtimeReceipts:createProjectRuntimeReceiptStore,appsReceipts:createProjectAppsReceiptStore,projectApps:createProjectAppsTools,editorSessions:installEditorSessions,editorAdapter:createProjectEditorAdapter});
+const defaults=Object.freeze({hostRunner:createProjectCommandRunner,guestRunner:createGuestProjectCommandRunner,runtimeReceipts:createProjectRuntimeReceiptStore,appsReceipts:createProjectAppsReceiptStore,projectApps:createProjectAppsTools,editorSessions:installEditorSessions,editorAdapter:createProjectEditorAdapter,hostPreview:createHostPreview,previewSupported});
 
 // Trusted source-only fixture seam: factories are supplied directly by test
 // code, never plugin config or a browser value. Production always uses defaults.
 export function composeProjectExecution(ctx,manager,{appsConfig,callApps,capabilities}={},factories=defaults){
  factories={...defaults,...factories};
  const execution=requireProjectExecutionMode(ctx),isolated=execution.snapshot.mode==='isolated-guest',check=()=>execution.assertUnchanged();check();
- const shell=isolated?null:factories.hostRunner(ctx,manager,{},execution);
+ let previewConfig=previewSettings(appsConfig?.hostPreview);
+ const editorEndpoints=appsConfig?.projectRuntime?.editorBrowser?.endpoints;
+ if(previewConfig&&editorEndpoints!==undefined){
+  const editor=previewSettings({enabled:true,ownerOrigin:appsConfig.projectRuntime.editorBrowser.ownerOrigin,endpoints:editorEndpoints});
+  if(!editor||editor.endpoints.some(endpoint=>previewConfig.endpoints.some(app=>app.origin===endpoint.origin||app.listenerPort===endpoint.listenerPort)))previewConfig=null;
+ }
+ const capture=!isolated&&!!previewConfig&&factories.previewSupported();
+ const shell=isolated?null:factories.hostRunner(ctx,manager,capture?{captureBackgroundCustody:true}:{},execution);
  if(!isolated){
   const project=registerProjectTool(ctx,manager,shell,execution),managedShell=createManagedShell(ctx,manager,shell,execution);
-  return{isolated,run:shell,install:managedShell.install,remove:managedShell.remove,handles:managedShell.handles,managerExecution:actual=>({...actual,agent:manager.ownerAgent(actual.agent),managedProjectShell:managedShell.handles(actual)}),async dispose(){managedShell.dispose();project.dispose();await shell.dispose?.();}};
+  const previews=factories.hostPreview(ctx,manager,shell,previewConfig,execution);
+  return{isolated,run:shell,previews,install(agent){managedShell.install(agent);previews.install(agent);},remove(agent){managedShell.remove(agent);previews.remove(agent);},handles:actual=>managedShell.handles(actual)||previews.handles(actual),managerExecution:actual=>({...actual,agent:manager.ownerAgent(actual.agent),managedProjectShell:managedShell.handles(actual)}),async dispose(){managedShell.dispose();project.dispose();await previews.dispose();await shell.dispose?.();}};
  }
  const runtimeReceipts=factories.runtimeReceipts(manager.root,{executionBinding:execution}),appsReceipts=factories.appsReceipts(manager.root,{assertActive:check});
  const run=factories.guestRunner(ctx,manager,{appsConfig,callApps,receiptStore:runtimeReceipts},execution);

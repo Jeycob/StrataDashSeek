@@ -12,6 +12,8 @@ export const projectCommandParameters = { type: 'object', properties: { command:
 export function createProjectCommandRunner(ctx, manager, config = {}, binding = manager.execution ?? ctx.projectExecutionMode) {
   const mode=bindProjectExecution(binding),check=()=>{if(mode.assertUnchanged().mode!=='host-compat')throw new WorkbenchError('PROJECT_EXECUTION_MODE_MISMATCH','The host executor requires explicit host compatibility.');};check();
   const processes = createProjectProcessStarter(ctx, {...config.processTimers,assertActive:check});
+  const restartSeeds=new WeakMap();
+  const comparable=spec=>JSON.stringify(Object.fromEntries(['command','workdir','env','dshEnv','sandboxPolicy','stdoutMaxBytes'].map(key=>[key,spec[key]])));
   async function prepare(args, execution, custody = false) {
     check();
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !Object.hasOwn(projectCommandParameters.properties, key))) throw new WorkbenchError('INVALID_COMMAND', 'Only command, description, workdir, timeoutMs and run_in_background are supported for managed commands.', 400);
@@ -40,14 +42,17 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
     if(custody&&!background)throw new WorkbenchError('PROJECT_CUSTODY_BACKGROUND_REQUIRED','Custody requires explicit owned background execution.');
     const command = 'exec ' + [node, wrapper, ...(custody?['--host-custody-v1']:[]), '--', 'bash', '-o', 'pipefail', '-c', compatible.command].map(quote).join(' ');
     const spec = ctx.shell.resolve({ command, workdir: cwd, timeoutMs: background ? projectJobLifetime(args.timeoutMs) : Math.min(120000, Math.max(1000, args.timeoutMs ?? 60000)), signal: execution.signal, onExpiry: background ? 'none' : 'kill', ...(custody?{env:startupEnvironment(),stdoutMaxBytes:65536}:{}), dshEnv: { ...ctx.shellEnv.collect(execution), DSH_PROJECT_ROOT: project.root, DSH_PROJECT_READ_ONLY: mode === 'read-only' ? '1' : '0' }, sandboxPolicy: { mode, workspaceRoot: project.root, additionalWritableRoots: mode === 'read-only' ? [] : project.gitWritableRoots ?? [] } });
-    if(custody)spec.stdin=custodyLaunch(spec,{projectSessionId:agent.id,workspaceId:project.workspaceId??null,projectRoot:realRoot});
+    if(custody){
+      const seed=Object.freeze({});restartSeeds.set(seed,{args:Object.freeze({...args}),owner:execution.agent.id,deadline:Math.floor(Date.now()+projectJobLifetime(args.timeoutMs)),spec:comparable(spec)});
+      spec.stdin=custodyLaunch(spec,{projectSessionId:agent.id,workspaceId:project.workspaceId??null,projectRoot:realRoot},seed);
+    }
     const adaptations = [];
     if (filtered.changed) adaptations.push(filtered.reason === 'VERIFICATION_STATUS_ECHO_REMOVED' ? '[Harness: terminal status echo and display filters removed; the direct verifier retains its real exit code and bounded diagnostics.]' : filtered.reason === 'VERIFICATION_OUTPUT_FILTERS_REMOVED' ? '[Harness: terminal display filters removed from verification; bounded output preserves progress and the real exit status.]' : '[Harness: terminal tail filter removed from verification; bounded output retains the first diagnostic.]');
     if (compatible.changed) adaptations.push('[Harness: Node test compatibility helper used; directory operands select real test files, with original options and exit status retained.]');
     return { cwd, spec, adaptations };
   }
   const run = async (args, execution) => {
-    const prepared = await prepare(args, execution);
+    const prepared = await prepare(args, execution,config.captureBackgroundCustody===true&&args?.run_in_background===true);
     check();
     execution.signal.throwIfAborted();
     if (args.run_in_background === true) return { ...prepared, background: await processes.start(prepared, execution, args) };
@@ -65,6 +70,17 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
     await processes.custodyFor(background.jobId,execution.agent.id,{signal:execution.signal});return background;
   };
   run.custodyFor = processes.custodyFor;
+  run.producerFor=processes.producerFor;run.stopOwned=processes.stopOwned;
+  run.startCaptured=async(seed,execution,{deadline,onAdmitted})=>{
+    const admitted=restartSeeds.get(seed);
+    if(!admitted||execution.agent?.id!==admitted.owner||!Number.isSafeInteger(deadline))throw new WorkbenchError('PROJECT_CUSTODY_SEED_INVALID','No exact owned admitted restart specification.');
+    const prepared=await prepare(admitted.args,execution,true);
+    if(comparable(prepared.spec)!==admitted.spec)throw new WorkbenchError('PROJECT_CUSTODY_SPEC_CHANGED','Project command context changed; restart refused.');
+    prepared.hardDeadline=Math.min(deadline,admitted.deadline);
+    const background=await processes.start(prepared,execution,admitted.args);
+    try{onAdmitted?.(background,processes.producerFor(background.jobId,execution.agent.id));await processes.custodyFor(background.jobId,execution.agent.id,{signal:execution.signal});return background;}
+    catch(error){try{await processes.stopOwned(background.jobId,execution.agent.id);}catch{}throw error;}
+  };
   return run;
 }
 
