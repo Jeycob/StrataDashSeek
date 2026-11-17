@@ -1,0 +1,4 @@
+interface:
+  display_name: "Zlepšování HomeAI"
+  short_description: "Vývoj, produktové QA a benchmarky HomeAI"
+  default_prompt: "Použij $homeai-improve pro tento úkol na HomeAI a ověř jeho uživatelský výsledek."
