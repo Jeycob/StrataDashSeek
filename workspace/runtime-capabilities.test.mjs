@@ -1,14 +1,37 @@
+import { hostExecutionBinding, isolatedExecutionBinding, executionBindingFixture } from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import fsPromises from 'node:fs/promises';
-import { createRuntimeCapabilities, runtimeCapabilitiesFallback } from './runtime-capabilities.mjs';
+import { createRuntimeCapabilities, runtimeCapabilitiesFallback, isolatedRuntimeCapabilitiesFallback } from './runtime-capabilities.mjs';
 
 const root = path.resolve('/capability-test/workspaces'), project = path.join(root, 'projects', 'own'), id = 'a'.repeat(16), otherId = 'b'.repeat(16), cid = 'c'.repeat(64), MIB = 1024 ** 2;
+
+test('capability mode requires a trusted binding, never a config string or Apps availability',async()=>{
+  assert.throws(()=>createRuntimeCapabilities({workspaceRoot:root,executionMode:'host-compat'}),{code:'PROJECT_EXECUTION_BINDING_REQUIRED'});
+  const host=await fixture({state:ownState(),executionMode:'isolated-guest'}).service.snapshot(project);assert.equal(host.version,1);assert(Array.isArray(host.recipes.verify));
+  const guest=fixture({state:{enabled:false,available:false,projects:[]}},isolatedExecutionBinding());const value=await guest.service.snapshot(project);assert.equal(value.version,2);assert.equal(value.apps.state,'configured');assert.deepEqual(value.recipes.register,{tool:'project_apps',arguments:{operation:'register'}});assert.doesNotMatch(guest.service.renderContext(project),/apps-cli\.cjs|\/data\/harness/);
+});
+
+test('isolated recipes are typed, project scoped and contain no host CLI authority',async()=>{
+  const job='d'.repeat(16),f=fixture({state:ownState({jobs:[{id:job,projectId:id,action:'verify',status:'running'}]})},isolatedExecutionBinding()),value=await f.service.snapshot(project);
+  assert.deepEqual(value.recipes.verify_deploy,{tool:'project_apps',arguments:{operation:'verify_deploy'}});assert.equal(value.recipes.verify,undefined);assert.equal(value.version,2);
+  assert.deepEqual(value.jobTracking.jobs,[{id:job,status:{tool:'project_apps',arguments:{operation:'job_status',jobId:job}},logs:{tool:'project_apps',arguments:{operation:'job_log',jobId:job}}}]);
+  assert.equal(value.verificationRecipes.documentation,'/opt/homeai/quality/README.md');assert.equal(value.jobTracking.repeatSubmission,false);assert.doesNotMatch(JSON.stringify(value),/apps-cli\.cjs|\/data\/harness/);assert.doesNotMatch(isolatedRuntimeCapabilitiesFallback,/apps-cli\.cjs|\/data\/harness/);
+});
+
+for(const mode of ['host-compat','isolated-guest'])test('stale '+mode+' binding cannot return cached or pending capability results',async()=>{
+  const b=executionBindingFixture(mode),f=fixture({state:ownState()},b.binding);await f.service.snapshot(project);b.fail();await assert.rejects(f.service.snapshot(project),{code:'PROJECT_EXECUTION_BINDING_CHANGED'});assert.throws(()=>f.service.renderContext(project),{code:'PROJECT_EXECUTION_BINDING_CHANGED'});
+  const pendingBinding=executionBindingFixture(mode);let entered,finish;const started=new Promise(resolve=>entered=resolve),g=fixture({readAppsState:()=>{entered();return new Promise(resolve=>finish=resolve);}},pendingBinding.binding),pending=g.service.snapshot(project);await started;pendingBinding.fail();finish(ownState());await assert.rejects(pending,{code:'PROJECT_EXECUTION_BINDING_CHANGED'});
+});
+
+test('mode change during filesystem metadata wait stops before another read',async()=>{
+  const b=executionBindingFixture('isolated-guest'),f=fixture({},b.binding);let calls=0;f.fs.realpath=async p=>{calls++;b.fail();return p;};await assert.rejects(f.service.snapshot(project),{code:'PROJECT_EXECUTION_BINDING_CHANGED'});assert.equal(calls,1);
+});
 test('resource refusal guidance distinguishes unsupported environment from application repair and unknown-start replay',()=>{
  assert.match(runtimeCapabilitiesFallback,/MANAGED_RESOURCE_\*/);assert.match(runtimeCapabilitiesFallback,/keep deployment unverified/);assert.match(runtimeCapabilitiesFallback,/resourceDiagnostic/);assert.match(runtimeCapabilitiesFallback,/Do not repair application code or rebuild an image solely for SwapLimit=false/);assert.match(runtimeCapabilitiesFallback,/replay an unknown start/);
 });
-function fixture({ files = ['Dockerfile', '.dockerignore', '.harness-app.json', 'compose.yaml'], free = 3 * 1024 ** 3, state, ...options } = {}) {
+function fixture({ files = ['Dockerfile', '.dockerignore', '.harness-app.json', 'compose.yaml'], free = 3 * 1024 ** 3, state, ...options } = {}, executionBinding = hostExecutionBinding()) {
   const reads = [], fileSet = new Set(files), clock = { value: 10000 };
   const fs = {
     realpath: async p => { reads.push(['realpath', p]); return p; },
@@ -16,7 +39,7 @@ function fixture({ files = ['Dockerfile', '.dockerignore', '.harness-app.json', 
     lstat: async p => { reads.push(['lstat', p]); if (!fileSet.has(path.basename(p))) throw Object.assign(Error('absent'), { code: 'ENOENT' }); return { isFile: () => true, isSymbolicLink: () => false }; },
     statfs: async p => { reads.push(['statfs', p]); return { bavail: BigInt(free), bsize: 1n }; },
   };
-  const service = createRuntimeCapabilities({ workspaceRoot: root, capacityPath: root, fs, now: () => clock.value, ...(state === undefined ? {} : { readAppsState: async () => { reads.push(['apps']); return state; } }), ...options });
+  const service = createRuntimeCapabilities({ workspaceRoot: root, capacityPath: root, fs, now: () => clock.value, ...(state === undefined ? {} : { readAppsState: async () => { reads.push(['apps']); return state; } }), ...options }, executionBinding);
   return { service, reads, clock, fs };
 }
 function ownState(extra = {}) { return { enabled: true, available: true, worker: { phase: 'ready', freeBytes: 900 * MIB }, projects: [{ id, path: path.relative(root, project), imageId: 'sha256:' + cid, containerId: cid }], ...extra }; }

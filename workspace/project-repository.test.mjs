@@ -1,3 +1,4 @@
+import { isolatedExecutionBinding } from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -72,7 +73,7 @@ test('allocation refuses existing targets, missing commits, private path conflic
 test('manager enrolls fresh independent projects, retains existing shared records and preserves explicit continue mode', async t => {
   const f = await fixture(t), grants = [], directories = new Map();
   const ctx = { agents: { list: () => [] }, workspaceRegistry: { list: () => [] }, workingDirectory: { get: session => directories.get(session.id) ?? f.sourceRoot, set: async (agent, root) => directories.set(agent.id, root) }, sandboxPolicy: { registerWritableRoot: (session, root) => { grants.push({ id: session.id, root }); return { dispose() {} }; } }, worktrees: { create: () => { throw Error('SHARED_WORKTREE_MUST_NOT_RUN'); } }, logger: { warn: message => { throw Error(message); } } };
-  const manager = new WorkspaceManager(ctx, { stateRoot: path.join(f.directory, 'state'), projectsRoot: f.projectsRoot });
+  const manager = new WorkspaceManager(ctx, { stateRoot: path.join(f.directory, 'state'), projectsRoot: f.projectsRoot }, isolatedExecutionBinding());
   await manager.initialize(); manager.data.installedAt = 0; manager.settings = () => ({ projectMode: 'fresh', maxStageSteps: 60 }); t.after(() => manager.changes.dispose());
   const agent = { id: 'managed', session: { id: 'managed', header: { cwd: f.sourceRoot, createdAt: Date.now(), origin: 'user' } } };
   const record = await manager.ensureProject(agent); assert.equal(record.independentRepository, true); assert.equal(record.nativeWorktree, false); assert.equal(record.gitWritableRoots, undefined);
@@ -93,7 +94,7 @@ test('manager captures the private baseline before any publication and never ret
     get: session => directories.get(session.id) ?? f.sourceRoot,
     set: async (agent, root) => { assert(captured.has(agent.id)); directories.set(agent.id, root); }
   }, sandboxPolicy: { registerWritableRoot: (session, root) => { assert(captured.has(session.id)); grants.push({ id: session.id, root }); return { dispose() {} }; } }, logger: { warn: message => warnings.push(message) } };
-  const manager = new WorkspaceManager(ctx, { stateRoot: path.join(f.directory, 'state'), projectsRoot: f.projectsRoot, changes: { minimumFreeBytes: 0 } });
+  const manager = new WorkspaceManager(ctx, { stateRoot: path.join(f.directory, 'state'), projectsRoot: f.projectsRoot, changes: { minimumFreeBytes: 0 } }, isolatedExecutionBinding());
   await manager.initialize(); manager.data.installedAt = 0; manager.settings = () => ({ projectMode: 'fresh', maxStageSteps: 60 }); t.after(() => manager.changes.dispose());
   const initialize = manager.changes.initialize.bind(manager.changes), git = manager.changes.git.bind(manager.changes); let failedGitCalls = 0;
   t.mock.method(manager.changes, 'initialize', async (id, record, options) => {

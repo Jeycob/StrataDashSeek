@@ -1,3 +1,4 @@
+import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { RepairBudget } from './policy.mjs';
@@ -86,7 +87,7 @@ test('existing block never auto-resumes or clears consumed steps on new human re
 function managedFixture() {
   const { record, budget } = fixture(); record.firstCheckGuided = true; record.stageBudgetWarningStage = budget.stage;
   const owner = { id: 'owner', session: { id: 'owner', header: {} } }, child = { id: 'child', session: { id: 'child', header: {} } };
-  const manager = new WorkspaceManager({}); manager.ownerAgent = () => owner;
+  const manager = new WorkspaceManager({}, {}, hostExecutionBinding()); manager.ownerAgent = () => owner;
   manager.data = { sessions: { owner: record }, trash: {} }; manager.ensureProject = async () => record;
   manager.locks.acquire = async () => {}; manager.save = async () => {};
   manager.settings = () => ({ maxStageSteps: 60, maxAutomaticChecks: 0 }); manager.budgets.set(owner.id, budget);

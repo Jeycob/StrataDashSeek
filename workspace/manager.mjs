@@ -14,22 +14,25 @@ import { verificationStatusMayBeMasked } from './shell-status.mjs';
 import { beginUserRequest } from './turn-budget.mjs';
 import { prepareAutomaticRequest, automaticReview, admitAutomaticStep } from './automatic-review.mjs';
 import { registeredSelection, validateWorkspaceModel } from './model-selection.mjs';
+import { createIndependentProject } from './project-repository.mjs';
+import { bindProjectExecution } from './execution-mode.mjs';
 import privateSource from './source-private.cjs';
 const { isPrivateSourcePath } = privateSource;
 const run = promisify(execFile);
 const notice = text => ({ id: crypto.randomUUID(), role: 'user', source: { kind: 'workspace-runtime' }, content: [{ type: 'text', text }] });
 
 export class WorkspaceManager {
-  constructor(ctx, config = {}) {
+  constructor(ctx, config = {}, executionBinding) {
+    Object.defineProperty(this, 'execution', { value: bindProjectExecution(executionBinding), enumerable: true });
     this.ctx = ctx; this.config = config; this.repairPolicyVersion = REPAIR_POLICY_VERSION;
     this.root = config.stateRoot ?? '/data/harness/state/workbench'; this.projectsRoot = config.projectsRoot ?? '/data/harness/workspaces/projects';
     this.file = path.join(this.root, 'registry.json'); this.locks = new ProjectLocks(path.join(this.root, 'leases'));
-    this.changes = new LiveChanges({ ...config.changes, stateRoot: path.join(this.root, 'changes') });
+    this.changes = new LiveChanges({ ...config.changes, stateRoot: path.join(this.root, 'changes') }, this.execution);
     this.serial = Promise.resolve(); this.persistQueue = Promise.resolve(); this.running = new Map(); this.grants = new Map(); this.budgets = new Map(); this.frozenSettings = new Map(); this.pendingNotices = new Map(); this.pendingDiagnostics = new Map(); this.resultWork = new Map(); this.automaticReviews = new Map();
   }
   async initialize() {
-    await fs.mkdir(this.root, { recursive: true, mode: 0o700 }); await fs.mkdir(this.projectsRoot, { recursive: true, mode: 0o700 });
-    this.data = await readJSON(this.file, { version: 1, installedAt: Date.now(), workspaces: {}, sessions: {}, trash: {} });
+    await this.checked(() => fs.mkdir(this.root, { recursive: true, mode: 0o700 })); await this.checked(() => fs.mkdir(this.projectsRoot, { recursive: true, mode: 0o700 }));
+    this.data = await this.checked(() => readJSON(this.file, { version: 1, installedAt: Date.now(), workspaces: {}, sessions: {}, trash: {} }));
     await this.save();
     for (const [id, record] of Object.entries(this.data.sessions)) this.budgets.set(id, new RepairBudget(record.budget));
     // Never migrate a live legacy conversation just because this plugin loaded.
@@ -38,15 +41,17 @@ export class WorkspaceManager {
       const root = this.ctx.workingDirectory.get(agent.session);
       try { await this.locks.acquire(root, agent.id); this.running.set(agent.id, root); } catch (error) { this.ctx.logger.warn('Workspace lease conflict during live enrollment: ' + error.code); }
     }
+    this.execution.assertUnchanged();
   }
-  inOrder(action) { const next = this.serial.then(action); this.serial = next.catch(() => {}); return next; }
-  save() { const snapshot = structuredClone(this.data); const next = this.persistQueue.then(() => atomicJSON(this.file, snapshot)); this.persistQueue = next.catch(() => {}); return next; }
+  async checked(action) { this.execution.assertUnchanged(); const value = await action(); this.execution.assertUnchanged(); return value; }
+  inOrder(action) { const next = this.serial.then(() => this.checked(action)); this.serial = next.catch(() => {}); return next; }
+  save() { this.execution.assertUnchanged(); const snapshot = structuredClone(this.data); const next = this.persistQueue.then(() => this.checked(() => atomicJSON(this.file, snapshot))); this.persistQueue = next.catch(() => {}); return next; }
   workspaceFor(session) { return this.ctx.workspaceRegistry.list().find(w => w.sessionIds.includes(session.id) || w.path === session.header.cwd); }
   settings(session) { const workspace = this.workspaceFor(session); return validateSettings(this.data.workspaces[workspace?.id ?? session.header.cwd]?.settings ?? {}); }
   async updateSettings(workspaceId, input) {
     return this.inOrder(async () => {
       if (!this.ctx.workspaceRegistry.get(workspaceId)) throw new WorkbenchError('WORKSPACE_NOT_FOUND', 'Workspace not found.', 404);
-      const settings = validateSettings(input); await validateWorkspaceModel(this.ctx, input);
+      const settings = validateSettings(input); await this.checked(() => validateWorkspaceModel(this.ctx, input));
       const overrides = Object.fromEntries(Object.keys(input).map(key => [key, settings[key]]));
       const previous = this.data.workspaces[workspaceId];
       this.data.workspaces[workspaceId] = { settings: overrides, at: Date.now() };
@@ -55,13 +60,16 @@ export class WorkspaceManager {
     });
   }
   async applyDefaults(agent, source) {
+    this.execution.assertUnchanged();
     if (source !== 'startup' || agent.session.header.origin === 'subagent' || agent.session.header.isSeeded || this.data.modelPreferences?.[agent.id]) return;
     const settings = this.settings(agent.session);
     // Deliberately do not save the selection as the account-wide last-used default.
     const selection = await registeredSelection(this.ctx, settings, { defaultEffort: true });
+    this.execution.assertUnchanged();
     agent.model.select(selection);
   }
   async allocatePorts() {
+    this.execution.assertUnchanged();
     const used = new Set(Object.values(this.data.sessions).flatMap(x => x.ports ?? []));
     const start = this.config.portBase ?? 21000;
     for (let base = start; base < start + 4000; base += 4) {
@@ -74,13 +82,33 @@ export class WorkspaceManager {
     throw new WorkbenchError('NO_FREE_PORTS', 'No free project port allocation remains.');
   }
   async ensureProject(agent, signal) {
+    return this.execution.assertUnchanged().mode === 'isolated-guest' ? this.ensureIsolatedProject(agent, signal) : this.ensureHostProject(agent, signal);
+  }
+  independentRecord(record) { return Boolean(record && !record.legacy && !record.nativeWorktree && record.independentRepository === true && record.settings?.projectMode !== 'continue'); }
+  async assertIndependentProject(record, ownerId) {
+    if (this.execution.assertUnchanged().mode !== 'isolated-guest' || !this.independentRecord(record)) throw new WorkbenchError('PROJECT_RUNTIME_NOT_ISOLATED', 'This conversation needs an independently enrolled project. Existing files are retained.');
+    const root = await this.checked(() => fs.realpath(record.root)), base = await this.checked(() => fs.realpath(this.projectsRoot));
+    if (root !== record.root || path.dirname(root) !== base) throw new WorkbenchError('PROJECT_RUNTIME_NOT_ISOLATED', 'Project path is not independently enrolled.');
+    if (Object.entries(this.data.sessions).some(([id, other]) => id !== ownerId && typeof other.root === 'string' && (within(root, other.root) || within(other.root, root)))) throw new WorkbenchError('PROJECT_RUNTIME_SHARED', 'Project directories overlap.');
+    const git = path.join(root, '.git'), info = await this.checked(() => fs.lstat(git));
+    if (!info.isDirectory() || info.isSymbolicLink() || await this.checked(() => fs.realpath(git)) !== git) throw new WorkbenchError('PROJECT_RUNTIME_GIT_SHARED', 'Project Git metadata is shared.');
+    for (const name of ['commondir', 'objects/info/alternates', 'objects/info/http-alternates']) {
+      try { await this.checked(() => fs.lstat(path.join(git, name))); }
+      catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      throw new WorkbenchError('PROJECT_RUNTIME_GIT_SHARED', 'Project Git metadata borrows another repository.');
+    }
+    return root;
+  }
+  // The existing6b enrollment path is retained as an explicit composition.
+  async ensureHostProject(agent, signal) {
+    if (this.execution.assertUnchanged().mode !== 'host-compat') throw new WorkbenchError('PROJECT_EXECUTION_MODE_MISMATCH', 'Host enrollment is unavailable in this execution mode.');
     const current = this.ctx.workingDirectory.get(agent.session);
     if (agent.session.header.origin === 'subagent') return { root: current, legacy: true };
     return this.inOrder(async () => {
       let record = this.data.sessions[agent.id];
       if (record) {
         if (!this.grants.has(agent.id) && !within(agent.session.header.cwd, record.root)) this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, record.root));
-        if (current !== record.root) await this.ctx.workingDirectory.set(agent, record.root, signal);
+        if (current !== record.root) await this.checked(() => this.ctx.workingDirectory.set(agent, record.root, signal));
         return record;
       }
       const createdAt = typeof agent.session.header.createdAt === 'number' ? agent.session.header.createdAt : Date.parse(agent.session.header.createdAt);
@@ -93,46 +121,94 @@ export class WorkspaceManager {
       if (settings.projectMode !== 'fresh' && settings.projectMode !== 'continue') {
         try {
           const options = { cwd: current, timeout: 10000, maxBuffer: 4 * 1024 * 1024, env: { PATH: process.env.PATH, HOME: process.env.HOME, LANG: 'C.UTF-8', GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' } };
-          repository = (await run('git', ['-c', 'core.fsmonitor=false', '-c', 'protocol.allow=never', 'rev-parse', '--show-toplevel'], options)).stdout.trim();
-          baseCommit = (await run('git', ['-c', 'protocol.allow=never', 'rev-parse', '--verify', (settings.baseCommit ?? 'HEAD') + '^{commit}'], options)).stdout.trim();
-          await run('git', ['-c', 'protocol.allow=never', 'rev-list', '--objects', '--missing=error', baseCommit, '--'], options);
-        } catch (error) { if (settings.projectMode === 'worktree') throw new WorkbenchError('COMMIT_REQUIRED', 'Existing projects require an available local Git commit before creating a worktree.'); }
+          repository = (await this.checked(() => run('git', ['-c', 'core.fsmonitor=false', '-c', 'protocol.allow=never', 'rev-parse', '--show-toplevel'], options))).stdout.trim();
+          baseCommit = (await this.checked(() => run('git', ['-c', 'protocol.allow=never', 'rev-parse', '--verify', (settings.baseCommit ?? 'HEAD') + '^{commit}'], options))).stdout.trim();
+          await this.checked(() => run('git', ['-c', 'protocol.allow=never', 'rev-list', '--objects', '--missing=error', baseCommit, '--'], options));
+        } catch (error) { this.execution.assertUnchanged(); if (settings.projectMode === 'worktree') throw new WorkbenchError('COMMIT_REQUIRED', 'Existing projects require an available local Git commit before creating a worktree.'); }
       }
       if (repository && !baseCommit) throw new WorkbenchError('COMMIT_REQUIRED', 'Commit the existing repository before creating an isolated checkout.');
       let root, branch, nativeWorktree = false;
       if (repository && baseCommit) {
-        const result = await this.ctx.worktrees.create(agent, { from: baseCommit }, signal);
+        const result = await this.checked(() => this.ctx.worktrees.create(agent, { from: baseCommit }, signal));
         root = result.path; branch = result.branch; baseCommit = result.baseCommit; nativeWorktree = true;
-      } else if (settings.projectMode === 'continue') root = await fs.realpath(current);
+      } else if (settings.projectMode === 'continue') root = await this.checked(() => fs.realpath(current));
       else {
         root = path.join(this.projectsRoot, agent.id.replace(/[^a-zA-Z0-9_-]/gu, '_'));
-        await fs.mkdir(root, { mode: 0o700 });
+        await this.checked(() => fs.mkdir(root, { mode: 0o700 }));
         this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, root));
-        await this.ctx.workingDirectory.set(agent, root, signal);
+        await this.checked(() => this.ctx.workingDirectory.set(agent, root, signal));
       }
-      const ports = await this.allocatePorts(), databasePath = path.join(root, '.harness', 'data', 'app.sqlite');
+      const ports = await this.checked(() => this.allocatePorts()), databasePath = path.join(root, '.harness', 'data', 'app.sqlite');
       let gitWritableRoots;
       if (nativeWorktree) {
         const gitOptions = { cwd: root, timeout: 10000, env: { ...process.env, GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0' } };
-        const gitDir = await fs.realpath((await run('git', ['rev-parse', '--absolute-git-dir'], gitOptions)).stdout.trim());
-        const common = await fs.realpath(path.resolve(root, (await run('git', ['rev-parse', '--git-common-dir'], gitOptions)).stdout.trim()));
+        const gitDir = await this.checked(async () => fs.realpath((await this.checked(() => run('git', ['rev-parse', '--absolute-git-dir'], gitOptions))).stdout.trim()));
+        const common = await this.checked(async () => fs.realpath(path.resolve(root, (await this.checked(() => run('git', ['rev-parse', '--git-common-dir'], gitOptions))).stdout.trim())));
         // Commit metadata only; never grant the source checkout, hooks or config.
         gitWritableRoots = [gitDir];
-        for (const part of ['objects', 'refs', 'logs']) { const candidate = path.join(common, part); try { gitWritableRoots.push(await fs.realpath(candidate)); } catch {} }
+        for (const part of ['objects', 'refs', 'logs']) { const candidate = path.join(common, part); try { gitWritableRoots.push(await this.checked(() => fs.realpath(candidate))); } catch { this.execution.assertUnchanged(); } }
       }
-      await fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 });
+      await this.checked(() => fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 }));
       if (settings.projectMode !== 'continue') {
-        const ignore = path.join(root, '.gitignore'), before = await fs.readFile(ignore, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
-        if (!before.split(/\r?\n/u).includes('.harness/')) await fs.writeFile(ignore, before + (before.endsWith('\n') || !before ? '' : '\n') + '\n# Private Harness runtime state\n.harness/\n');
+        const ignore = path.join(root, '.gitignore'), before = await this.checked(() => fs.readFile(ignore, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; }));
+        if (!before.split(/\r?\n/u).includes('.harness/')) await this.checked(() => fs.writeFile(ignore, before + (before.endsWith('\n') || !before ? '' : '\n') + '\n# Private Harness runtime state\n.harness/\n'));
       }
       record = { root, sourceRoot: current, workspaceId: workspace?.id, ports, databasePath, baseCommit, branch, nativeWorktree, gitWritableRoots, at: Date.now(), settings };
       this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save();
-      await atomicJSON(path.join(root, '.harness', 'project.json'), { sessionId: agent.id, ports, databasePath, baseCommit, root });
+      await this.checked(() => atomicJSON(path.join(root, '.harness', 'project.json'), { sessionId: agent.id, ports, databasePath, baseCommit, root }));
       // Change tracking is optional: a full source baseline must never prevent
       // the user's project from starting when disk reserve is unavailable.
-      try { await this.changes.initialize(agent.id, record, { projectCreated: true, signal }); }
-      catch (error) { this.ctx.logger?.warn('Change baseline unavailable: ' + (error.code ?? 'CHANGES_UNAVAILABLE')); }
+      try { await this.checked(() => this.changes.initialize(agent.id, record, { projectCreated: true, signal })); }
+      catch (error) { this.execution.assertUnchanged(); this.ctx.logger?.warn('Change baseline unavailable: ' + (error.code ?? 'CHANGES_UNAVAILABLE')); }
       this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec use the same confined foreground project executor and export PORT, API_PORT, DATABASE_URL and the prepared tool paths. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs; quality contract documentation: /data/harness/app/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Verification never renews the total task allowance. Repeated identical errors without progress or an exhausted allowance stop safely with retained files.`));
+      return record;
+    });
+  }
+  async ensureIsolatedProject(agent, signal) {
+    if (this.execution.assertUnchanged().mode !== 'isolated-guest') throw new WorkbenchError('PROJECT_EXECUTION_MODE_MISMATCH', 'Guest enrollment requires isolated mode.');
+    const current = this.ctx.workingDirectory.get(agent.session);
+    if (agent.session.header.origin === 'subagent') return { root: current, legacy: true };
+    return this.inOrder(async () => {
+      let record = this.data.sessions[agent.id];
+      if (record) {
+        if (!this.independentRecord(record)) return record; // Retain existing host records without granting, copying or relabeling.
+        await this.assertIndependentProject(record, agent.id);
+        if (!this.grants.has(agent.id) && !within(agent.session.header.cwd, record.root)) this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, record.root));
+        if (current !== record.root) await this.checked(() => this.ctx.workingDirectory.set(agent, record.root, signal));
+        return record;
+      }
+      const createdAt = typeof agent.session.header.createdAt === 'number' ? agent.session.header.createdAt : Date.parse(agent.session.header.createdAt);
+      if (this.existing.has(agent.id) || !Number.isFinite(createdAt) || createdAt < this.data.installedAt) {
+        record = { root: current, sourceRoot: current, legacy: true, at: Date.now() };
+        this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save(); return record;
+      }
+      const settings = this.settings(agent.session), workspace = this.workspaceFor(agent.session);
+      let root, branch, baseCommit, sourceCommit, independentRepository = false;
+      const nativeWorktree = false;
+      if (settings.projectMode === 'continue') {
+        root = await this.checked(() => fs.realpath(current));
+        record = { root, sourceRoot:current, workspaceId:workspace?.id, nativeWorktree:false, independentRepository:false, at:Date.now(), settings };
+        this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save();
+        return record;
+      } else {
+        ({ root, branch, baseCommit, sourceCommit, independentRepository } = await this.checked(() => createIndependentProject({ projectsRoot: this.projectsRoot, sessionId: agent.id, sourceRoot: current, mode: settings.projectMode, baseCommit: settings.baseCommit, signal })));
+      }
+      const ports = await this.checked(() => this.allocatePorts()), databasePath = path.join(root, '.harness', 'data', 'app.sqlite');
+      await this.checked(() => fs.mkdir(path.dirname(databasePath), { recursive: true, mode: 0o700 }));
+      record = { root, sourceRoot: current, workspaceId: workspace?.id, ports, databasePath, baseCommit, sourceCommit, branch, independentRepository, nativeWorktree, at: Date.now(), settings };
+      await this.checked(() => atomicJSON(path.join(root, '.harness', 'project.json'), { sessionId: agent.id, ports, databasePath, baseCommit, root }));
+      // Change tracking is optional: a full source baseline must never prevent
+      // the user's project from starting when disk reserve is unavailable.
+      // Capture Git while this fresh independent root is still unpublished:
+      // neither an executor nor the editor may mutate its object store yet.
+      try { await this.checked(() => this.changes.initialize(agent.id, record, { projectCreated: true, signal })); }
+      catch (error) { this.execution.assertUnchanged(); this.ctx.logger?.warn('Change baseline unavailable: ' + (error.code ?? 'CHANGES_UNAVAILABLE')); }
+      this.data.sessions[agent.id] = record; this.budgets.set(agent.id, new RepairBudget()); await this.save();
+      if (independentRepository) {
+        this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, root));
+        await this.checked(() => this.ctx.workingDirectory.set(agent, root, signal));
+      }
+      this.pendingNotices.set(agent.id, notice(`Project files are prepared. Command and editor readiness are checked separately when requested. Work only in ${JSON.stringify(root)}. ${sourceCommit ? `Source commit: ${sourceCommit}; independent shallow Git baseline, with no borrowed object store. Source checkout and uncommitted files were not copied or changed.` : independentRepository ? 'This independent task has a new empty Git repository and an initial commit.' : 'This conversation retains its selected existing directory; commands require an independently enrolled project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec require the same isolated guest executor, where this project is mounted at /workspace and DATABASE_URL=file:/workspace/.harness/data/app.sqlite. PORT, API_PORT and TEST_PORT use the assigned values. If runtime admission or prepared tools are unavailable, report the diagnostic and retain the files. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. When the immutable guest toolchain is available, its quality contract documentation is /opt/homeai/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Verification never renews the total task allowance. Repeated identical errors without progress or an exhausted allowance stop safely with retained files.`));
       return record;
     });
   }
@@ -142,17 +218,19 @@ export class WorkspaceManager {
     if (this.data.trash[agent.id]) throw new WorkbenchError('SESSION_IN_TRASH', 'Restore this conversation before continuing.');
     const record = await this.ensureProject(agent, signal);
     if (!record.legacy && this.environmentReady) {
-      const environment = await this.environmentReady, kind = this.settings(agent.session).environment;
+      const environment = await this.checked(() => this.environmentReady), kind = this.settings(agent.session).environment;
       if (kind === 'web' && !environment.browser?.ok || kind === 'dotnet' && !environment.dotnet?.available) throw new WorkbenchError('ENVIRONMENT_UNAVAILABLE', 'Prepared environment preflight failed. Open Workspace → Environment; do not install replacements.', 503);
     }
-    await this.locks.acquire(record.root, agent.id); this.running.set(agent.id, record.root);
-    await this.ensureRestoreRecovered(agent.id, record.root);
+    this.execution.assertUnchanged(); await this.locks.acquire(record.root, agent.id);
+    try { this.execution.assertUnchanged(); } catch (error) { await this.locks.release(agent.id); throw error; }
+    this.running.set(agent.id, record.root);
+    await this.checked(() => this.ensureRestoreRecovered(agent.id, record.root));
     const budget = this.budgets.get(agent.id), settings = this.settings(agent.session);
     // Do not replace a request's accounting while one of its child steps is
     // still completing a verification through the owner-scoped observer.
     const pendingReview = this.automaticReviews.get(agent.id);
     if (pendingReview) { try { await pendingReview; } catch (error) { if (signal?.aborted) throw error; } }
-    signal?.throwIfAborted();
+    signal?.throwIfAborted(); this.execution.assertUnchanged();
     const effective = { ...DEFAULTS, ...settings }, freshHuman = prepareAutomaticRequest(record, budget, { turn, messages, owner: initiator === agent.id }, effective.maxStageSteps);
     if (initiator === agent.id && beginUserRequest(record, budget, { turn, messages })) {
       delete record.stageBudgetWarningStage; delete record.stageBudgetWarningInspection;
@@ -164,11 +242,11 @@ export class WorkspaceManager {
         review = automaticReview(this, { agent, executionAgent, signal }, record, budget, effective, freshHuman);
         this.automaticReviews.set(agent.id, review);
       }
-      try { await review; } finally { if (this.automaticReviews.get(agent.id) === review) this.automaticReviews.delete(agent.id); }
+      try { await review; this.execution.assertUnchanged(); } finally { if (this.automaticReviews.get(agent.id) === review) this.automaticReviews.delete(agent.id); }
       if (!Object.hasOwn(budget.automatic.admitted, stepKey) && admitAutomaticStep(budget, effective)) { budget.automatic.admitted[stepKey] = true; record.lastStep = stepKey; }
     }
-    await guideFirstCheck(this, agent, record, budget, signal);
-    await warnStageBudget(this, agent, record, budget, settings.maxStageSteps, signal, accessSession);
+    await this.checked(() => guideFirstCheck(this, agent, record, budget, signal));
+    await this.checked(() => warnStageBudget(this, agent, record, budget, settings.maxStageSteps, signal, accessSession));
     record.budget = budget; await this.save();
     if (budget.blocked) throw new WorkbenchError(budget.blocked.code, budget.blocked.message + ' Files and verification results are retained. See Workspace → Run review for details.');
   }
@@ -183,10 +261,14 @@ export class WorkspaceManager {
     return agent;
   }
   toolGuard(exec) {
+    const isolated = this.execution.assertUnchanged().mode === 'isolated-guest';
     const id = exec.agent?.id; if (!id) return;
     const blocked = this.budgets.get(id)?.blocked;
     if (this.data.trash[id] || blocked) return { reason: blocked?.message ?? 'Conversation is in Trash.', info: { code: blocked?.code ?? 'SESSION_IN_TRASH' } };
-    const record = this.data.sessions[id]; if (!record) return;
+    const record = this.data.sessions[id];
+    if (isolated && ['bash', 'project_exec', 'exec_command', 'terminal'].includes(exec.name) && !this.independentRecord(record)) return { reason: 'Model commands require an independently enrolled project; existing files are retained.', info: { code: 'PROJECT_RUNTIME_NOT_ISOLATED' } };
+    if (isolated && (['exec_command', 'terminal'].includes(exec.name) || exec.name === 'bash' && !exec.managedProjectShell)) return { reason: 'Managed commands require the installed guest executor; host execution is refused.' };
+    if (!record) return;
     // Capture admitted operation identity before execution; queued/concurrent
     // results must never borrow another call's target or current directory.
     if (typeof exec.callId === 'string') {
@@ -403,60 +485,62 @@ export class WorkspaceManager {
     delete this.data.trash[id]; await this.save(); return { restored: true };
   }
   async projectFor(id) {
+    this.execution.assertUnchanged();
     if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(id)) throw new WorkbenchError('INVALID_SESSION', 'Invalid conversation.', 400);
-    const live = this.ctx.sessions.get(id), stored = live ? undefined : await this.ctx.sessionPersistence.stat(id);
+    const live = this.ctx.sessions.get(id), stored = live ? undefined : await this.checked(() => this.ctx.sessionPersistence.stat(id));
     const header = live?.header ?? stored?.header; if (!header) throw new WorkbenchError('SESSION_NOT_FOUND', 'Conversation not found.', 404);
     return { root: this.data.sessions[id]?.root ?? (live ? this.ctx.workingDirectory.get(live) : header.cwd), live, header };
   }
   async withFiles(id, action, write = false) {
-    const project = await this.projectFor(id), root = await fs.realpath(project.root), owner = '@files:' + crypto.randomUUID();
+    const project = await this.checked(() => this.projectFor(id)), root = await this.checked(() => fs.realpath(project.root)), owner = '@files:' + crypto.randomUUID();
     if (write) {
       if (!project.live) throw new WorkbenchError('SESSION_NOT_LIVE', 'Open this conversation before editing its files.', 403);
-      await this.releaseIfIdle(id);
+      await this.checked(() => this.releaseIfIdle(id));
       if (project.live && this.ctx.sandboxPolicy.resolve({ session: project.live }).mode === 'read-only') throw new WorkbenchError('READ_ONLY', 'The selected conversation is read-only.', 403);
       await this.locks.acquire(root, owner);
     }
     try {
+      this.execution.assertUnchanged();
       if (write) {
-        if (this.ctx.sessions.get(id) !== project.live || await fs.realpath(this.data.sessions[id]?.root ?? project.root) !== root) throw new WorkbenchError('PROJECT_CHANGED', 'Project or session changed while acquiring its lease.');
+        if (this.ctx.sessions.get(id) !== project.live || await this.checked(() => fs.realpath(this.data.sessions[id]?.root ?? project.root)) !== root) throw new WorkbenchError('PROJECT_CHANGED', 'Project or session changed while acquiring its lease.');
         if (this.ctx.sandboxPolicy.resolve({ session: project.live }).mode === 'read-only') throw new WorkbenchError('READ_ONLY', 'The selected conversation is read-only.', 403);
-        await this.ensureRestoreRecovered(id, root);
+        await this.checked(() => this.ensureRestoreRecovered(id, root));
       }
-      return await action(root, { mode: 'workspace-write', workspaceRoot: root, sessionId: id });
+      return await this.checked(() => action(root, { mode: 'workspace-write', workspaceRoot: root, sessionId: id }));
     }
     finally { if (write) await this.locks.release(owner); }
   }
   async files(id, operation, args, signal) {
     return this.withFiles(id, async (root, policy) => {
       const relative = args.path === '' && operation === 'list' ? '' : relativeFile(args.path);
-      const file = await canonicalInside(root, relative, ['write', 'mkdir', 'upload'].includes(operation));
+      const file = await this.checked(() => canonicalInside(root, relative, ['write', 'mkdir', 'upload'].includes(operation)));
       if (operation === 'list') {
         const entries = await fs.readdir(file, { withFileTypes: true }); return { path: relative, entries: entries.filter(e => !['.git', '.harness'].includes(e.name)).slice(0,1000).map(e => ({ name: e.name, directory: e.isDirectory(), symlink: e.isSymbolicLink() })) };
       }
-      const target = await this.ctx.fs.resolve(file, { signal });
+      const target = await this.checked(() => this.ctx.fs.resolve(file, { signal }));
       if (!within(root, this.ctx.fs.processPath(target))) throw new WorkbenchError('OUTSIDE_PROJECT', 'Resolved path is outside the project.', 403);
       if (operation === 'stat') { const info = await this.ctx.fs.stat(target, signal); return { path: relative, version: info?.version, bytes: info?.size }; }
       if (operation === 'read') { const info = await this.ctx.fs.stat(target, signal); if (info?.size > 1024 * 1024) throw new WorkbenchError('TOO_LARGE', 'Use Download for files larger than 1 MiB.', 413); const bytes = await this.ctx.fs.readBytes(target, signal, 1024 * 1024); let text; try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); if (text.includes('\0')) throw Error('binary'); } catch { throw new WorkbenchError('BINARY_FILE', 'Binary files can be downloaded, renamed or deleted.', 415); } return { path: relative, version: info?.version, text }; }
       if (operation === 'write') {
         if (typeof args.text !== 'string' || Buffer.byteLength(args.text) > 1024 * 1024 || args.text.includes('\0')) throw new WorkbenchError('INVALID_TEXT', 'Text exceeds the editor limit.', 413);
         const expected = args.version ? { kind: 'replaceIfVersion', version: args.version } : { kind: 'createIfAbsent' };
-        return this.ctx.fs.writeText(target, args.text, expected, signal, policy);
+        return this.checked(() => this.ctx.fs.writeText(target, args.text, expected, signal, policy));
       }
       if (operation === 'delete') {
         if (!args.version) throw new WorkbenchError('VERSION_REQUIRED', 'Read the current file before deleting it.', 400);
-        return this.ctx.fs.deleteFile(target, { version: args.version }, signal, policy);
+        return this.checked(() => this.ctx.fs.deleteFile(target, { version: args.version }, signal, policy));
       }
       if (operation === 'rename') {
         if (!args.version) throw new WorkbenchError('VERSION_REQUIRED', 'Read the current file before renaming it.', 400);
-        const destination = await canonicalInside(root, relativeFile(args.destination), true), to = await this.ctx.fs.resolve(destination, { signal });
-        return this.ctx.fs.moveFile(target, to, { expectedSource: { version: args.version }, expectedDestination: { kind: 'createIfAbsent' } }, signal, policy);
+        const destination = await this.checked(() => canonicalInside(root, relativeFile(args.destination), true)), to = await this.checked(() => this.ctx.fs.resolve(destination, { signal }));
+        return this.checked(() => this.ctx.fs.moveFile(target, to, { expectedSource: { version: args.version }, expectedDestination: { kind: 'createIfAbsent' } }, signal, policy));
       }
-      if (operation === 'mkdir') { await fs.mkdir(file, { mode: 0o755 }); return { created: true }; }
+      if (operation === 'mkdir') { await this.checked(() => fs.mkdir(file, { mode: 0o755 })); return { created: true }; }
       if (operation === 'download') { const data = await this.ctx.fs.readBytes(target, signal, 10 * 1024 * 1024); return { bytes: data, name: path.basename(file) }; }
       if (operation === 'upload') {
         if (typeof args.base64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(args.base64)) throw new WorkbenchError('INVALID_UPLOAD', 'Expected base64 file content.', 400);
         const data = Buffer.from(args.base64, 'base64'); if (data.length > 4 * 1024 * 1024) throw new WorkbenchError('TOO_LARGE', 'Upload limit is 4 MiB.', 413);
-        await fs.writeFile(file, data, { flag: 'wx', mode: 0o644 }); return { uploaded: true };
+        await this.checked(() => fs.writeFile(file, data, { flag: 'wx', mode: 0o644 })); return { uploaded: true };
       }
       throw new WorkbenchError('UNKNOWN_OPERATION', 'Unknown file operation.', 400);
     }, !['list', 'read', 'stat', 'download'].includes(operation));

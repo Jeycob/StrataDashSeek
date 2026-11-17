@@ -22,7 +22,7 @@ test('actual SDK routes session selections, replays durable events and preserves
  }
  const a=agent('one'),b=agent('two'),workspace={id:'workspace',sessionIds:['one','two']};
  ctx.provide('workspaceRegistry',{get:()=>workspace,list:()=>[workspace]});
- const manager=new WorkspaceManager(ctx,{stateRoot:directory});manager.data={workspaces:{},modelPreferences:{}};
+ const manager=new WorkspaceManager(ctx,{stateRoot:directory}, (await import('./fixtures/execution-binding.mjs')).hostExecutionBinding());manager.data={workspaces:{},modelPreferences:{}};
  manager.projectFor=async id=>{const value=agents.get(id);if(!value)throw Error('SESSION_NOT_FOUND');return{header:value.session.header,live:value.session};};
  const models=installModelSelection(ctx,manager,{lifecycle:false}),endpoint=routes.find(row=>row.path==='/api/workbench/models');assert(endpoint);
  async function post(sessionId,selection){return endpoint.fetch(new Request('http://dsh.internal/api/workbench/models',{method:'POST',headers:{host:'native.fixture',origin:'https://native.fixture','content-type':'application/json'},body:JSON.stringify({sessionId,selection})}));}
@@ -30,7 +30,7 @@ test('actual SDK routes session selections, replays durable events and preserves
  assert.deepEqual(await ctx.llm.resolveCallConfig(a.model.current()),route);assert.deepEqual(ctx.llm.listProviders().map(row=>row.id),['strata-vast','cloud']);
  const persisted=JSON.parse(await fs.readFile(manager.file,'utf8'));assert.deepEqual(persisted.modelPreferences.one.selection,route);assert.equal(persisted.modelPreferences.two,undefined);
  const eventFile=path.join(directory,'session-events.json');await fs.writeFile(eventFile,JSON.stringify(a.events));
- const restored=agent('one',JSON.parse(await fs.readFile(eventFile,'utf8'))),reloaded=new WorkspaceManager(ctx,{stateRoot:directory});reloaded.data=persisted;reloaded.projectFor=manager.projectFor;
+ const restored=agent('one',JSON.parse(await fs.readFile(eventFile,'utf8'))),reloaded=new WorkspaceManager(ctx,{stateRoot:directory}, (await import('./fixtures/execution-binding.mjs')).hostExecutionBinding());reloaded.data=persisted;reloaded.projectFor=manager.projectFor;
  const recovered=createModelSelection(ctx,reloaded);await recovered.restoreAfterDefaults(restored,'startup',(value,source)=>reloaded.applyDefaults(value,source));assert.deepEqual(restored.model.current(),route);assert.equal(restored.events.filter(event=>event.type==='model/selection').length,1,'SDK avoids duplicate durable model selections after restore');
  await reloaded.updateSettings('workspace',{provider:'cloud',model:'cloud/model+preview'});await recovered.select('one',null);assert.deepEqual(restored.model.current(),{provider:'cloud',model:'cloud/model+preview'});assert.deepEqual(await ctx.llm.resolveCallConfig(restored.model.current()),route,'omitted effort follows the real provider default');
  assert.deepEqual(b.model.current(),{provider:'strata-vast',model:'strata'});assert.deepEqual((await ctx.llm.listModels('strata-vast')).map(row=>row.id),['strata']);

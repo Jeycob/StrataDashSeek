@@ -1,3 +1,4 @@
+import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -69,7 +70,7 @@ test('exit codes and timeouts are retained, while caller cancellation is drained
 });
 
 test('the trusted managed-shell marker never overrides Trash, repair stops or outside paths', () => {
-  const manager = new WorkspaceManager({}); manager.data = { sessions: { one: { root: path.resolve('project') } }, trash: {} };
+  const manager = new WorkspaceManager({}, {}, hostExecutionBinding()); manager.data = { sessions: { one: { root: path.resolve('project') } }, trash: {} };
   const exec = { name: 'bash', agent: { id: 'one' }, arguments: { command: 'pwd' }, managedProjectShell: true };
   assert.equal(manager.toolGuard(exec), undefined);
   assert.ok(manager.toolGuard({ ...exec, managedProjectShell: false }));

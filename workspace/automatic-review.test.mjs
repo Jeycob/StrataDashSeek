@@ -1,3 +1,4 @@
+import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -20,7 +21,7 @@ async function fixture(t, options={}) {
   const agent={id:'owner',status:'running',session:{id:'owner',header:{cwd:root}},inject(){}};
   const settings={...DEFAULTS,maxStageSteps:10,...options.settings},record={root,legacy:false,budgetRequest:{turn:1,messageId:'first'},firstCheckGuided:true},calls=[];
   const ctx={agents:{get:id=>id==='owner'?agent:undefined},logger:{warn(){}},sandboxPolicy:{resolve:({session})=>({mode:session.mode??'workspace-write'})},tools:{}};
-  const manager=new WorkspaceManager(ctx,{stateRoot:path.join(directory,'state')});manager.data={sessions:{owner:record},trash:{},workspaces:{}};manager.settings=()=>settings;manager.ensureProject=async()=>record;manager.locks.acquire=async()=>{};manager.changes.list=async()=>({files:[{path:'app.mjs'}]});
+  const manager=new WorkspaceManager(ctx,{stateRoot:path.join(directory,'state')}, hostExecutionBinding());manager.data={sessions:{owner:record},trash:{},workspaces:{}};manager.settings=()=>settings;manager.ensureProject=async()=>record;manager.locks.acquire=async()=>{};manager.changes.list=async()=>({files:[{path:'app.mjs'}]});
   const budget=new RepairBudget({steps:options.steps??10});manager.budgets.set('owner',budget);record.budget=budget;
   const input={agent,signal:new AbortController().signal,turn:1,step:11,messages:[human('first')]};
   ctx.tools.execute=async batch=>{

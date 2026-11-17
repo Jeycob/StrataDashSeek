@@ -1,3 +1,4 @@
+import { hostExecutionBinding } from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -11,7 +12,7 @@ async function fixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-results-'));
   t.after(async () => { assert(path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep + 'tool-results-')); await fs.rm(directory, { recursive: true, force: true }); });
   const agent = { id: 'one', session: { id: 'one', header: { cwd: directory } } };
-  const manager = new WorkspaceManager({ workspaceRegistry: { list: () => [] }, agents: { get: id => id === 'one' ? agent : undefined }, logger: { warn() {} } }, { stateRoot: path.join(directory, 'state') });
+  const manager = new WorkspaceManager({ workspaceRegistry: { list: () => [] }, agents: { get: id => id === 'one' ? agent : undefined }, logger: { warn() {} } }, { stateRoot: path.join(directory, 'state') }, hostExecutionBinding());
   manager.data = { sessions: { one: { root: directory } }, workspaces: {}, trash: {} };
   manager.budgets.set('one', new RepairBudget());
   const exec = (name, command) => ({ name, arguments: { command }, agent, signal: new AbortController().signal });
