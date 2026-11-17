@@ -9,6 +9,8 @@ const helpers = new Map([
   ['vast/apps-browser-check.cjs', 'Owned-release browser verification adapter; requires a project, plan and release ID.']
 ]);
 const hostFixtures = new Map([
+  ['workspace/project-custody-linux.test.mjs', 'Root-prepared existing nonroot account and canonical /var/lib fixture with explicit real Landlock/bwrap backend; operator qualification records positive custody and namespace refusal separately.'],
+  ['workspace/host-peer-connector-linux.test.mjs', 'Explicit Root-controlled real SDK loopback fixture with probed Landlock; production service-UID proc visibility is separately qualified before preview activation.'],
   ['workspace/code-server.browser.test.cjs', 'Actual code-server acceptance against an explicitly prepared local WSL fixture and HOMEAI_EDITOR_URL; independent runtime evidence remains separate from required portable Native panel fixtures.'],
   ['development/guest-capability-probe.cjs', 'Operator-only disposable QEMU guest using pinned installed boot artifacts after fresh host quiescence; plan tests run separately in CI.'],
   ...['guest-volume-census','guest-cache-diagnostic','guest-container-isolation-probe','project-share-probe','project-container-share-probe'].map(name=>['development/'+name+'.cjs','Operator-only bounded disposable guest acceptance using pinned boot artifacts; separate synthetic plan tests remain required in CI.']),
