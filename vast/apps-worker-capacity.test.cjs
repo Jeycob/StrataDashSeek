@@ -31,6 +31,7 @@ test('start rechecks a newly pending gate after preflight immediately before any
 });
 test('resident controllers refuse even otherwise valid changed manifest bytes',async()=>{
  const f=fixture();f.setManifest({...f.manifest,operatorNote:'changed after construction'});
+ assert.equal(f.worker.status().phase,'blocked');assert.equal(f.worker.status().capacity.allowed,false);assert.equal(f.worker.status().error,'WORKER_CAPACITY_MANIFEST_CHANGED');
  await assert.rejects(f.worker.ensure(),{code:'WORKER_CAPACITY_MANIFEST_CHANGED'});assert(!f.events.includes('engine-adopt'));assert(!f.events.includes('touch'));
 });
 test('exact approved v2 and absent-guard legacy v1 remain usable without changing CPU RAM or driver',async()=>{
