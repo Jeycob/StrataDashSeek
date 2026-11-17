@@ -23,7 +23,8 @@ for(const language of ['en','cs'])for(const width of [1280,390])test(`recovery U
  const f=await fixture(t,language,width),p=f.page,title=language==='en'?'Deployment needs review':'Nasazení vyžaduje kontrolu',publishing=language==='en'?'Confirming deployment':'Potvrzování nasazení',promoting=language==='en'?'Switching deployment':'Přepínání nasazení';
  assert.match(await p.locator('[data-apps-job="'+jobId+'"]').innerText(),new RegExp(publishing));assert.match(await p.locator('[data-apps-job="'+'3'.repeat(16)+'"]').innerText(),new RegExp(promoting));
  const start=id=>p.locator('[data-apps-container="'+id+'"] [data-app-start-id]');assert.equal(await start(current).isEnabled(),true);for(const id of[history,helper,testId])assert.equal(await start(id).isDisabled(),true);
- await start(current).click();assert.equal(f.mutations.length,1);assert.equal(f.mutations[0].data.action,'start');
+ const [started]=await Promise.all([p.waitForResponse(response=>new URL(response.url()).pathname==='/phone/api/apps/container-action'&&response.request().method()==='POST'),start(current).click()]);
+ assert.equal(started.status(),200);assert.equal(f.mutations.length,1);assert.equal(f.mutations[0].data.action,'start');
  await p.locator('[data-apps-job="'+jobId+'"] button').click();await p.locator('[id$="apps-log"]').filter({hasText:'RAW-LINE kept'}).waitFor();
  const editor=p.locator('[data-apps-credentials="'+project+'"]');await editor.locator('summary').click();const input=editor.locator('input').first();await input.fill('UNSAVED_REFERENCE_ONLY');await input.evaluate(e=>window.heldDraft=e);
  f.state.deploymentRecovery={version:1,required:true,projects:[project],transactions:[{projectId:project,releaseId:'5'.repeat(16),phase:'recovery_required',recoveryRequired:true}]};f.state.jobs[0].status='failed';f.state.jobs[0].deploymentPhase='recovery_required';await p.evaluate(()=>view.refresh());
