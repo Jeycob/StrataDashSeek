@@ -7,6 +7,7 @@ fail() { echo "homeai-os-base: $*" >&2; exit 1; }
 # Keep it in place during APT, preserving/restoring its metadata even on failure.
 policy_backup=
 policy_target=
+apt_scratch=
 validate_policy() {
     [ -f "$1" ] && [ ! -L "$1" ] || fail 'pinned policy must be a regular file'
     [ "$(stat -c '%u:%g:%a:%h:%s' -- "$1")" = '0:0:755:1:255' ] || fail 'pinned policy metadata mismatch'
@@ -31,7 +32,51 @@ policy_exit() {
     policy_status=$?
     trap - EXIT HUP INT TERM
     restore_policy || policy_status=1
+    cleanup_apt_cache || policy_status=1
     exit "$policy_status"
+}
+prepare_apt_cache() {
+    # --no-download needs the versioned archive in cache even for a local .deb.
+    # These owned links reference the already verified, read-only inputs.
+    apt_scratch=$(mktemp -d /tmp/homeai-offline-apt.XXXXXXXX)
+    mkdir -- "$apt_scratch/archives" "$apt_scratch/archives/partial" "$apt_scratch/empty-sources"
+    while IFS="$tab" read -r name version arch sha bytes file; do
+        case "$version" in ''|*[!0-9A-Za-z.+:~-]*) fail 'invalid archive version';; esac
+        archive_version=$(printf '%s' "$version" | sed 's/:/%3a/g')
+        ln -s -- "$1/$file" "$apt_scratch/archives/${name}_${archive_version}_${arch}.deb"
+    done < "$2"
+}
+run_offline_apt() {
+    DEBIAN_FRONTEND=noninteractive apt-get \
+        -o Dir::Etc::sourcelist=/dev/null \
+        -o Dir::Etc::sourceparts="$apt_scratch/empty-sources" \
+        -o Dir::Cache::archives="$apt_scratch/archives/" \
+        --yes --no-download --no-remove --no-install-recommends install "$1"/*.deb
+}
+cleanup_apt_cache() {
+    [ -n "$apt_scratch" ] || return 0
+    case "$apt_scratch" in /tmp/homeai-offline-apt.????????) ;; *) fail 'unexpected owned APT directory';; esac
+    [ -d "$apt_scratch" ] && [ ! -L "$apt_scratch" ] || fail 'owned APT directory changed'
+    if [ -e "$apt_scratch/archives" ]; then
+        [ -d "$apt_scratch/archives" ] && [ ! -L "$apt_scratch/archives" ] || fail 'owned archive directory changed'
+        for path in "$apt_scratch/archives/"*.deb; do
+            [ -e "$path" ] || [ -L "$path" ] || continue
+            [ -L "$path" ] || fail 'unexpected owned cache file'
+            rm -- "$path" || return 1
+        done
+        if [ -e "$apt_scratch/archives/lock" ] || [ -L "$apt_scratch/archives/lock" ]; then
+            path=$apt_scratch/archives/lock
+            [ -f "$path" ] && [ ! -L "$path" ] && [ "$(stat -c %h -- "$path")" = 1 ] || fail 'unexpected owned cache lock'
+            rm -- "$path" || return 1
+        fi
+        for path in "$apt_scratch/archives/partial" "$apt_scratch/archives/auxfiles"; do
+            [ ! -e "$path" ] || rmdir -- "$path" || return 1
+        done
+        rmdir -- "$apt_scratch/archives" || return 1
+    fi
+    [ ! -e "$apt_scratch/empty-sources" ] || rmdir -- "$apt_scratch/empty-sources" || return 1
+    rmdir -- "$apt_scratch" || return 1
+    apt_scratch=
 }
 # Package verification and install entry point.
 [ "$#" -ge 1 ] && [ "$#" -le 2 ] || fail 'usage: install-offline.sh DIRECTORY [--install]'
@@ -39,6 +84,7 @@ mode=${2:---verify}
 case "$mode" in --verify|--install) ;; *) fail 'invalid mode';; esac
 dir=$1
 [ -d "$dir" ] && [ ! -L "$dir" ] || fail 'package directory required'
+dir=$(CDPATH= cd -- "$dir" && pwd -P)
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 lock=$here/os-packages.lock.tsv
 tab=$(printf '\t')
@@ -75,9 +121,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 preserve_policy /usr/sbin/policy-rc.d
 # No index refresh, remote sources, package removal, recommends or payload download.
-DEBIAN_FRONTEND=noninteractive apt-get \
-    -o Dir::Etc::sourcelist=- -o Dir::Etc::sourceparts=- \
-    --yes --no-download --no-remove --no-install-recommends install "$dir"/*.deb
+prepare_apt_cache "$dir" "$lock"
+run_offline_apt "$dir"
 while IFS="$tab" read -r name version arch sha bytes file; do
     installed=$(dpkg-query --show --showformat='${Version}\t${Architecture}\t${db:Status-Status}' "$name")
     expected=$(printf '%s\t%s\tinstalled' "$version" "$arch")

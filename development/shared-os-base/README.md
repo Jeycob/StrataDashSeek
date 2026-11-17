@@ -81,6 +81,17 @@ unknown, linked or modified policy fails before APT. It never overwrites an
 unknown host policy. Tests run only against new temporary public-file fixtures,
 with UID0 needed solely to exercise the pinned ownership check.
 
+APT's `--no-download` local-file path still needs a populated archive cache:
+without it APT can retain an internal relative `NAME_VERSION_ARCH.deb` pathname
+and fail before dpkg, even though the supplied `.deb` path was absolute. The
+installer canonicalizes the input directory and creates a new temporary cache
+of absolute symlinks to the verified read-only files. Cache names include the
+exact version, with an epoch colon escaped as `%3a`. It passes that absolute
+cache path, `/dev/null` as the source list, and a new empty source-parts directory;
+`-` is not used as a source-disable token. Downloads remain disabled. Its exit
+trap removes only newly owned cache links, the known lock and empty directories,
+then retains the original exit status; it never recursively deletes data.
+
 All five `/opt` mountpoints are empty and read-only in the image. Existing
 policy grants all five to editor/executor and only code-server/homeai to
 relay/proxy. Role image configuration may select the same verified immutable
@@ -95,6 +106,7 @@ On a Linux diagnostic host with Python 3, GPG/GPGV and dpkg-deb already present:
 
 ```text
 python3 test_contract.py
+python3 test_offline_apt.py
 python3 verify-provenance.py /path/to/public-metadata-directory
 python3 verify-solver.py /path/to/public-metadata-directory
 ```
@@ -108,6 +120,13 @@ checks the provenance, then reproduces the exact 170-package selection with
 isolated APT `--simulate` and a temporary empty status file. APT's simulation
 mode performs no acquisition/installation; adding `--no-download` on APT3.2.1
 would require absent payload files even for this metadata-only reproduction.
+
+Run `test_offline_apt.py` non-root. It uses empty synthetic packages, isolated
+APT configuration/status/cache and real APT `Debug::pkgDPkgPM` no-op execution,
+plus a separate dpkg guard that rejects every install action. It reproduces the
+uncached failure, verifies absolute cached paths including epoch escaping, and
+checks cleanup after failure without changing package status or input files.
+This tests APT's real archive-to-dpkg path handling, not an image installation.
 
 Passed locally: 12/12 tests, all 170 actual public package verifications and
 all 170 provenance records. Actual Windows allocation of the 170 archives is

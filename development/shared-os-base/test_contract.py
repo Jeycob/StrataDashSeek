@@ -60,6 +60,12 @@ class OfflineVerifier(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('Verified 1 locked', result.stdout)
 
+    def test_relative_package_directory_only_verifies(self):
+        result = subprocess.run(['/bin/sh', str(self.root / 'install-offline.sh'), 'packages'],
+                                cwd=self.root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Verified 1 locked', result.stdout)
+
     def test_corruption(self):
         data = bytearray(self.deb.read_bytes()); data[-1] ^= 1; self.deb.write_bytes(data)
         self.assertIn('SHA256 mismatch', self.run_verify().stderr)
