@@ -9,11 +9,11 @@ const fail=code=>Object.assign(Error(code),{code});
 const hash=value=>crypto.createHash('sha256').update(canonical(value)).digest('hex');
 const exact=value=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===3&&['version','contract','sourceProtocol'].every(key=>Object.hasOwn(value,key));
 
-function createExecutionFloor({filesystem=fs,platform=process.platform,getuid=()=>process.getuid?.()}={}){
+function createExecutionFloor({filesystem=fs,platform=process.platform,getuid=()=>process.getuid?.(),rootDirectory='/data/harness'}={}){
  // The same protected reader, schema and canonical policy bytes used by the
  // supervisor contract own policy validation here. Test dependencies are
  // factory-only; no call accepts a replacement policy or an opt-out boolean.
- const policy=createExecutionModeContract({filesystem,platform,getuid});
+ const policy=createExecutionModeContract({filesystem,platform,getuid,rootDirectory}),releases=path.posix.join(rootDirectory,'releases');
  function parents(file){
   const rows=[];let current='/';
   for(const part of ['',...path.posix.dirname(file).slice(1).split('/')]){
@@ -26,8 +26,8 @@ function createExecutionFloor({filesystem=fs,platform=process.platform,getuid=()
  }
  const safe=stat=>stat.isFile()&&!stat.isSymbolicLink()&&stat.uid===0&&stat.nlink===1&&!(stat.mode&0o022)&&Number.isSafeInteger(stat.size)&&stat.size>0&&stat.size<=MAX_DESCRIPTOR_BYTES;
  const stable=(a,b)=>a.dev===b.dev&&a.ino===b.ino&&a.size===b.size&&a.mtimeMs===b.mtimeMs&&a.ctimeMs===b.ctimeMs;
- function descriptor(sourceCommit){
-  const file=path.posix.join(RELEASES,sourceCommit,DESCRIPTOR);let fd;
+ function descriptor(directory){
+  const file=path.posix.join(directory,DESCRIPTOR);let fd;
   try{
    const ancestors=parents(file);let before;
    try{before=filesystem.lstatSync(file);}catch(error){
@@ -64,12 +64,19 @@ function createExecutionFloor({filesystem=fs,platform=process.platform,getuid=()
    if(hash(policy.readPolicy())!==policySha256)throw fail('PROJECT_EXECUTION_FLOOR_POLICY_CHANGED');
    return snapshot;
   }
-  return Object.freeze({snapshot,policySha256,assertPolicyUnchanged,assertReleaseAllowed(sourceCommit){
-   if(typeof sourceCommit!=='string'||!SHA.test(sourceCommit))throw fail('PROJECT_EXECUTION_FLOOR_RELEASE_ID_INVALID');
-   assertPolicyUnchanged();
-   const sourceProtocol=descriptor(sourceCommit);
-   assertPolicyUnchanged();
+  function assertDirectoryAllowed(directory){
+   if(typeof directory!=='string'||path.posix.dirname(directory)!==releases||path.posix.normalize(directory)!==directory)throw fail('PROJECT_EXECUTION_FLOOR_DIRECTORY_INVALID');
+   if(snapshot.mode==='isolated-guest'&&!SHA.test(path.posix.basename(directory)))throw fail('PROJECT_EXECUTION_FLOOR_RELEASE_ID_INVALID');
+   assertPolicyUnchanged();const sourceProtocol=descriptor(directory);assertPolicyUnchanged();
    if(snapshot.mode==='isolated-guest'&&sourceProtocol!==1)throw fail('PROJECT_EXECUTION_FLOOR_PROTOCOL_REQUIRED');
+   return Object.freeze({directory,sourceProtocol});
+  }
+  return Object.freeze({snapshot,policySha256,assertPolicyUnchanged,assertDirectoryAllowed,assertLegacyAppAllowed(){
+   assertPolicyUnchanged();if(snapshot.mode!=='host-compat')throw fail('PROJECT_EXECUTION_FLOOR_PROTOCOL_REQUIRED');
+   const directory=path.posix.join(rootDirectory,'app'),sourceProtocol=descriptor(directory);assertPolicyUnchanged();return Object.freeze({directory,sourceProtocol});
+  },assertReleaseAllowed(sourceCommit){
+   if(typeof sourceCommit!=='string'||!SHA.test(sourceCommit))throw fail('PROJECT_EXECUTION_FLOOR_RELEASE_ID_INVALID');
+   const {sourceProtocol}=assertDirectoryAllowed(path.posix.join(releases,sourceCommit));
    // A separate capability result: never merge this into the persisted
    // release proof, recovery policyHash or securityEpoch/ABI identity.
    return Object.freeze({sourceCommit,sourceProtocol});

@@ -29,12 +29,16 @@ function validateProjection(value){
  return Object.freeze({...policy,policySha256:value.policySha256,sourceCommit:value.sourceCommit,launchId:value.launchId});
 }
 
-function createExecutionModeContract({filesystem=fs,atomic,verifySource,platform=process.platform,getuid=()=>process.getuid?.(),newLaunchId=()=>crypto.randomUUID()}={}){
+function createExecutionModeContract({filesystem=fs,atomic,verifySource,platform=process.platform,getuid=()=>process.getuid?.(),newLaunchId=()=>crypto.randomUUID(),rootDirectory=ROOT}={}){
+ // Trusted factory composition only. No environment, policy, browser or
+ // per-operation argument can redirect these protected paths.
+ if(typeof rootDirectory!=='string'||!path.posix.isAbsolute(rootDirectory)||path.posix.normalize(rootDirectory)!==rootDirectory||rootDirectory.endsWith('/')||rootDirectory.includes('\0'))throw fail('PROJECT_EXECUTION_ROOT_INVALID');
+ const policyFile=rootDirectory+'/root-secrets/runtime/state/project-execution-policy.json',publicFile=rootDirectory+'/runtime-status/project-execution.json';
  const publish=atomic??((file,bytes)=>require('./runtime-paths.cjs').atomic(file,bytes,0o644));
  const sourceProof=verifySource??(sourceCommit=>{
   const release=require('./runtime-release.cjs');
-  if(release.currentCommit(ROOT)!==sourceCommit)throw fail('PROJECT_EXECUTION_SOURCE_CHANGED');
-  release.verifySync(ROOT,sourceCommit);
+  if(release.currentCommit(rootDirectory)!==sourceCommit)throw fail('PROJECT_EXECUTION_SOURCE_CHANGED');
+  release.verifySync(rootDirectory,sourceCommit);
  });
  function linux(){if(platform!=='linux')throw fail('PROJECT_EXECUTION_LINUX_REQUIRED');}
  function root(){linux();if(getuid()!==0)throw fail('PROJECT_EXECUTION_ROOT_REQUIRED');}
@@ -73,8 +77,8 @@ function createExecutionModeContract({filesystem=fs,atomic,verifySource,platform
    throw fail('PROJECT_EXECUTION_FILE_UNAVAILABLE');
   }finally{if(fd!==undefined)filesystem.closeSync(fd);}
  }
- function readPolicy(){root();return validatePolicy(read(POLICY_FILE,'PROJECT_EXECUTION_POLICY_REQUIRED'));}
- function readProjection(){return validateProjection(read(PUBLIC_FILE,'PROJECT_EXECUTION_PUBLICATION_REQUIRED'));}
+ function readPolicy(){root();return validatePolicy(read(policyFile,'PROJECT_EXECUTION_POLICY_REQUIRED'));}
+ function readProjection(){return validateProjection(read(publicFile,'PROJECT_EXECUTION_PUBLICATION_REQUIRED'));}
  function publishForSupervisor(input){
   root();if(!exact(input,['sourceCommit'])||!matches(SHA,input.sourceCommit))throw fail('PROJECT_EXECUTION_SOURCE_INVALID');
   const sourceCommit=input.sourceCommit;sourceProof(sourceCommit);
@@ -83,7 +87,7 @@ function createExecutionModeContract({filesystem=fs,atomic,verifySource,platform
   if(hash(readPolicy())!==policySha256)throw fail('PROJECT_EXECUTION_POLICY_CHANGED');
   // No persistent policy writer or default is provided. Only the public
   // projection is regenerated, after the existing signed/root startup gate.
-  publish(PUBLIC_FILE,canonical(projection));
+  publish(publicFile,canonical(projection));
   if(hash(readPolicy())!==policySha256)throw fail('PROJECT_EXECUTION_POLICY_CHANGED');
   sourceProof(sourceCommit);
   if(canonical(readProjection())!==canonical(projection))throw fail('PROJECT_EXECUTION_PUBLICATION_CHANGED');

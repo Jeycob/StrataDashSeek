@@ -1,83 +1,112 @@
-# Project execution floor — standalone helper
+# Stable execution floor
 
-This source prepares a stable-bootstrap floor for the explicit execution-mode
-contract. It is **not wired** into startup, recovery, admission or the supervisor.
-It installs nothing, publishes no policy or projection, and does not declare this
-partially integrated source capable of isolated execution.
+This source adds stable enforcement for the separate execution-mode protocol.
+It does not install the bootstrap, provision policy, declare this release
+protocol1, migrate credentials or qualify isolated execution.
 
-`createExecutionFloor()` performs no I/O. Its only dependencies configurable by
-trusted tests are filesystem/platform/getuid. `capturePolicy()` reads the
-mandatory root policy through the existing `createExecutionModeContract`
-protected reader. There is no second private-policy parser or default.
+## Separate capability, unchanged recovery identity
 
-```js
-const {createExecutionFloor} = require('./project-execution-floor.cjs');
-const floor = createExecutionFloor();
-const binding = floor.capturePolicy();
-// After the existing GPG/source-digest verification, and again after awaits:
-binding.assertPolicyUnchanged();
-const capability = binding.assertReleaseAllowed(verifiedCommit);
-// capability is only {sourceCommit, sourceProtocol}; it is not a release proof.
-```
-
-Commit IDs must be exact lowercase40-hex strings. The helper reads only
-`/data/harness/releases/<commit>/vast/project-execution-compatibility.json`.
-Every ancestor must be canonical, root-owned, unlinked and unwritable outside
-root. It bounds the descriptor at4096 bytes, opens without following links,
-checks file/parent identities around the read and rejects unsafe or changed
-objects. The actual signed source digest and complete release-tree validation
-remain the caller's job; a descriptor alone never authenticates source.
-
-An absent descriptor in an otherwise protected existing release is protocol0.
-A missing source/parent directory or any malformed/unsafe descriptor is an error.
-Protocol1 requires this exact schema, encoded with the shared `canonical()`
-function as UTF-8 with no newline:
+The existing securityEpoch2 ABI, compatibility ID, release attestation proof,
+recovery policyHash/state and admission ACK format remain unchanged. The floor
+reads the existing protected canonical policy and a separate descriptor in the
+verified source tree:
 
 ```json
 {"contract":"project-execution-v1","sourceProtocol":1,"version":1}
 ```
 
-Explicit host mode accepts protocol0 or1. Explicit isolated mode accepts only1.
-Unknown versions, additional/duplicate keys, coercions and future protocol
-numbers are rejected in both modes. **Do not add this declaration to a source
-until supervisor and all consumers are wired and their composition is proven.**
-This preparation commit intentionally contains no declaration file.
+The descriptor is absent from this source unit. Root must add it separately
+only after the entire source composition supports the binding and its required
+checks pass. A module filename or partial source preparation does not declare
+support. Descriptor bytes are covered by the normal signed-source digest.
 
-The binding retains immutable policy fields and their canonical hash. A changed
-mode, epoch or activation provenance blocks the old binding, including a change
-during descriptor reading. Missing/corrupt policy also blocks it. An identical
-atomic rewrite is the same semantic policy; an inode replacement during a read
-is rejected by the shared reader. An existing launcher must not adopt new policy
-in place. A caller waiting on a lock, shutdown, reconciliation or admission must
-assert again after the wait and before its effect.
+An absent descriptor is protocol0; the exact canonical descriptor is
+protocol1. Malformed, linked, writable, oversized or future descriptors fail
+even in host mode. Explicit host policy accepts0/1. Isolated policy accepts
+only1 and SHA-named managed releases; anonymous legacy fallback directories
+are refused. A missing/invalid policy is never interpreted as host mode.
 
-## Later integration
+## Enforced seams
 
-Keep securityEpoch2, existing ABI/compatibility ID and every persisted recovery
-proof/policyHash unchanged. The helper returns a separate capability only.
-Apply it dynamically to old attestations as well as newly staged sources.
+`createExecutionFloor().capturePolicy()` captures an immutable policy identity.
+Its synchronous `assertPolicyUnchanged`, `assertReleaseAllowed` and contained
+`assertDirectoryAllowed` methods check that same identity. The narrowly named
+`assertLegacyAppAllowed` handles the pre-rename initial app directory only in
+explicit host composition. It is not an arbitrary path override.
 
-- `runtime-release.attest/verifySync`: keep GPG/exact digest checks and existing
-  proof shape; require a fresh valid policy binding and source capability before
-  accepting the release. CLI verification uses the same path.
-- `runtime-launcher`: capture one binding before broker construction. Assert it
-  before/after asynchronous verification, UI stop and purge reconciliation, and
-  immediately before supervisor spawn, source switch or opening admission.
-- Admission: assert before/after the controller's `admitWork` await for every
-  grant; close admission on a mismatch. This does not settle existing work or
-  revoke its effects by itself. Explicit mode changes require closed admission,
-  settled work and a cold launcher/supervisor restart.
-- `startup-update`: guard ordinary candidate activation, catch-path restoration
-  and interrupted-transaction restoration before pointer mutation. Validate
-  restoration paths/identities; a non-SHA legacy-directory journal requires
-  explicit recovery rather than treating it as a signed source. Do not consume
-  an unresolved journal or report a disallowed restore as successful.
-- `startup-install` and `runtime-paths.adoptSignedStatus`: copy/list this helper
-  and the shared contract before their consumers. Bootstrap upgrade remains
-  explicit maintenance under the exclusive inherited supervisor lease. The
-  absence of service-UID processes alone does not exclude a root launcher.
+Release attestation and sync/child verification apply the current floor while
+returning exactly the existing core proof. Historical records remain intact;
+an old attestation cannot bypass the current floor. Child verification checks
+the parent's captured floor after its await and does not inherit FD9.
 
-No existing file is changed by this unit. No runtime hook, activation writer,
-descriptor declaration, bootstrap installation or isolated-mode acceptance is
-implied by its tests. Tests use protected-filesystem fixtures and the actual
-pure recovery controller, not a live production filesystem or supervisor.
+Candidate activation checks candidate and fallback before journaling or
+switching. Its catch restoration checks the captured floor before touching the
+pointer; rejected restoration retains the journal/applied evidence and reports
+`PROJECT_EXECUTION_FLOOR_ROLLBACK_REQUIRED`. Direct interrupted-transaction
+restoration validates both contained targets, the previous applied identity
+and digest when present, and the current floor before switching. Unsupported
+previous source never becomes the pointer as a claimed successful rollback.
+
+The root launcher captures policy before creating the broker. It rechecks
+release verification, asynchronous UI stop, offline purge reconciliation,
+health/recovery observations and immediately before supervisor spawn. It
+rechecks the current source pointer and verifies exact source bytes after
+purge reconciliation. No executing launcher adopts a new policy in place.
+
+The broker requires a separate trusted floor capability. The production root
+factory captures one if its trusted launcher did not provide it. Checks cover
+controller/current-pointer/queue waits, durable acceptance completion, final
+signing and the HTTP response boundary. A mismatch closes persisted admission
+and returns a signed denial. Already recorded acceptance stays recorded.
+Heartbeat cannot publish enabled state under a mismatched captured policy.
+
+## Source staging and bootstrap installation
+
+Loading these modules has no policy I/O. Diagnostic `startup-update --check`
+continues to stage/verify source without requiring execution policy or changing
+the installed stable bootstrap. Ordinary source deployment does not upgrade
+stable enforcement: old installed bootstrap bytes retain their old behavior.
+Missing/invalid explicit policy becomes fatal when an upgraded floor consumer
+is actually constructed/invoked. `adoptSignedStatus` reports differing/missing
+stable helper bytes as bootstrap upgrade required.
+
+Both bootstrap inventories include the shared policy reader and floor helper
+before their consumers. Existing or partial bootstrap installs, including
+missing new helpers, need explicit `upgradeBootstrap`. Changed installed bytes
+require the actual inherited root FD9 exclusive flock and no service-UID
+writers. Even a fresh installation requires pre-provisioned valid policy
+before publishing floor-enabled code. Installation never creates that policy.
+The entry is published last and the captured policy is checked before it.
+
+FD9 proves exclusive ownership of its kernel open-file description. It cannot
+prove that an old root launcher deliberately sharing that same description
+has exited, and service-UID absence cannot prove that all root controllers or
+user jobs have settled. Before a real upgrade the operator must close new
+admission, settle all owned work, stop the old UI supervisor and root launcher,
+then obtain the cold operator FD9 lease. Preserve model/Tailscale work as the
+existing maintenance procedure requires. This source unit performs none of
+those production operations.
+
+Before any isolated activation, Root must qualify fully bound current,
+candidate, active fallback and lastGood references, resolve or retain any
+unfinished transaction, and install/verify the signed stable bootstrap under
+that cold boundary. Historical inert rows may remain protocol0. Existing
+grants and work can outlive a policy-file write; changing policy in a running
+launcher is not an activation mechanism.
+
+## Trusted fixture composition and checks
+
+The mode contract and floor accept `rootDirectory` only as a trusted factory
+dependency; production defaults remain `/data/harness`. No environment,
+ordinary config, policy field or per-operation input can choose it. Actual
+filesystem fixtures use owned protected `/root/homeai-execution-floor-test-*`
+or `/var/lib/homeai-execution-floor-*-test-*` roots and the production readers.
+
+The root test family covers old/new protocol launch with an actual FD9-held
+child stand-in, real protected descriptors/attestations, activation/catch and
+interrupted pointer positions, exact existing recovery/key semantics, queued
+policy races, real competing root lease and service writer, and partial entry
+publication. Existing Linux updater and inherited-lease regression fixtures
+are adapted to explicit trusted host composition. No real project, guest,
+model, Tailscale, Docker/QEMU, live service, policy or bootstrap is operated by
+these fixtures. Root owns CI inventory and production acceptance separately.

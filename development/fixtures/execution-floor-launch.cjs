@@ -1,0 +1,5 @@
+'use strict';
+const fs=require('node:fs'),path=require('node:path');
+const root=process.argv[2];if(process.platform!=='linux'||process.getuid()!==0||path.dirname(root||'')!=='/root'||!path.basename(root).startsWith('homeai-execution-floor-test-'))throw Error('Owned Linux-root fixture required');
+const {RuntimeLauncher,inheritedLease}=require('../../vast/runtime-launcher.cjs');
+Promise.resolve().then(async()=>{inheritedLease(root);const owner=new RuntimeLauncher({root,uid:60059,gid:60059});owner.broker={state:{epoch:'11111111-2222-3333-4444-555555555555',open:false}};await owner.launchUi();const child=owner.supervisor;if(child&&child.exitCode===null)await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{child.kill('SIGKILL');reject(Error('Fixture child timeout'));},3000);child.once('exit',code=>{clearTimeout(timer);code===0?resolve():reject(Error('Fixture child failed'));});});console.log('FIXTURE_SUPERVISOR_STARTED');}).catch(error=>{console.log('FIXTURE_LAUNCH_REFUSED:'+error.code);process.exitCode=2;});

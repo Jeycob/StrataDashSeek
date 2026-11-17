@@ -24,6 +24,9 @@ function memory(){
 }
 function issued(changes={}){const f=memory();f.putPolicy(policy(changes));f.snapshot=f.contract.publishForSupervisor({sourceCommit:A});return f;}
 const bind=f=>f.contract.bindForService({sourceCommit:f.snapshot.sourceCommit,launchId:f.snapshot.launchId});
+test('production defaults ignore environment, ordinary config and per-call path overrides',()=>{
+ const names=['HOMEAI_ROOT','HARNESS_ROOT','HARNESS_PROJECT_EXECUTION_ROOT'],before=Object.fromEntries(names.map(name=>[name,process.env[name]]));try{for(const name of names)process.env[name]='/untrusted';const f=memory();f.putPolicy(policy());const contract=createExecutionModeContract({...f.options,config:{rootDirectory:'/untrusted'},root:'/untrusted'});assert.equal(contract.readPolicy({rootDirectory:'/untrusted'}).mode,'host-compat');assert.equal(f.nodes.has('/untrusted/root-secrets/runtime/state/project-execution-policy.json'),false);for(const rootDirectory of ['relative','/','/a/../b','/a/'])assert.throws(()=>createExecutionModeContract({...f.options,rootDirectory}),{code:'PROJECT_EXECUTION_ROOT_INVALID'});}finally{for(const name of names)if(before[name]===undefined)delete process.env[name];else process.env[name]=before[name];}
+});
 
 test('policy is explicit and exact; no missing, unknown or coercible host default',()=>{
  const f=memory();assert.throws(()=>f.contract.readPolicy(),{code:'PROJECT_EXECUTION_POLICY_REQUIRED'});assert.equal(f.writes.length,0);

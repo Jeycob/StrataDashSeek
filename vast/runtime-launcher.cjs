@@ -17,13 +17,16 @@ function inheritedLease(root){
 }
 async function listen(server,port){await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});}
 class RuntimeLauncher{
- constructor({root,uid,gid}){Object.assign(this,{root,uid,gid});this.supervisor=null;this.controller=null;this.readiness=null;this.pending=false;this.closing=false;this.gatedLaunch=null;}
+ constructor({root,uid,gid}){Object.assign(this,{root,uid,gid});this.executionFloor=require('./project-execution-floor.cjs').createExecutionFloor({rootDirectory:path.resolve(root)}).capturePolicy();this.supervisor=null;this.controller=null;this.readiness=null;this.pending=false;this.closing=false;this.gatedLaunch=null;}
+ assertExecution(commit){this.executionFloor.assertPolicyUnchanged();if(commit)this.executionFloor.assertReleaseAllowed(commit);}
+ assertCurrent(commit){this.assertExecution(commit);if(release.currentCommit(this.root)!==commit)throw fault('RUNTIME_LAUNCH_RELEASE_CHANGED');}
  async initialize(){
   // The inherited supervisor flock excludes another trusted launcher. Refuse
   // any pre-existing agent/terminal/VM process before the cold-start boundary.
   inheritedLease(this.root);assertNoAgentProcesses(this.uid);runtime.prepare(this.root,{uid:this.uid,gid:this.gid});
   const current=()=>release.currentCommit(this.root);
-  this.broker=createRootAdmission({root:this.root,sourceCommit:current(),currentCommit:current,controller:{status:()=>this.controller?.status()??Promise.resolve({phase:'uninitialized'}),admitWork:(...args)=>{if(!this.controller)throw fault('RUNTIME_RECOVERY_NOT_ENROLLED');return this.controller.admitWork(...args);}},quiescence:async()=>{
+  this.assertExecution(current());
+  this.broker=createRootAdmission({root:this.root,sourceCommit:current(),currentCommit:current,executionFloor:this.executionFloor,controller:{status:()=>this.controller?.status()??Promise.resolve({phase:'uninitialized'}),admitWork:async(...args)=>{this.assertExecution();if(!this.controller)throw fault('RUNTIME_RECOVERY_NOT_ENROLLED');const value=await this.controller.admitWork(...args);this.assertExecution();return value;}},quiescence:async()=>{
    const absent=agentProcesses(this.uid).length===0;
    // This is a root-owned dispatch proof, not a PID or open-port health check:
    // no grant has been issued since the verified cold boundary and every known
@@ -31,33 +34,37 @@ class RuntimeLauncher{
    const gated=this.gatedLaunch?.epoch===this.broker.state.epoch&&this.broker.state.acceptedWork===0;
    return{activeRequests:absent||gated?0:null,activeJobs:absent||gated?0:null,processesAbsent:absent,observedAt:Date.now()};
   }});
-  this.server=this.broker.createServer();await listen(this.server,3094);
-  this.heartbeat=setInterval(()=>{try{this.broker.heartbeat();}catch{this.broker.state.open=false;}},3000);this.heartbeat.unref();
+  this.server=this.broker.createServer();await listen(this.server,3094);this.assertExecution(current());
+  this.heartbeat=setInterval(()=>{try{this.assertExecution();this.broker.heartbeat();}catch{this.broker.state.open=false;void this.broker.closeAdmission().catch(()=>{});}},3000);this.heartbeat.unref();
   await update.update(this.root,{onVerified:({commit,digest})=>{
+   this.assertExecution(commit);
    const proof=release.attest(this.root,commit,{commitSignatureVerified:true,sourceDigest:digest});
    if(!this.controller)this.controller=createRuntimeRecovery({root:this.root,lockModule:pathToFileURL(path.join(__dirname,'process-lock.mjs')).href,policy:{enabled:true,compatibilityId:proof.compatibilityId,minimumSecurityEpoch:2,deniedCommits:[]},hooks:{
     verifyRelease:({commit,signal})=>release.verify(this.root,commit,{signal}),currentCommit:async()=>current(),fence:args=>this.broker.fence(args),
-    switchRelease:async intent=>{
-     if(this.broker.state.open||this.broker.state.acceptedWork||this.broker.state.epoch!==intent.attemptId||current()!==intent.from||this.broker.state.fenceToken!==intent.fenceToken)throw fault('RUNTIME_LAUNCH_FENCE_CHANGED');
-     const from=await release.verify(this.root,intent.from),to=await release.verify(this.root,intent.to);if(from.digest!==intent.fromDigest||to.digest!==intent.toDigest)throw fault('RUNTIME_LAUNCH_RELEASE_CHANGED');
-     await this.stopUi();assertNoAgentProcesses(this.uid);
-     update.activate(this.root,path.join(this.root,'releases',intent.to),intent.to);update.statusWriter(this.root)({phase:'ready',appliedCommit:intent.to,targetCommit:intent.to,signatureVerified:true,error:null});
-    },restart:async()=>this.launchUi()
+    switchRelease:intent=>this.switchRelease(intent),restart:async()=>this.launchUi()
    }});
   },beforeActivate:async({commit})=>{
-   const state=await this.controller.status();if(state.phase==='uninitialized')return;
-   const attempt=await this.controller.begin(commit);if(attempt.phase!=='monitoring')throw fault('RUNTIME_LAUNCH_RECOVERY_REQUIRED');
+   this.assertExecution(commit);const state=await this.controller.status();this.assertExecution(commit);if(state.phase==='uninitialized')return;
+   const attempt=await this.controller.begin(commit);this.assertExecution(commit);if(attempt.phase!=='monitoring')throw fault('RUNTIME_LAUNCH_RECOVERY_REQUIRED');
   }});
   await this.launchUi();this.timer=setInterval(()=>void this.tick(),1000);this.timer.unref();await this.tick();return this;
  }
+ async switchRelease(intent){
+  this.assertCurrent(intent.from);
+  if(this.broker.state.open||this.broker.state.acceptedWork||this.broker.state.epoch!==intent.attemptId||this.broker.state.fenceToken!==intent.fenceToken)throw fault('RUNTIME_LAUNCH_FENCE_CHANGED');
+  const from=await release.verify(this.root,intent.from);this.assertCurrent(intent.from);const to=await release.verify(this.root,intent.to);this.assertCurrent(intent.from);this.assertExecution(intent.to);if(from.digest!==intent.fromDigest||to.digest!==intent.toDigest)throw fault('RUNTIME_LAUNCH_RELEASE_CHANGED');
+  await this.stopUi();this.assertCurrent(intent.from);this.assertExecution(intent.to);assertNoAgentProcesses(this.uid);
+  update.activate(this.root,path.join(this.root,'releases',intent.to),intent.to);update.statusWriter(this.root)({phase:'ready',appliedCommit:intent.to,targetCommit:intent.to,signatureVerified:true,error:null});
+ }
  async launchUi(){
-  if(this.supervisor)throw fault('RUNTIME_LAUNCH_SUPERVISOR_EXISTS');const commit=release.currentCommit(this.root);await release.verify(this.root,commit);
+  if(this.supervisor)throw fault('RUNTIME_LAUNCH_SUPERVISOR_EXISTS');const commit=release.currentCommit(this.root);this.assertCurrent(commit);await release.verify(this.root,commit);this.assertCurrent(commit);
   // Runs on every cold/recovery start, under FD9, before any Native/plugin
   // writer is spawned. An unfinished purge must reconcile or keep Native shut.
   await require('./offline-purge-maintenance.cjs').beforeNativeStart({root:this.root,uid:this.uid,broker:this.broker,assertNoAgentProcesses,inheritedLease});
+  this.assertCurrent(commit);release.verifySync(this.root,commit);this.assertCurrent(commit);
   this.gatedLaunch={epoch:this.broker.state.epoch,sourceCommit:commit};
   let attempt=runtime.readPrivate(this.root,'runtime-launch-attempt.json');if(attempt?.sourceCommit!==commit)attempt={version:1,sourceCommit:commit,startedAt:Date.now(),phase:'starting'};runtime.writePrivate(this.root,'runtime-launch-attempt.json',attempt);this.launchAttempt=attempt;
-  const out=runtime.openLog(this.root,'supervisor'),child=cp.spawn(process.execPath,[path.join(this.root,'releases',commit,'vast/supervisor.cjs')],{cwd:path.join(this.root,'workspaces'),env:{...process.env,HARNESS_RUNTIME_LAUNCHER:'1'},stdio:['ignore',out,out,'ipc','ignore','ignore','ignore','ignore','ignore',9]});fs.closeSync(out);this.supervisor=child;
+  const out=runtime.openLog(this.root,'supervisor');let child;try{this.assertCurrent(commit);child=cp.spawn(process.execPath,[path.join(this.root,'releases',commit,'vast/supervisor.cjs')],{cwd:path.join(this.root,'workspaces'),env:{...process.env,HARNESS_RUNTIME_LAUNCHER:'1'},stdio:['ignore',out,out,'ipc','ignore','ignore','ignore','ignore','ignore',9]});}finally{fs.closeSync(out);}this.supervisor=child;
   child.on('error',()=>{});child.once('exit',()=>{if(this.supervisor===child)this.supervisor=null;});
   const cfg=JSON.parse(fs.readFileSync(path.join(this.root,'config.json'),'utf8')),{createRuntimeReadiness}=require(path.join(this.root,'releases',commit,'mobile/runtime-readiness.cjs'));
   this.readiness=createRuntimeReadiness(cfg,{infrastructureOnly:true});
@@ -68,13 +75,13 @@ class RuntimeLauncher{
  }
  publishStatus(state){let sourceCommit=null;try{sourceCommit=release.currentCommit(this.root);}catch{}const dto={...state,sourceCommit,observedAt:Date.now()};runtime.writePrivate(this.root,'runtime-recovery-status.json',dto);runtime.publish(this.root,'runtime-recovery.json',dto);}
  async tick(){if(this.pending||this.closing)return;this.pending=true;try{
-  let state=await this.controller.status(),health=await this.readiness.sample();
+  this.assertExecution();let state=await this.controller.status();this.assertExecution();const health=await this.readiness.sample();this.assertExecution();
   if(state.phase==='uninitialized'){
    if(health.sourceReady&&health.runtimeReady)state=await this.controller.adoptHealthy(release.currentCommit(this.root),health);
    else if(Date.now()-this.launchAttempt.startedAt>=90000){await this.broker.closeAdmission();runtime.writePrivate(this.root,'runtime-launch-attempt.json',{...this.launchAttempt,phase:'recovery_required',reasonCode:'RUNTIME_RECOVERY_LAST_GOOD_REQUIRED'});this.publishStatus({version:1,phase:'recovery_required',reasonCode:'RUNTIME_RECOVERY_LAST_GOOD_REQUIRED'});return;}
   }else if(state.phase==='monitoring')state=await this.controller.observe(state.attemptId,health);
   else if(['rollback_intent','rollback_switched','recovery_required'].includes(state.phase))state=await this.controller.reconcile(state.attemptId,health);
-  if(['healthy','rolled_back'].includes(state.phase)&&require('./runtime-recovery.cjs').healthy(health,release.currentCommit(this.root),Date.now())){await this.broker.open(health);runtime.writePrivate(this.root,'runtime-launch-attempt.json',{...this.launchAttempt,phase:'healthy'});}else await this.broker.closeAdmission();
+  this.assertExecution();if(['healthy','rolled_back'].includes(state.phase)&&require('./runtime-recovery.cjs').healthy(health,release.currentCommit(this.root),Date.now())){this.assertExecution(release.currentCommit(this.root));await this.broker.open(health);this.assertExecution();runtime.writePrivate(this.root,'runtime-launch-attempt.json',{...this.launchAttempt,phase:'healthy'});}else await this.broker.closeAdmission();
   this.publishStatus(state);
  }catch(error){await this.broker.closeAdmission().catch(()=>{});try{this.publishStatus({version:1,phase:'recovery_required',reasonCode:/^[A-Z_]+$/.test(error.code||'')?error.code:'RUNTIME_LAUNCH_OBSERVATION_FAILED'});}catch{}}finally{this.pending=false;}}
 }
