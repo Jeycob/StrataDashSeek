@@ -71,16 +71,53 @@ handle settlement. Existing project executor and pinned SDK registry tests
 also run with mocked processes; a new actual SDK jobs-pump case checks that
 the private prefix never enters ordinary job output.
 
-Root's prepared nonproduction Linux check (NOT run by B):
+Root's prepared nonproduction Linux check (NOT run by B; required Root directory
+preparation and separate backend instructions are specified below):
+  HARNESS_CUSTODY_FIXTURE_ROOT=/var/lib/homeai-custody-fixture-ROOT_PREPARED \
+  HARNESS_CUSTODY_FIXTURE_BACKEND=landlock \
   HOMEAI_RUNTIME=/path/to/already-installed-pinned-runtime \
     node --test workspace/project-custody-linux.test.mjs
 
 It uses the actual installed SDK local subprocess + sandbox + bash + jobs,
-not an unconfined substitute. It exercises startup-hook injection, first-frame
-capture, host PID namespace/stat consistency, filesystem write confinement,
-filtered real job output and owned shutdown. Missing confinement fails on
+not an unconfined substitute. The Landlock case exercises startup-hook injection,
+first-frame capture, host PID namespace/stat consistency, filesystem write
+confinement, filtered real job output and owned shutdown. Missing Landlock fails on
 Linux. It requires no model, Native server/bundle, VM, network or installation.
 The Windows authoring lane syntax-checks this file only; it is not Linux proof.
+
+Revision after independent review (original candidate evidence retained)
+
+The first-frame check validates only the bounded ASCII prefix through its
+first newline. SDK output uses raw byte nextOffset with Buffer.toString(utf8):
+a single app byte0xC4 can decode to a three-byte U+FFFD after the complete
+header. That suffix must not invalidate the header. Prefix loss, offset0,
+canonical fields, nonce and prefix-only offset consistency remain enforced;
+filtered output keeps the SDK's original raw byte coordinates and decoding.
+
+The original /tmp sentinel was invalid because actual Landlock grants /tmp RW.
+The revised Linux fixture requires a fresh Root-prepared synthetic directory
+under /var/lib, owned by the existing NONROOT test/service account. Root-only
+preparation example (SERVICE_USER / SERVICE_GROUP are existing account names):
+  fixture_root=$(mktemp -d /var/lib/homeai-custody-fixture-XXXXXXXXXXXX)
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$fixture_root"
+  chmod 700 "$fixture_root"
+Pass that exact path to the nonroot test process, without changing its HOME:
+  HARNESS_CUSTODY_FIXTURE_ROOT="$fixture_root" \
+  HARNESS_CUSTODY_FIXTURE_BACKEND=landlock HOMEAI_RUNTIME=/existing/runtime \
+    node --test workspace/project-custody-linux.test.mjs
+Run bwrap separately with HARNESS_CUSTODY_FIXTURE_BACKEND=bwrap. Landlock is
+the positive same-host PID / outside-write-denial proof; it pins/probes that
+actual backend without fallback. The bwrap case proves refusal of namespaced
+PID custody (or explicitly skips if bwrap is unavailable), NOT host custody.
+It never guesses a host PID or reads /proc/<namespace-pid> as a host identity.
+The pinned SDK's bwrap unshares PID; it is not supposed to satisfy Landlock's
+same-host assertion. No fabricated probe or unconfined substitute is used.
+The sentinel is a /var/lib sibling of the sole writable project root, outside
+/tmp and all configured writable roots; it is never actual user data. Cleanup
+is restricted to the canonical fresh run-* child. Once every owned test job
+has settled, Root can remove the now-empty outer directory with rmdir --
+"$fixture_root". Never remove a directory belonging to an unknown/active run.
+Neither revised Linux path has been executed by B.
 
 Concrete existing HTTPS-origin provisioning surface (source inspection)
 

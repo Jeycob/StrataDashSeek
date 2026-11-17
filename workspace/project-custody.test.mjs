@@ -51,6 +51,25 @@ test('lossy/offset-jumping/leading/partial/malformed output cannot be searched f
 test('capture abort and early process exit reject; later bytes never publish a prefix',async()=>{
  for(const abort of [true,false]){const p=handle(),controller=new AbortController(),reader=custodyReader(p,control,{signal:controller.signal,timeoutMs:100});if(abort)controller.abort();else p.release();await assert.rejects(reader.ready,/ABORTED|EXITED/);p.append(encoded);await tick();assert.equal(reader.stdout.readFrom(0).text,'');p.release();}
 });
+test('complete ASCII frame tolerates a raw partial UTF8 suffix and retains the SDK byte coordinate system',async()=>{
+ for(const split of [0,Math.floor(encoded.length/2)]){
+  const p=handle(split?encoded.subarray(0,split):Buffer.concat([encoded,Buffer.from([0xc4])])),reader=custodyReader(p,control,{timeoutMs:200});
+  if(split)p.append(Buffer.concat([encoded.subarray(split),Buffer.from([0xc4])]));
+  assert.equal((await reader.ready).pid,1234);
+  assert.deepEqual(reader.stdout.readFrom(0),{text:'\ufffd',nextOffset:1,lossy:false});
+  p.append(Buffer.from([0x8d]));assert.deepEqual(reader.stdout.readFrom(0),{text:'č',nextOffset:2,lossy:false});
+  assert.deepEqual(reader.stdout.readFrom(1),{text:'\ufffd',nextOffset:2,lossy:false});p.release();
+ }
+});
+test('UTF8 decoding never excuses damaged ASCII prefix offsets, loss or non-ASCII protocol data',async()=>{
+ const cases=[
+  ()=>({text:encoded.toString()+'\ufffd',nextOffset:encoded.length-1,lossy:false}),
+  ()=>({text:encoded.subarray(0,20).toString(),nextOffset:21,lossy:false}),
+  ()=>({text:encoded.toString()+'\ufffd',nextOffset:encoded.length+1,lossy:true}),
+  ()=>({text:encoded.toString().replace('HOMEAI','HOM\ufffdEAI')+'\ufffd',nextOffset:encoded.length+2,lossy:false}),
+ ];
+ for(const readFrom of cases){const p=handle();p.observed.stdout.readFrom=readFrom;const reader=custodyReader(p,control);await assert.rejects(reader.ready);assert.equal(reader.stdout.readFrom(0).text,'');p.release();}
+});
 test('raw SDK spill paths cannot expose the private prefix through filtered job output',async()=>{
  const p=handle(encoded),raw=p.observed.stdout.readFrom;p.observed.stdout.readFrom=offset=>({...raw(offset),spillPath:'/raw/protocol-and-app-output'});
  const reader=custodyReader(p,control);await reader.ready;p.append('app');assert.deepEqual(reader.stdout.readFrom(0),{text:'app',nextOffset:3,lossy:false});p.release();

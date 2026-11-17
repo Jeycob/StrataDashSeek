@@ -14,6 +14,7 @@ import { bindHeavyToolLease } from '../efficiency/heavy-tool-lease.mjs';
 import {createHash} from 'node:crypto';
 import {createProjectExecutionMode} from './execution-mode-service.mjs';
 import custodyProtocol from '../development/project-custody.cjs';
+import {custodyReader} from './project-custody.mjs';
 function hostMode(){const policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},policySha256=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(policy).sort(([a],[b])=>a.localeCompare(b))))).digest('hex'),snapshot={...policy,policySha256,sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'};return createProjectExecutionMode({snapshot,assertUnchanged:()=>snapshot}).service;}
 
 let modules;
@@ -100,6 +101,27 @@ async function fixture(t, { controller = true, admission = false, custody = fals
   });
   return { ...S, ctx, root, directory, manager, native, managed, run, agent, call, processes, calls, timers, events, notices };
 }
+
+test('actual pinned SDK partial UTF8 app suffix cannot invalidate a complete ASCII custody prefix',async()=>{
+ const cli=process.env.HARNESS_NATIVE_CLI??path.join(process.env.HOMEAI_RUNTIME??'/data/harness/runtime','node_modules/@deepseek-ai/dsh/lib/bin.js');
+ const {OutputCollector}=await import(pathToFileURL(path.resolve(path.dirname(cli),'../../dsh-subprocess-local/lib/output.js')));
+ const control={version:1,nonce:'a'.repeat(64),generation:'b'.repeat(32)},frame=custodyProtocol.frame(control,{pid:1234,ppid:12,pgrp:12,startTicks:'987654',pidNamespace:'pid:[12345]'});
+ for(const split of [0,Math.floor(frame.length/2)]){
+  const stdout=new OutputCollector(4096,'custody UTF8 fixture');let finish;
+  const process={observed:{stdout},done:new Promise(resolve=>{finish=resolve;})};
+  stdout.push(split?frame.subarray(0,split):Buffer.concat([frame,Buffer.from([0xc4])]));
+  const reader=custodyReader(process,control,{timeoutMs:500});
+  if(split)stdout.push(Buffer.concat([frame.subarray(split),Buffer.from([0xc4])]));
+  try{
+   assert.equal((await reader.ready).pid,1234);
+   assert.deepEqual(reader.stdout.readFrom(0),{text:'\ufffd',nextOffset:1,lossy:false});
+   stdout.push(Buffer.from([0x8d]));
+   assert.deepEqual(reader.stdout.readFrom(0),{text:'č',nextOffset:2,lossy:false});
+   const raw=stdout.readFrom(frame.length+1);
+   assert.deepEqual(reader.stdout.readFrom(1),{text:raw.text,nextOffset:raw.nextOffset-frame.length,lossy:raw.lossy});
+  }finally{finish();}
+ }
+});
 
 test('actual pinned SDK jobs pump only filtered app output for a trusted custody start',async t=>{
  const f=await fixture(t,{custody:true}),owner=f.agent('custody-owner');

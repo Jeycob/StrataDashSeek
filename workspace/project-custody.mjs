@@ -21,10 +21,17 @@ export function custodyReader(process,expected,{signal,timeoutMs=2000,pollMs=5}=
   if(ended)return;
   try{
    const read=process.observed.stdout.readFrom(offset);
-   if(read?.lossy!==false||typeof read.text!=='string'||!Number.isSafeInteger(read.nextOffset)||read.nextOffset!==offset+Buffer.byteLength(read.text))throw failure('PROJECT_CUSTODY_OUTPUT_LOST');
-   offset=read.nextOffset;const bytes=Buffer.from(read.text),newline=bytes.indexOf(10);
-   pending=Buffer.concat([pending,newline<0?bytes:bytes.subarray(0,newline+1)]);
-   if(pending.length>protocol.MAX_FRAME)throw failure('PROJECT_CUSTODY_FRAME_TOO_LARGE');
+   if(read?.lossy!==false||typeof read.text!=='string'||!Number.isSafeInteger(read.nextOffset)||read.nextOffset<offset)throw failure('PROJECT_CUSTODY_OUTPUT_LOST');
+   const newline=read.text.indexOf('\n'),part=newline<0?read.text:read.text.slice(0,newline+1);
+   if(part.length>protocol.MAX_FRAME-pending.length)throw failure('PROJECT_CUSTODY_FRAME_TOO_LARGE');
+   if(/[^\x00-\x7f]/.test(part))throw failure('PROJECT_CUSTODY_PROTOCOL_INVALID');
+   const end=offset+part.length;
+   // Only the bounded ASCII prefix has a one-character/one-byte invariant.
+   // The SDK decodes the whole raw read with Buffer.toString('utf8'); a partial
+   // app byte AFTER the newline may expand to U+FFFD. Do not re-encode it to
+   // validate raw offsets or use it to locate the app's first raw byte.
+   if(read.nextOffset<end||((newline<0||newline===read.text.length-1)&&read.nextOffset!==end))throw failure('PROJECT_CUSTODY_OUTPUT_LOST');
+   offset=read.nextOffset;pending=Buffer.concat([pending,Buffer.from(part,'ascii')]);
    if(newline>=0){const identity=protocol.parseFrame(pending,expected);prefix=pending.length;finish(null,identity);return;}
    timer=setTimeout(poll,pollMs);
   }catch(error){finish(error);}
