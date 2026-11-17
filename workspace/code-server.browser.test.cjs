@@ -1,0 +1,22 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),{execFileSync}=require('node:child_process'),path=require('node:path');
+const fixture='/var/tmp/homeai-editor-b-20261116/project';
+const shell=script=>execFileSync('wsl',['-d','Ubuntu','-e','sh','-c',script],{encoding:'utf8',windowsHide:true}).trim();
+test('actual code-server shows live model writes, retains an unsaved draft across reload, refuses a conflicting save and exposes Git diff',{skip:!process.env.HOMEAI_EDITOR_URL,timeout:90000},async t=>{
+ const {chromium}=require(process.env.HARNESS_PLAYWRIGHT_MODULE||'playwright'),browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const name='proof-'+Date.now()+'.txt';shell(`printf 'Original model file\\n' > '${fixture}/${name}'; git -C '${fixture}' add '${name}'; git -C '${fixture}' -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -qm proof-baseline`);
+ const page=await browser.newPage({viewport:{width:1280,height:900}});page.setDefaultTimeout(15000);page.on('dialog',dialog=>dialog.accept());
+ await page.goto(process.env.HOMEAI_EDITOR_URL+'/?folder='+fixture);await page.waitForSelector('.monaco-workbench');
+ await page.keyboard.press('Control+p');await page.keyboard.type(name);await page.locator('.quick-input-list .label-name').filter({hasText:name}).first().waitFor();await page.keyboard.press('Enter');
+ const lines=()=>page.locator('.monaco-editor .view-lines').first();await lines().filter({hasText:'Original model file'}).waitFor();
+ shell(`printf 'Model live update\\n' > '${fixture}/${name}'`);await lines().filter({hasText:'Model live update'}).waitFor();
+ await lines().click();await page.keyboard.press('Control+End');await page.keyboard.type('\nUNSAVED USER DRAFT');await lines().filter({hasText:'UNSAVED USER DRAFT'}).waitFor();await page.waitForTimeout(1500);
+ await page.reload();await page.waitForSelector('.monaco-workbench');await lines().filter({hasText:'UNSAVED USER DRAFT'}).waitFor();
+ shell(`printf 'Concurrent model replacement\\n' > '${fixture}/${name}'`);await lines().click();await page.keyboard.press('Control+s');
+ await page.getByRole('button',{name:'Compare',exact:true}).waitFor();assert.equal(shell(`cat '${fixture}/${name}'`),'Concurrent model replacement');assert.match(await lines().innerText(),/UNSAVED\sUSER\sDRAFT/);
+ if(process.env.HOMEAI_EDITOR_EVIDENCE)await page.screenshot({path:path.join(process.env.HOMEAI_EDITOR_EVIDENCE,'code-server-conflict.png')});
+ await page.getByRole('button',{name:'Compare',exact:true}).click();await page.locator('.monaco-diff-editor .view-lines').filter({hasText:/Concurrent\smodel\sreplacement/}).filter({visible:true}).first().waitFor();assert.match(await page.locator('body').innerText(),/Concurrent\smodel\sreplacement/);assert.match(await page.locator('body').innerText(),/UNSAVED\sUSER\sDRAFT/);
+ await page.keyboard.press('Control+Shift+g');await page.locator('body').filter({hasText:'Changes'}).waitFor();
+ assert.match(shell(`git -C '${fixture}' diff -- '${name}'`),/Concurrent model replacement/);
+ console.log(JSON.stringify({engine:'code-server 4.145.2 / Code OSS 1.145.2',liveModelWrite:true,draftAfterReload:true,conflictRefused:true,comparisonVisible:true,gitDiff:true,scope:'local WSL synthetic fixture; production auth/isolation not tested'}));
+});
