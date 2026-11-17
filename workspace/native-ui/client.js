@@ -1261,6 +1261,22 @@
 })();
 window.__ModuleLoader__.load({id:'@stratadashseek/native-workbench',factory:require=>{
 const React=require('react');
+// Native also composes abort signals. Older Safari must have these helpers
+// before any of our panes creates a Native session or starts a request.
+if(typeof AbortSignal.any!=='function')AbortSignal.any=iterable=>{
+ const signals=Array.from(iterable);
+ const controller=new AbortController(),subscriptions=[];
+ const cleanup=()=>{for(const [signal,listener]of subscriptions)signal.removeEventListener('abort',listener);subscriptions.length=0;};
+ const aborted=Object.getOwnPropertyDescriptor(AbortSignal.prototype,'aborted').get;
+ for(const signal of signals)aborted.call(signal);
+ for(const signal of signals)if(signal.aborted){controller.abort(signal.reason);return controller.signal;}
+ for(const signal of signals){const listener=()=>{controller.abort(signal.reason);cleanup();};subscriptions.push([signal,listener]);signal.addEventListener('abort',listener,{once:true});}
+ return controller.signal;
+};
+if(typeof AbortSignal.timeout!=='function')AbortSignal.timeout=milliseconds=>{
+ if(!Number.isSafeInteger(milliseconds)||milliseconds<0)throw new RangeError('Invalid timeout');
+ const controller=new AbortController();setTimeout(()=>controller.abort(new DOMException('The operation timed out','TimeoutError')),Math.min(milliseconds,2147483647));return controller.signal;
+};
 const inject=['slots','sidebarRightTabs','sidebarRight','uiWorkspace','locale'];
 const h=React.createElement;
 const copy={en:{docker:'Applications and Docker',workspaces:'Workspace defaults',notifications:'Notifications',newDocker:'Prepare Docker from this project',noRoot:'Open a conversation with a project inside the application workspace.',outsideRoot:'This project is outside the application workspace. Choose a project from the configured workspace.',preparing:'Preparing…',language:'Language',files:'Workspace files',filesHelp:'Browse, edit, upload and delete files in this conversation’s isolated project.',dockerHelp:'Containers, logs and releases. Reading status does not wake Docker.',openPhone:'Open the installed Harness app to configure iPhone notifications.',workspace:'Workspace',noWorkspace:'Create a workspace first.',ready:'Docker project prepared.'},cs:{docker:'Aplikace a Docker',workspaces:'Výchozí nastavení projektů',notifications:'Oznámení',newDocker:'Připravit Docker z tohoto projektu',noRoot:'Otevři konverzaci s projektem ve složce aplikací.',outsideRoot:'Projekt je mimo složku aplikací. Vyber projekt v nastaveném pracovním prostoru.',preparing:'Připravuji…',language:'Jazyk',files:'Soubory projektu',filesHelp:'Procházení, úpravy, nahrávání a mazání souborů odděleného projektu této konverzace.',dockerHelp:'Kontejnery, logy a vydání. Čtení stavu Docker neprobouzí.',openPhone:'Pro nastavení oznámení na iPhonu otevři nainstalovanou aplikaci Harness.',workspace:'Pracovní prostor',noWorkspace:'Nejprve vytvoř pracovní prostor.',ready:'Docker projektu je připravený.'}};
@@ -1291,8 +1307,7 @@ function useLiveChanges(sessionId,visible){
    if(operation==='list'&&snapshot.current.summary?.revision)args.revision=snapshot.current.summary.revision;
    if(operation==='list'&&snapshot.current.diff?.revision)args.diffRevision=snapshot.current.diff.revision;
    try{
-    const response=await fetch('/api/workbench',{method:'POST',credentials:'same-origin',cache:'no-store',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'changes',sessionId,operation,args}),signal:AbortSignal.any([controller.signal,AbortSignal.timeout(15000)])});
-    const result=await response.json();if(!response.ok)throw Error(result.error||'HTTP '+response.status);
+    const result=await nativeJSON('/api/workbench',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'changes',sessionId,operation,args}),signal:controller.signal});
     if(!active()||current!==ticket)return;
     if(operation==='list'){
      if(result.version!==1||result.sessionId!==sessionId||(!result.unchanged&&!Array.isArray(result.files)))throw Error('Invalid changes response.');
@@ -1359,13 +1374,19 @@ function ChangesSession(props){
   files.length?h('div',{className:'hc-body'},h('nav',{className:'hc-list','aria-label':text('fileChanges')},...files.map(file=>h('button',{type:'button',key:file.path,className:'hc-file','data-change-path':file.path,'aria-pressed':changes.selected===file.path,onClick:()=>changes.select(file.path)},h('span',{className:'hc-path'},file.path),h('span',{className:'hc-counts'},h('span',null,text(file.status)),file.added!==null&&file.added!==undefined&&h('span',{className:'hc-plus'},'+'+file.added),file.deleted!==null&&file.deleted!==undefined&&h('span',{className:'hc-minus'},'−'+file.deleted))))),h('div',{className:'hc-diff'},h(ChangeDiff,{diff:changes.diff,selected:changes.selected}))):!(changes.error&&!summary)&&h('p',{className:'hc-empty',role:'status'},text(changes.loading?'loadingChanges':'noChanges')));
 }
 function Changes(props){return h('div',{className:'harness-model-pane'},h(ConversationModel,{sessionId:props.sessionId,key:props.sessionId}),h('div',{className:'harness-model-pane-content'},h(ChangesSession,{...props,key:props.sessionId})));}
-async function state(){const r=await fetch('/api/workbench',{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(15000)});if(!r.ok)throw Error('HTTP '+r.status);return r.json();}
+// Safari versions without AbortSignal.any/timeout use the same explicit
+// controller lifetime as every other browser. Timers/listeners always detach.
+async function nativeJSON(url,options={},timeoutMs=15000){
+ const controller=new AbortController(),abort=()=>controller.abort(),signal=options.signal;
+ if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
+ const timer=setTimeout(abort,timeoutMs);
+ try{const response=await fetch(url,{credentials:'same-origin',cache:'no-store',...options,signal:controller.signal}),result=await response.json();if(controller.signal.aborted)throw new DOMException('Request cancelled or timed out','AbortError');if(!response.ok)throw Object.assign(Error(result.error||'HTTP '+response.status),{code:result.code});return result;}
+ finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);}
+}
+async function state(){return nativeJSON('/api/workbench');}
 Object.assign(copy.en,{conversationModel:'Model for this conversation',workspaceModel:'Workspace default',modelScope:'This control changes only this conversation.',modelUsed:'Last request used',modelPending:'Saving model…',modelRetry:'Refresh models',modelUnavailable:'This saved model is unavailable. Choose an available model to continue.',modelDefaultUnavailable:'The workspace default is unavailable.',modelEffort:'Reasoning level',modelEffortDefault:'Model default',modelCatalogPartial:'Some model providers could not be loaded.'});
 Object.assign(copy.cs,{conversationModel:'Model této konverzace',workspaceModel:'Výchozí model prostoru',modelScope:'Tato volba mění pouze tuto konverzaci.',modelUsed:'Poslední požadavek použil',modelPending:'Ukládám model…',modelRetry:'Obnovit modely',modelUnavailable:'Uložený model není dostupný. Pro pokračování vyber dostupný model.',modelDefaultUnavailable:'Výchozí model prostoru není dostupný.',modelEffort:'Úroveň uvažování',modelEffortDefault:'Výchozí hodnota modelu',modelCatalogPartial:'Některé poskytovatele modelů se nepodařilo načíst.'});
-async function modelJSON(url,options){
- const response=await fetch(url,{credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(15000),...options});
- const value=await response.json();if(!response.ok)throw Error(value.error||'HTTP '+response.status);return value;
-}
+async function modelJSON(url,options){return nativeJSON(url,options);}
 function ConversationModel({sessionId}){
  useLanguage();const [value,setValue]=React.useState(null),[error,setError]=React.useState(''),[busy,setBusy]=React.useState(false),epoch=React.useRef(0),writing=React.useRef(false);
  const load=React.useCallback(async()=>{if(writing.current)return;const ticket=++epoch.current;try{const result=await modelJSON('/api/workbench/models?sessionId='+encodeURIComponent(sessionId));if(ticket!==epoch.current)return;if(result.version!==1||result.sessionId!==sessionId)throw Error('Invalid model response');setValue(result);setError('');}catch(e){if(ticket===epoch.current)setError(e.message);}},[sessionId]);

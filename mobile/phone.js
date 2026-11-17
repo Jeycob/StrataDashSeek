@@ -11,7 +11,7 @@ const ios=/iPhone|iPad|iPod/.test(navigator.userAgent);
 let registration=null,state=null;
 const supported='serviceWorker'in navigator&&'PushManager'in window&&'Notification'in window;
 function note(text){byId('message').textContent=text;}
-async function api(route,data){const response=await fetch('/phone/api/'+route,{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(6000),headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const result=await response.json();if(!response.ok)throw Object.assign(Error(result.error||pt('phoneRequestFailed')),{status:response.status});return result;}
+async function api(route,data){const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),6000);try{const response=await fetch('/phone/api/'+route,{method:data?'POST':'GET',credentials:'same-origin',cache:'no-store',signal:controller.signal,headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const result=await response.json();if(controller.signal.aborted)throw new DOMException('Request timed out','AbortError');if(!response.ok)throw Object.assign(Error(result.error||pt('phoneRequestFailed')),{status:response.status});return result;}finally{clearTimeout(timer);}}
 let refreshing=false;
 function keyBytes(text){return Uint8Array.from(atob(text.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));}
 let harnessMenuObserver=null;
