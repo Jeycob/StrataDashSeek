@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto'), https = require('node:https');
+const {assertAppsExecution,checkedAppsExecution}=require('./apps-execution-mode.cjs');
 const fail = code => Object.assign(Error(code), { code, status: 409 });
 const PROJECTS = '/srv/homeai/projects', TRANSPORT = '/srv/homeai/transport', TOOLCHAIN = '/srv/homeai/toolchain';
 const HEX32 = /^[a-f0-9]{32}$/, HEX16 = /^[a-f0-9]{16}$/;
@@ -46,6 +47,7 @@ function qemuArguments(toolchain = false) {
 }
 function forwards() { return Array.from({ length: 64 }, (_, n) => 'hostfwd=tcp:127.0.0.1:' + (19180 + n) + '-:' + (19180 + n)); }
 function verifyProcessExports(vm) {
+  assertAppsExecution(vm,{isolated:true});
   const exports = vm.projectExports, pid = vm.pid();
   if (!exports || !Number.isInteger(pid) || pid < 1) throw fail('PROJECT_RUNTIME_EXPORT_UNVERIFIED');
   const command = fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8').split('\0');
@@ -90,6 +92,7 @@ chmod 0700 /run/homeai-runtime /var/lib/harness/editor-state
 `;
 }
 async function guestScript(vm, script, timeoutMs = 10000) {
+  assertAppsExecution(vm,{isolated:true});
   if (vm.projectSerialPending || !vm.pid() || vm.phase !== 'ready' && vm.phase !== 'restoring' || !vm.serial || vm.serial.destroyed) throw fail('PROJECT_RUNTIME_SUPERVISOR_UNAVAILABLE');
   const nonce = crypto.randomBytes(8).toString('hex'), file = '/tmp/homeai-supervisor-' + nonce + '.sh', encoded = Buffer.from(script).toString('base64');
   if (encoded.length > 16384) throw fail('PROJECT_RUNTIME_SUPERVISOR_PAYLOAD_INVALID');
@@ -101,13 +104,14 @@ async function guestScript(vm, script, timeoutMs = 10000) {
     const deadline = Date.now() + timeoutMs + 3000;
     while (Date.now() < deadline) {
       const result = vm.buffer.match(new RegExp('(?:^|\\n)HOMEAI_SUPERVISOR_' + nonce + '=(\\d+)(?:\\r?\\n|$)'));
-      if (result) { if (Number(result[1]) !== 0) throw fail('PROJECT_RUNTIME_SUPERVISOR_FAILED'); return; }
+      if (result) { if (Number(result[1]) !== 0) throw fail('PROJECT_RUNTIME_SUPERVISOR_FAILED'); assertAppsExecution(vm,{isolated:true}); return; }
       await pause(50);
     }
     throw fail('PROJECT_RUNTIME_SUPERVISOR_TIMEOUT');
   } finally { vm.projectSerialPending = false; }
 }
 async function proveExports(vm) {
+  assertAppsExecution(vm,{isolated:true});
   if (!vm.cfg.projectRuntime?.enabled) return;
   if (!vm.projectExports) { vm.projectExports = openExports(vm.cfg); closeExports(vm.projectExports); }
   const pid = verifyProcessExports(vm), e = vm.projectExports, nonce = crypto.randomBytes(8).toString('hex'), marker = '.homeai-share-' + nonce;
@@ -155,9 +159,10 @@ chmod 0700 /run/homeai-runtime/${scopeId}/${generation} /var/lib/harness/editor-
 `;
 }
 async function prepare(vm, input) {
+  assertAppsExecution(vm,{isolated:true});
   verifyProcessExports(vm);
   if (!vm.projectRuntimeIsolation?.verified || vm.projectRuntimeIsolation.bootPid !== vm.pid() || input.uid !== vm.projectExports.uid || input.gid !== vm.projectExports.gid) throw fail('PROJECT_RUNTIME_EXPORT_UNVERIFIED');
-  const script = preparationScript(input), store = transportStore(vm), material = await store.prepare(input.scopeId,input.generation);
+  const script = preparationScript(input), store = transportStore(vm), material = await checkedAppsExecution(vm,()=>store.prepare(input.scopeId,input.generation),{isolated:true});
   if (material.serverDirectory !== path.join(vm.projectExports.transport.path,input.scopeId,input.generation) || material.serverName !== input.scopeId+'.'+input.generation+'.editor.homeai.invalid') throw fail('PROJECT_RUNTIME_TRANSPORT_UNVERIFIED');
   await guestScript(vm,script); verifyProcessExports(vm);
   return { version: 1, mtls: true, scopeId: input.scopeId, generation: input.generation, serverName: material.serverName };
@@ -177,19 +182,21 @@ chmod 0700 /run/homeai-egress/${scopeId}/${generation}
 `;
 }
 async function prepareEgress(vm,input) {
+  assertAppsExecution(vm,{isolated:true});
   verifyProcessExports(vm);
   if(!vm.projectRuntimeIsolation?.toolchain?.verified||vm.projectRuntimeIsolation.bootPid!==vm.pid()||input.uid!==vm.projectExports.uid||input.gid!==vm.projectExports.gid)throw fail('PROJECT_RUNTIME_EXPORT_UNVERIFIED');
   await guestScript(vm,egressPreparationScript(input));verifyProcessExports(vm);
   return{version:1,profile:'public-https-unix-v1',scopeId:input.scopeId,generation:input.generation};
 }
 async function egressHealth(vm,{scopeId,generation}) {
+  assertAppsExecution(vm,{isolated:true});
   if(!HEX32.test(scopeId||'')||!HEX32.test(generation||''))throw fail('PROJECT_RUNTIME_PREPARATION_INVALID');verifyProcessExports(vm);
   const socket='/run/homeai-egress/'+scopeId+'/'+generation+'/proxy.sock';
-  try{await guestScript(vm,`set -eu\ntest -S '${socket}' && test ! -L '${socket}'\ntest "$(stat -c %u:%g:%a '${socket}')" = '${vm.projectExports.uid}:${vm.projectExports.gid}:600'\n`,2000);return true;}catch{return false;}
+  try{await guestScript(vm,`set -eu\ntest -S '${socket}' && test ! -L '${socket}'\ntest "$(stat -c %u:%g:%a '${socket}')" = '${vm.projectExports.uid}:${vm.projectExports.gid}:600'\n`,2000);return true;}catch{assertAppsExecution(vm,{isolated:true});return false;}
 }
 async function health(vm, { scopeId, generation, guestPort, serverName, timeoutMs = 2000 }) {
   if (!HEX32.test(scopeId || '') || !HEX32.test(generation || '') || serverName !== scopeId+'.'+generation+'.editor.homeai.invalid' || !Number.isInteger(guestPort) || guestPort < 19180 || guestPort > 19243) throw fail('PROJECT_RUNTIME_TRANSPORT_UNVERIFIED');
-  verifyProcessExports(vm); const identity = await transportStore(vm).clientIdentity(scopeId,generation);
+  verifyProcessExports(vm); const identity = await checkedAppsExecution(vm,()=>transportStore(vm).clientIdentity(scopeId,generation),{isolated:true});
   return new Promise(resolve => {
     let done=false; const finish=value=>{if(done)return;done=true;clearTimeout(timer);request.destroy();resolve(value);};
     const request=https.request({hostname:'127.0.0.1',port:guestPort,path:'/healthz',method:'GET',servername:serverName,ca:identity.ca,cert:identity.cert,key:identity.key,minVersion:'TLSv1.3',rejectUnauthorized:true,agent:false},response=>{const ok=response.socket.authorized===true&&response.statusCode===200;response.destroy();finish(ok);});

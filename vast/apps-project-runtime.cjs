@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const { createRuntimePlan, runtimeRequest } = require('./apps-project-runtime-policy.cjs');
 const { createManagedContainer, matches } = require('./apps-container-create.cjs');
 const { startManagedContainer } = require('./apps-managed-resources.cjs');
+const { assertAppsExecution } = require('./apps-execution-mode.cjs');
 const HEX32 = /^[a-f0-9]{32}$/, TOKEN = /^[A-Za-z0-9_-]{43}$/;
 const activeStates = new Set(['admitting', 'ready', 'running', 'stopping', 'reconciliation_required']);
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -34,6 +35,7 @@ class ProjectRuntime {
     throw failure('PROJECT_RUNTIME_PORT_POOL_FULL');
   }
   check(input, signal, deadline) {
+    assertAppsExecution(this.manager,{isolated:true});
     if (signal?.aborted || this.manager.serviceClosing || Date.now() >= deadline || this.intents()[hash(input.sessionId+'\0'+input.generation)]?.state === 'cancelled') throw failure('PROJECT_RUNTIME_ADMISSION_CANCELLED');
     // Re-read both protected Native authority and current source/VM identities.
     return this.plan(this.manager, input);
@@ -46,6 +48,7 @@ class ProjectRuntime {
   }
   async handle(input, { signal } = {}) {
     if (input?.op === 'stop') return this.stop(input);
+    assertAppsExecution(this.manager,{isolated:true});
     if (input?.op === 'touch') return this.touch(input, { signal });
     const m = this.manager;
     m.requireEnabled();

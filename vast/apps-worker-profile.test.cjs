@@ -1,4 +1,5 @@
 'use strict';
+const {hostExecutionBinding}=require('./fixtures/execution-binding.cjs');
 const test=require('node:test'),assert=require('node:assert/strict');
 const{PILOT_WORKER_PROFILE,validatePilot,workerProfile}=require('./apps-worker-profile.cjs');
 const{DockerVM,bootstrap}=require('./apps-vm.cjs');
@@ -18,7 +19,7 @@ test('observed driver requires actual measured metadata and is distinguished fro
  assert.equal(workerProfile(manifest,{driver:'vfs',at:1234,ready:false}).observedInRunningBoot,false);
 });
 test('passive VM status reports profile without waking, reading files or treating stale observations as current',()=>{
- const vm={phase:'asleep',manifest,cfg:{vm:{idleSeconds:600}},saved:{initialized:true,controlIsolationVersion:1},pid:()=>null,capacityStatus:()=>({allowed:true,phase:'legacy',diskBytes:manifest.diskBytes}),observedStorageDriver:'vfs',storageObservedAt:1234,ensure(){throw Error('must not wake');}};
+ const vm={execution:hostExecutionBinding(),phase:'asleep',manifest,cfg:{vm:{idleSeconds:600}},saved:{initialized:true,controlIsolationVersion:1},pid:()=>null,capacityStatus:()=>({allowed:true,phase:'legacy',diskBytes:manifest.diskBytes}),observedStorageDriver:'vfs',storageObservedAt:1234,ensure(){throw Error('must not wake');}};
  const s=DockerVM.prototype.status.call(vm);assert.equal(s.profile.diskBytes,manifest.diskBytes);assert.equal(s.profile.observedInRunningBoot,false);assert.equal(s.controlIsolation.verified,false);
  vm.phase='ready';assert.equal(DockerVM.prototype.status.call(vm).profile.observedInRunningBoot,true);
 });

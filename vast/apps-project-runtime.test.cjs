@@ -1,4 +1,5 @@
 'use strict';
+const {isolatedExecutionBinding,executionBindingFixture}=require('./fixtures/execution-binding.cjs');
 const test = require('node:test'), assert = require('node:assert/strict'), path = require('node:path');
 const { ProjectRuntime, active, serverName } = require('./apps-project-runtime.cjs');
 const { createRuntimePlan } = require('./apps-project-runtime-policy.cjs');
@@ -14,7 +15,7 @@ function fixture(kind = 'editor') {
   const context = { version: 1, op: kind === 'executor' ? 'execute' : 'ensure', kind, sessionId: 'session-one', projectRoot: root, readOnly: false, generation, ports: [21000,21001,21002,21003] };
   const authority = { expiresAt: Date.now() + 300000, archivedIds: [], sessions: [{ id: context.sessionId, root, managed: true }], runtimeContext: context };
   const proof = { version: 1, verified: true, bootPid: 123, projectsRoot: base, guestProjectsRoot: '/srv/homeai/projects', hostDev: 10, hostIno: 1, uid: 1001, gid: 1001 };
-  const m = { cfg: { enabled: true, projectRuntime: { enabled: true, projectsRoot: base, uid: 1001, gid: 1001, images: { executor: image, editor: image, relay: image } } }, store: { jobs: [], projects: {} }, busy: null, save() {}, log() {}, replaceJobLog(job, text) { job.testOutput = text; }, heartbeat() {}, acceptActivity() {}, requireEnabled() {}, setBusy(value) { this.busy = value; }, async ready() {}, archivedCleanup: { authority(value) { assert.equal(value, token); return authority; } } };
+  const m = { execution:isolatedExecutionBinding(), cfg: { enabled: true, projectRuntime: { enabled: true, projectsRoot: base, uid: 1001, gid: 1001, images: { executor: image, editor: image, relay: image } } }, store: { jobs: [], projects: {} }, busy: null, save() {}, log() {}, replaceJobLog(job, text) { job.testOutput = text; }, heartbeat() {}, acceptActivity() {}, requireEnabled() {}, setBusy(value) { this.busy = value; }, async ready() {}, archivedCleanup: { authority(value) { assert.equal(value, token); return authority; } } };
   m.worker = { pid: () => 123, status: () => ({ projectRuntimeIsolation: proof }), async prepareProjectRuntime(input) { return { version: 1, mtls: true, ...input, serverName: serverName(input.scopeId, input.generation) }; }, async projectRuntimeHealth() { return true; } };
   m.engine = { async json(method, route, options) {
     calls.push([method, route]);
@@ -39,6 +40,14 @@ function fixture(kind = 'editor') {
   const input = { op: context.op, kind, sessionId: context.sessionId, generation, token, stopToken: 's'.repeat(43), ...(kind === 'executor' ? { command: 'printf test' } : {}) };
   return { m, runtime, input, context, authority, calls, containers, filesystem };
 }
+
+test('changed mode refuses renewal and new creation while exact owned stop still settles every container',async()=>{
+  const f=fixture(),binding=executionBindingFixture('isolated-guest');f.m.execution=binding.binding;
+  const ready=await f.runtime.handle(f.input);assert.equal(ready.state,'ready');const starts=f.calls.filter(([m,r])=>m==='POST'&&r.endsWith('/start')).length;
+  binding.fail();await assert.rejects(f.runtime.handle({...f.input,op:'touch'}),{code:'PROJECT_EXECUTION_BINDING_CHANGED'});
+  await assert.rejects(f.runtime.handle({op:'stop',sessionId:f.input.sessionId,generation,stopToken:'t'.repeat(43)}),{code:'PROJECT_RUNTIME_STOP_AUTHORITY_REQUIRED'});
+  const stopped=await f.runtime.handle({op:'stop',sessionId:f.input.sessionId,generation,stopToken:f.input.stopToken});assert.equal(stopped.state,'stopped');assert([...f.containers.values()].every(c=>c.State.Running===false));assert.equal(f.calls.filter(([m,r])=>m==='POST'&&r.endsWith('/start')).length,starts);
+});
 test('editor is READY only after both journaled containers and authenticated health; only hashed stop authority persists', async () => {
   const f = fixture(), result = await f.runtime.handle(f.input);
   assert.equal(result.state, 'ready'); assert.equal(result.transport.hostPort, 19180); assert.equal(result.transport.mtls, true);

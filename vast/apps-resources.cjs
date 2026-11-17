@@ -3,6 +3,7 @@
 // capture authority, controller exclusion, reference graph and durable journal.
 const fs = require('node:fs'), fsp = require('node:fs/promises'), path = require('node:path'), crypto = require('node:crypto');
 const { writeArchive } = require('./apps-resource-archive.cjs');
+const {assertAppsExecution}=require('./apps-execution-mode.cjs');
 const TOKEN = /^[a-f0-9]{32}$/, CID = /^[a-f0-9]{64}$/, IMAGE = /^sha256:[a-f0-9]{64}$/, PID = /^[a-f0-9]{16}$/;
 const fail = (code, status = 409) => Object.assign(Error(code), { code, status });
 const pending = operation => operation && ['queued', 'running', 'reconciliation_required'].includes(operation.state);
@@ -39,13 +40,16 @@ function operationView(cleanup, receipt) {
 }
 async function locked(cleanup, action) {
   const m = cleanup.manager;
+  assertAppsExecution(m);
   if (m.busy || m.ticking || m.previewRequests || m.serviceClosing || m.sleepToken?.()) throw fail('RESOURCE_BUSY');
   m.busy = 'docker-resources'; try { m.heartbeat?.(); return await action(); } finally { m.busy = null; m.heartbeat?.(); }
 }
 async function snapshot(cleanup, token, paging = false) {
+  assertAppsExecution(cleanup.manager);
   const data = state(cleanup), cached = data.snapshots[data.latest];
   if (cached && (paging || Date.now() - cached.observedAt < 10000)) return { ...cached, availability: cached.availability === 'ready' ? available(cleanup) : cached.availability };
   const captured = await cleanup.capture(token);
+  assertAppsExecution(cleanup.manager);
   if (captured.availability === 'ready') {
     const value = { ...captured, observedAt: Date.now(), inventoryId: hash([captured.binding, Date.now(), crypto.randomBytes(8).toString('hex')]) };
     data.snapshots = { [value.inventoryId]: value }; data.latest = value.inventoryId; cleanup.save(); return value;
@@ -61,6 +65,7 @@ async function snapshot(cleanup, token, paging = false) {
 function requireTarget(input) { if (!['container', 'image'].includes(input.kind) || !(input.kind === 'container' ? CID : IMAGE).test(input.id || '') || !['stop', 'delete', 'export'].includes(input.action) || !TOKEN.test(input.operationId || '')) throw fail('RESOURCE_REQUEST_INVALID', 400); }
 function initMethods(Controller) {
   Controller.prototype.resources = async function(input) {
+    assertAppsExecution(this.manager);
     const ctx = context(input), data = state(this); this.authority(input.token);
     if (input.operationId && input.op === 'inventory') {
       const receipt = data.requests[input.operationId]; if (!receipt) throw fail('RESOURCE_OPERATION_NOT_FOUND', 404); authorizeReceipt(receipt, ctx);
@@ -86,6 +91,7 @@ function initMethods(Controller) {
       if (pending(this.data.operation)) throw fail('CLEANUP_RECONCILIATION_REQUIRED');
       const existing = data.snapshots[input.inventoryId]; if (!existing || Date.now() - existing.observedAt > 300000) throw fail('RESOURCE_INVENTORY_STALE');
       const fresh = await this.capture(input.token), row = fresh.rows?.find(r => key(r) === key(input));
+      assertAppsExecution(this.manager);
       if (!row || !owns(row, ctx)) throw fail('RESOURCE_CONTEXT_MISMATCH', 403);
       const allowed = actions(row, ctx, fresh).includes(input.action), plan = { planId: crypto.randomBytes(16).toString('hex'), expiresAt: Date.now() + 300000, createdAt: Date.now(), action: input.action, kind: input.kind, id: input.id, context: ctx, binding: fresh.binding, ownerSessionIds: row.sessionIds,
         blocked: !allowed, reasons: allowed ? [] : [...row.reasonCodes, 'RESOURCE_ACTION_PROTECTED'], warning: input.action === 'delete' && input.kind === 'container' ? 'Deletes the container writable filesystem. Volumes are retained; published and recovery generations are protected.' : input.action === 'delete' ? 'Deletes this unused image; no volumes are deleted.' : input.action === 'export' ? (input.kind === 'image' ? 'Archive contains image layers and image metadata. Volumes and full application restore configuration are not included.' : 'Archive contains the container filesystem only. Volumes and container restore configuration are not included.') : 'Stops this exact container; no other process is stopped.', ...(input.action === 'export' ? { format: input.kind === 'image' ? 'docker-image-archive' : 'container-filesystem' } : {}) };
@@ -106,12 +112,13 @@ function initMethods(Controller) {
     return locked(this, async () => {
       if (pending(this.data.operation)) throw fail('CLEANUP_RECONCILIATION_REQUIRED');
       const fresh = await this.capture(input.token), row = fresh.rows?.find(r => key(r) === key(plan));
+      assertAppsExecution(this.manager);
       if (fresh.binding !== plan.binding || !row || !owns(row, ctx) || !actions(row, ctx, fresh).includes(plan.action)) throw fail('RESOURCE_PLAN_STALE');
       const receipt = { operationId: input.operationId, planId: plan.planId, planHash: plan.planHash, context: ctx, action: plan.action, kind: plan.kind, id: plan.id, state: 'running', ownerSessionIds: plan.ownerSessionIds, startedAt: Date.now(), finishedAt: null, results: [], errorCode: null };
       data.requests[input.operationId] = receipt; this.data.operation = { ...receipt, id: input.operationId, resourceAction: plan.action }; this.save();
       if (plan.action === 'stop') {
         this.data.operation.intent = { kind: plan.kind, id: plan.id, action: 'stop' }; this.save();
-        try { await this.manager.engine.request('POST', '/containers/' + plan.id + '/stop?t=10'); await this.manager.worker?.remember(); receipt.state = 'completed'; receipt.finishedAt = Date.now(); this.data.operation.intent = null; }
+        try { assertAppsExecution(this.manager);await this.manager.engine.request('POST', '/containers/' + plan.id + '/stop?t=10'); await this.manager.worker?.remember(); receipt.state = 'completed'; receipt.finishedAt = Date.now(); this.data.operation.intent = null; }
         catch { receipt.state = 'reconciliation_required'; receipt.errorCode = 'RESOURCE_STOP_OUTCOME_UNKNOWN'; }
         syncOperation(this, receipt); this.save();
       } else {
@@ -125,6 +132,7 @@ function initMethods(Controller) {
     });
   };
   Controller.prototype.resourceDownload = function(input) {
+    assertAppsExecution(this.manager);
     const ctx = context(input), receipt = state(this).requests[input.operationId]; this.authority(input.token);
     if (!receipt) throw fail('RESOURCE_OPERATION_NOT_FOUND', 404); authorizeReceipt(receipt, ctx);
     if (receipt.state !== 'completed' || !receipt.export || receipt.export.expiresAt <= Date.now()) throw fail('RESOURCE_EXPORT_UNAVAILABLE', 410);
@@ -140,8 +148,9 @@ async function exportResource(cleanup, receipt, plan, job) {
   m.busy = job.id; job.status = 'running'; m.save(); m.heartbeat?.();
   const directory = path.join(m.cfg.stateDir, 'resource-exports'), file = archivePath(cleanup, job.id);
   try {
+    assertAppsExecution(m);
     await fsp.mkdir(directory, { recursive: true, mode: 0o700 }); const stat = await fsp.lstat(directory); if (!stat.isDirectory() || stat.isSymbolicLink() || await fsp.realpath(directory) !== path.resolve(directory)) throw fail('RESOURCE_EXPORT_DIRECTORY_UNSAFE');
-    const result = await writeArchive(m.engine, plan.kind === 'image' ? '/images/' + encodeURIComponent(plan.id) + '/get' : '/containers/' + plan.id + '/export', file, { maxBytes: m.cfg.resourceExportMaxBytes ?? 512 * 1024 ** 2, reserveBytes: m.cfg.minFreeBytes ?? 2 * 1024 ** 3 });
+    const result = await writeArchive(m.engine, plan.kind === 'image' ? '/images/' + encodeURIComponent(plan.id) + '/get' : '/containers/' + plan.id + '/export', file, { maxBytes: m.cfg.resourceExportMaxBytes ?? 512 * 1024 ** 2, reserveBytes: m.cfg.minFreeBytes ?? 2 * 1024 ** 3,assertCurrent:()=>assertAppsExecution(m) });
     receipt.export = { ...result, format: plan.format, includesVolumes: false, includesRestoreConfig: false, expiresAt: Date.now() + 15 * 60000 }; receipt.state = 'completed'; job.status = 'passed'; job.resourceExport = { operationId: receipt.operationId, ...receipt.export };
   } catch (e) { receipt.state = 'failed'; receipt.errorCode = /^RESOURCE_[A-Z_]+$/.test(e.code || '') ? e.code : 'RESOURCE_EXPORT_FAILED'; job.status = 'failed'; job.error = receipt.errorCode; }
   finally { receipt.finishedAt = Date.now(); job.endedAt = Date.now(); syncOperation(cleanup, receipt); cleanup.data.operation.intent = null; cleanup.save(); m.save(); m.busy = null; m.heartbeat?.(); }

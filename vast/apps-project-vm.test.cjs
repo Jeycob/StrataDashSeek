@@ -1,4 +1,5 @@
 'use strict';
+const {isolatedExecutionBinding}=require('./fixtures/execution-binding.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),cp=require('node:child_process');
 const vm=require('./apps-project-vm.cjs');
 test('QEMU receives two fixed separate descriptor exports and only private loopback forward pool',()=>{
@@ -19,7 +20,7 @@ test('trusted supervisor scripts require positive same-file challenge and a tran
   if(process.platform==='linux')for(const source of [script,preparation,tools,egress])assert.equal(cp.spawnSync('/bin/sh',['-n'],{input:source}).status,0);
 });
 test('serial success is nonce-bound and nonzero completion never claims a verified mapping',async()=>{
-  const worker={phase:'ready',pid:()=>123,buffer:'',serial:{destroyed:false,write(command){const nonce=command.match(/HOMEAI_SCRIPT_([a-f0-9]{16})/)[1];worker.buffer='\nHOMEAI_SUPERVISOR_'+nonce+'=0\n';}}};
+  const worker={execution:isolatedExecutionBinding(),phase:'ready',pid:()=>123,buffer:'',serial:{destroyed:false,write(command){const nonce=command.match(/HOMEAI_SCRIPT_([a-f0-9]{16})/)[1];worker.buffer='\nHOMEAI_SUPERVISOR_'+nonce+'=0\n';}}};
   await vm.guestScript(worker,'set -eu\ntrue');assert.equal(worker.projectSerialPending,false);
   worker.serial.write=command=>{const nonce=command.match(/HOMEAI_SCRIPT_([a-f0-9]{16})/)[1];worker.buffer='\nHOMEAI_SUPERVISOR_'+nonce+'=1\n';};
   await assert.rejects(vm.guestScript(worker,'false'),{code:'PROJECT_RUNTIME_SUPERVISOR_FAILED'});assert.equal(worker.projectSerialPending,false);

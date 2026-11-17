@@ -1,10 +1,11 @@
 'use strict';
+const {isolatedExecutionBinding}=require('./fixtures/execution-binding.cjs');
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path'), http = require('node:http');
 const { createAppsService } = require('./apps-service.cjs');
 test('disconnect of real authenticated HTTP request aborts admission; runtime reconciliation IDs survive error response', async t => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(),'homeai-runtime-http-')), keyFile = path.join(directory,'key'); await fs.writeFile(keyFile,'synthetic-key');
   let entered, aborted; const ready = new Promise(r=>entered=r), cancelled = new Promise(r=>aborted=r);
-  const manager = { heartbeat(){}, async tick(){}, async projectRuntime(data,{signal}) {
+  const manager = { execution:isolatedExecutionBinding(), heartbeat(){}, async tick(){}, async projectRuntime(data,{signal}) {
     if(data.op==='fail')throw Object.assign(Error('PROJECT_RUNTIME_RECONCILIATION_REQUIRED'),{code:'PROJECT_RUNTIME_RECONCILIATION_REQUIRED',status:409,operationId:'a'.repeat(32),jobId:'b'.repeat(16)});
     entered(); await new Promise(resolve=>signal.addEventListener('abort',()=>{aborted();resolve();},{once:true})); throw Object.assign(Error('cancelled'),{status:409});
   } };
@@ -19,7 +20,7 @@ test('disconnect of real authenticated HTTP request aborts admission; runtime re
 test('closed new-work admission permits only authenticated exact-cap stop and durable cancellation tombstones',async t=>{
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'homeai-runtime-cold-')),keyFile=path.join(directory,'key');await fs.writeFile(keyFile,'synthetic-key');
   const {ProjectRuntime}=require('./apps-project-runtime.cjs'),{atomicJson}=require('../mobile/private-json.cjs'),calls=[];let admissions=0;
-  const manager={store:{jobs:[]},heartbeat(){},async tick(){},save(){atomicJson(path.join(directory,'state.json'),this.store);},worker:{pid(){assert.fail('cleanup must not touch VM launch');}}};
+  const manager={execution:isolatedExecutionBinding(),store:{jobs:[]},heartbeat(){},async tick(){},save(){atomicJson(path.join(directory,'state.json'),this.store);},worker:{pid(){assert.fail('cleanup must not touch VM launch');}}};
   const runtime=new ProjectRuntime(manager);manager.projectRuntime=(data,options)=>{calls.push(data.op);return runtime.handle(data,options);};
   const service=createAppsService({keyFile},manager,{admission:{async admit(){admissions++;throw Error('SYNTHETIC_FENCE_CLOSED');}}});await new Promise(r=>service.server.listen(0,'127.0.0.1',r));
   t.after(async()=>{service.server.closeAllConnections();await new Promise(r=>service.server.close(r));const resolved=await fs.realpath(directory);assert.equal(path.dirname(resolved),await fs.realpath(os.tmpdir()));assert(path.basename(resolved).startsWith('homeai-runtime-cold-'));await fs.rm(resolved,{recursive:true,force:true});});

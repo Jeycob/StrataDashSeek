@@ -1,15 +1,23 @@
 'use strict';
+const {hostExecutionBinding,executionBindingFixture}=require('./fixtures/execution-binding.cjs');
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const http = require('node:http');
 const { ArchivedDockerCleanup, graph } = require('./apps-archived-cleanup.cjs'), { LABEL } = require('./apps-engine.cjs');
 const pid = 'a'.repeat(16), cid = 'b'.repeat(64), image = 'sha256:' + 'c'.repeat(64), jobId = 'd'.repeat(16), token = 'e'.repeat(32), operationId = 'f'.repeat(32), sid = 'session-a';
+
+test('mode invalidation during fresh resource capture prevents stop dispatch and a new action receipt',async t=>{
+ const f=fixture(t),binding=executionBindingFixture('host-compat');f.manager.execution=binding.binding;f.source.containers[0].State={Running:true,Status:'running'};
+ const inventory=await f.call({op:'inventory'}),preview=await f.call({op:'action',phase:'preview',action:'stop',kind:'container',id:cid,operationId,inventoryId:inventory.inventoryId}),capture=f.cleanup.capture;
+ f.cleanup.capture=async(...args)=>{const value=await capture(...args);binding.fail();return value;};await assert.rejects(f.call({op:'action',phase:'apply',action:'stop',kind:'container',id:cid,operationId,planId:preview.plan.planId,planHash:preview.plan.planHash}),{code:'PROJECT_EXECUTION_BINDING_CHANGED'});
+ assert.equal(f.calls.some(([method])=>method==='POST'),false);assert.equal(f.cleanup.data.resources.requests[operationId],undefined);
+});
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'resource-controller-')); t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const root = path.join(directory, 'project'), record = { containerId: cid, projectId: pid, jobId, imageId: image, name: 'sdsh-' + pid + '-' + jobId, token, state: 'created', role: 'candidate' };
   const source = { authority: { sessions: [{ id: sid, root, managed: true }], archivedIds: [], activeIds: [], pinnedIds: [], workspaceRefs: [] }, projects: { [pid]: { id: pid, directory: root, name: 'Synthetic project', dataPolicy: { kind: 'stateless' } } }, jobs: [{ id: jobId, status: 'failed', creations: [record] }], releases: [], deployments: [], saved: { resumeIds: [] }, daemonId: 'synthetic-engine',
     containers: [{ Id: cid, Image: image, Name: '/' + record.name, Config: { Labels: { [LABEL]: 'managed', [LABEL + '.project']: pid, [LABEL + '.job']: jobId, [LABEL + '.create']: token } }, State: { Status: 'exited', Running: false }, Mounts: [] }],
     images: [{ Id: image, Parent: '', Size: 1024, RepoTags: ['stratadashseek-app:' + pid + '-' + jobId], Labels: { [LABEL]: 'managed', [LABEL + '.project']: pid, [LABEL + '.source']: '9'.repeat(64) } }] };
-  const calls = [], manager = { cfg: { stateDir: directory, enabled: true }, store: { projects: source.projects, jobs: source.jobs }, busy: null, save() {}, engine: { async request(method, route) { calls.push([method, route]); if (method === 'DELETE') source.containers = []; else if (method === 'POST') { source.containers[0].State = { Status: 'exited', Running: false }; } }, async json() { return source.containers[0]; } } };
+  const calls = [], manager = { execution:hostExecutionBinding(), cfg: { stateDir: directory, enabled: true }, store: { projects: source.projects, jobs: source.jobs }, busy: null, save() {}, engine: { async request(method, route) { calls.push([method, route]); if (method === 'DELETE') source.containers = []; else if (method === 'POST') { source.containers[0].State = { Status: 'exited', Running: false }; } }, async json() { return source.containers[0]; } } };
   const cleanup = new ArchivedDockerCleanup(manager); manager.archivedCleanup = cleanup;
   cleanup.authority = value => { assert.equal(value, token); return { ...source.authority, reservedIds: [sid] }; };
   cleanup.capture = async value => { cleanup.authority(value); return { availability: 'ready', ...graph(source), containers: structuredClone(source.containers) }; };

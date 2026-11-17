@@ -1,4 +1,5 @@
 'use strict';
+const {hostExecutionBinding}=require('./fixtures/execution-binding.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path');
 const {AppsManager}=require('./apps-manager.cjs'),{guardAppsTarget}=require('./apps-context-guard.cjs'),{projectIdFor}=require('../mobile/apps-context.cjs'),{scaffold}=require('./apps-scaffold.cjs');
 async function fixture(t){
@@ -8,20 +9,20 @@ async function fixture(t){
 }
 test('actual register rejects a target swapped after the root guard and never registers the other project',async t=>{
  const f=await fixture(t);for(const dir of [f.a,f.b]){await fs.writeFile(path.join(dir,'Dockerfile'),'FROM scratch');await fs.writeFile(path.join(dir,'.harness-app.json'),JSON.stringify({version:1,name:path.basename(dir),port:8080}));}
- const manager=new AppsManager(f.cfg,{});await guardAppsTarget(manager,'/register',{path:'alias',_contextProjectId:f.id});await f.flip();await assert.rejects(manager.register('alias',f.id),e=>e.code==='PROJECT_CONTEXT_MISMATCH');assert.deepEqual(manager.store.projects,{});
+ const manager=new AppsManager(f.cfg,{},undefined,hostExecutionBinding());await guardAppsTarget(manager,'/register',{path:'alias',_contextProjectId:f.id});await f.flip();await assert.rejects(manager.register('alias',f.id),e=>e.code==='PROJECT_CONTEXT_MISMATCH');assert.deepEqual(manager.store.projects,{});
 });
 test('actual workflow scaffolding receives expected identity and refuses a post-guard target swap',async t=>{
- const f=await fixture(t),manager=new AppsManager(f.cfg,{});await guardAppsTarget(manager,'/scaffold',{path:'alias',_contextProjectId:f.id});await f.flip();await assert.rejects(manager.scaffold('alias',false,f.id),e=>e.code==='PROJECT_CONTEXT_MISMATCH');assert.deepEqual(await fs.readdir(f.a),['package.json']);assert.deepEqual(await fs.readdir(f.b),['package.json']);assert.equal(manager.busy,null);
+ const f=await fixture(t),manager=new AppsManager(f.cfg,{},undefined,hostExecutionBinding());await guardAppsTarget(manager,'/scaffold',{path:'alias',_contextProjectId:f.id});await f.flip();await assert.rejects(manager.scaffold('alias',false,f.id),e=>e.code==='PROJECT_CONTEXT_MISMATCH');assert.deepEqual(await fs.readdir(f.a),['package.json']);assert.deepEqual(await fs.readdir(f.b),['package.json']);assert.equal(manager.busy,null);
 });
 test('registration cannot replace a project reference while verification is busy or starts during path resolution',async t=>{
- const f=await fixture(t);await fs.writeFile(path.join(f.a,'Dockerfile'),'FROM scratch');const manifest=path.join(f.a,'.harness-app.json');await fs.writeFile(manifest,JSON.stringify({version:1,name:'Original',port:8080}));const manager=new AppsManager(f.cfg,{});await manager.register('alias',f.id);const saved=manager.store.projects[f.id];saved.releaseId='retained-release';await fs.writeFile(manifest,JSON.stringify({version:1,name:'Changed',port:9090}));
+ const f=await fixture(t);await fs.writeFile(path.join(f.a,'Dockerfile'),'FROM scratch');const manifest=path.join(f.a,'.harness-app.json');await fs.writeFile(manifest,JSON.stringify({version:1,name:'Original',port:8080}));const manager=new AppsManager(f.cfg,{},undefined,hostExecutionBinding());await manager.register('alias',f.id);const saved=manager.store.projects[f.id];saved.releaseId='retained-release';await fs.writeFile(manifest,JSON.stringify({version:1,name:'Changed',port:9090}));
  manager.busy='verify';manager.lastActivity=12345;await assert.rejects(manager.register('alias',f.id),e=>e.status===409);assert.equal(manager.lastActivity,12345);assert.equal(manager.store.projects[f.id],saved);assert.equal(saved.port,8080);assert.equal(saved.releaseId,'retained-release');
  manager.busy=null;const read=fs.readFile;fs.readFile=async function(file,...args){const value=await read.call(this,file,...args);if(path.basename(String(file))==='.harness-app.json')manager.busy='verify-started-during-read';return value;};
  try{await assert.rejects(manager.register('alias',f.id),e=>e.status===409);}finally{fs.readFile=read;}
  assert.equal(manager.store.projects[f.id],saved);assert.equal(saved.port,8080);assert.equal(saved.name,'Original');assert.equal(saved.releaseId,'retained-release');
 });
 test('registration rechecks the canonical directory after asynchronous project manifest reads',async t=>{
- const f=await fixture(t);for(const dir of [f.a,f.b]){await fs.writeFile(path.join(dir,'compose.yaml'),'services:\n  web:\n    image: fixture:local\n');await fs.writeFile(path.join(dir,'.harness-app.json'),JSON.stringify({version:1,name:path.basename(dir),port:8080,composeFile:'compose.yaml',entryService:'web'}));}const manager=new AppsManager(f.cfg,{}),read=fs.readFile;let swapped=false;
+ const f=await fixture(t);for(const dir of [f.a,f.b]){await fs.writeFile(path.join(dir,'compose.yaml'),'services:\n  web:\n    image: fixture:local\n');await fs.writeFile(path.join(dir,'.harness-app.json'),JSON.stringify({version:1,name:path.basename(dir),port:8080,composeFile:'compose.yaml',entryService:'web'}));}const manager=new AppsManager(f.cfg,{},undefined,hostExecutionBinding()),read=fs.readFile;let swapped=false;
  fs.readFile=async function(file,...args){const value=await read.call(this,file,...args);if(!swapped&&path.basename(String(file))==='.harness-app.json'){swapped=true;await fs.rename(f.a,path.join(f.root,'a-original'));await fs.symlink(f.b,f.a,process.platform==='win32'?'junction':'dir');}return value;};
  try{await assert.rejects(manager.register('alias',f.id),e=>e.code==='PROJECT_CONTEXT_MISMATCH');}finally{fs.readFile=read;}
  assert(swapped);assert.deepEqual(manager.store.projects,{});

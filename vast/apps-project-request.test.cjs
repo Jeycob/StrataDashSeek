@@ -1,8 +1,9 @@
 'use strict';
+const {hostExecutionBinding}=require('./fixtures/execution-binding.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
 const {jobRequest,requestStatus,enqueueProjectAction}=require('./apps-project-request.cjs');
 const id='a'.repeat(16),requestId='b'.repeat(32),jobId='c'.repeat(16);
-function fixture(){let enqueues=0;const manager={store:{jobs:[]},enqueue(projectId,action,options){enqueues++;const job={id:jobId,projectId,action,status:'queued',startedAt:10,...jobRequest(options,projectId,action)};this.store.jobs.push(job);return job;}};return{manager,count:()=>enqueues,data:{id,action:'verify',_contextProjectId:id,requestId}};}
+function fixture(){let enqueues=0;const manager={execution:hostExecutionBinding(),store:{jobs:[]},enqueue(projectId,action,options){enqueues++;const job={id:jobId,projectId,action,status:'queued',startedAt:10,...jobRequest(options,projectId,action)};this.store.jobs.push(job);return job;}};return{manager,count:()=>enqueues,data:{id,action:'verify',_contextProjectId:id,requestId}};}
 test('lost response lookup and identical retry return one durable existing job',()=>{
  const f=fixture(),job=enqueueProjectAction(f.manager,f.data);assert.equal(f.count(),1);assert.equal(job.requestId,requestId);
  f.manager.store=JSON.parse(JSON.stringify(f.manager.store));
