@@ -133,7 +133,11 @@ zero bytes and that listener still alive, plus revocation/lease.done closure.
 All owned connections/jobs settle before recursive own-tree removal.
 
 This explicit Root fixture requires UID0 and an actual selected confinement
-backend preserving the host PID/network namespaces (normally Landlock).
+Landlock backend preserving the host PID/network namespaces. The fixture
+calls the real SDK probeRunner('landlock') before pinning internals.chain to
+['landlock'], refuses unavailable/unexpected probe results, and checks the
+actual cached selectedRunner after launch. No fake successful probe or backend
+fallback is installed. The small selection helper is fixture-only.
 A supported bwrap PID-isolated SDK backend is intentionally refused by this
 HOST connector; the fixture must not waive or relabel that failure. No outside
 write sentinel under the SDK's globally writable /tmp is used. Root UID0 proof
