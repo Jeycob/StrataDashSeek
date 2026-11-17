@@ -10,7 +10,7 @@ import {FairGate,heavyTool,normalizeCompaction} from './gate.mjs';
 import {resourceSnapshot} from './resources.mjs';
 
 export const name='qwen-efficiency';
-export const inject=['agents','tools','systemPrompt','shell','shellEnv','llm'];
+export const inject=['agents','tools','systemPrompt','shell','shellEnv','llm','sessionQuery'];
 const DIR=path.dirname(fileURLToPath(import.meta.url));
 const quote=s=>"'"+String(s).replaceAll("'","'\\''")+"'";
 const textOf=blocks=>(blocks??[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');

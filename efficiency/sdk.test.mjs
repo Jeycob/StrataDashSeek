@@ -6,7 +6,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {pathToFileURL} from 'node:url';
 import {createRequire} from 'node:module';
-import {apply} from './plugin.mjs';
+import {apply,inject} from './plugin.mjs';
 import {digest} from '../quality/core.mjs';
 
 const SDK=process.env.EFFICIENCY_SDK_ROOT??'/data/harness/runtime/node_modules';
@@ -20,18 +20,38 @@ test('real YAML parser preserves unrelated configuration and never installs two 
   assert.throws(()=>installEfficiency(source.replace('/vast/turn-queue/plugin.mjs','/unexpected.mjs'),yaml));assert.throws(()=>installEfficiency(source,yaml,{schedule:false}));
 });
 
-async function fixture(t){
+async function fixture(t,{throughPlugin=false,declaredInject=inject,events=[]}={}){
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'eff-sdk-'));const ctx=new Context();
   t.after(async()=>{await ctx.fiber.dispose();await fs.rm(directory,{recursive:true,force:true});});
   new SystemPrompt(ctx,{});new Tools(ctx);
   const agent={id:'sdk-agent',session:{id:'sdk-agent',header:{}}};ctx.provide('agents',{get:id=>id===agent.id?agent:undefined});ctx.provide('llm',{});ctx.provide('shell',{});ctx.provide('shellEnv',{});
+  const historyReads=[],queryService={async readSession(id){historyReads.push(id);return{events};}};
+  // Native owns sessionQuery in a sibling plugin, not on the root context.
+  // A root-owned provision would bypass Cordis's declared dependency check.
+  if(throughPlugin)await ctx.plugin({name:'canonical-query-fixture',apply(owner){owner.provide('sessionQuery',queryService);}}).await();
+  else ctx.provide('sessionQuery',queryService);
   ctx.on('workspace-runtime/review',async()=>({root:directory,sourceHash:'current-source',checkpoints:{test:{}},legacy:false}));
-  await apply(ctx,{stateDirectory:path.join(directory,'.state'),engineMetrics:false});
+  const config={stateDirectory:path.join(directory,'.state'),engineMetrics:false};
+  if(throughPlugin)await ctx.plugin({name:'efficiency-injection-fixture',apply,inject:declaredInject},config).await();
+  else await apply(ctx,config);
   const pipeline=new ToolExecutionPipeline(ctx);
   ctx.tools.setExecutor({describe:definitions=>({schemas:definitions.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>executeToolBatch(input,pipeline,()=>2)});
   const call=async(name,args)=>{const batch=await ctx.tools.execute({agent,signal:new AbortController().signal,calls:[{id:crypto.randomUUID(),name,arguments:JSON.stringify(args)}]});return batch.results[0].result;};
-  return{directory,ctx,agent,call};
+  return{directory,ctx,agent,call,historyReads};
 }
+
+test('real SDK plugin dependency enforcement permits canonical request hydration and rejects an undeclared query service',async t=>{
+  const message=(id,text)=>({id,role:'user',source:{kind:'user'},content:[{type:'text',text}]});
+  const original=message('original','Create the synthetic note and preserve its first line.'),correction=message('correction','Keep the original goal and append the exact correction marker.');
+  const events=[{type:'user/message',data:original},{type:'agent/inbox/spliced',data:{inserted:[correction]}}];
+  const f=await fixture(t,{throughPlugin:true,events}),selection={provider:'strata-vast',model:'strata'},signal=new AbortController().signal;
+  const step=state=>state.ctx.waterfall('agent/pre-step',{agent:state.agent,modelSelection:selection,messages:[original],signal},async()=>({kind:'enter',messages:[original]}));
+  await step(f);await step(f);
+  const assembled=await f.ctx.systemPrompt.assemble({agent:f.agent,scope:f.agent,modelSelection:selection,signal});
+  const rendered=JSON.stringify(renderContextSections(assembled));assert.match(rendered,/preserve its first line/);assert.match(rendered,/exact correction marker/);assert.deepEqual(f.historyReads,['sdk-agent']);
+  const missing=await fixture(t,{throughPlugin:true,declaredInject:inject.filter(name=>name!=='sessionQuery'),events});
+  await assert.rejects(()=>step(missing),/cannot get property "sessionQuery" without inject/);assert.deepEqual(missing.historyReads,[]);
+});
 
 test('real SDK validates output schemas, preserves canonical status and enforces one-use rewrite policy',async t=>{
   const f=await fixture(t);const before=Array.from({length:100},(_,i)=>'old'+i).join('\n'),after=Array.from({length:100},(_,i)=>'new'+i).join('\n');await fs.writeFile(path.join(f.directory,'cart.js'),before);
