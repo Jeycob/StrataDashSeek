@@ -25,7 +25,7 @@ const modules=Object.freeze({
   "benchmarks/b02-next-source/spec.mjs": "39319ebc087131ee076c2de3d2783b18d4fcd03db1376272ef276ca0dab90f24",
   "benchmarks/b02-next-source/prior.mjs": "0096a0a2b2a8cac93687bf8e3fa2418e774d69518f90eb5604bdf6f7d15173e9",
   "benchmarks/b02-next-source/frozen-inputs.mjs": "a227b4bc6a2446cccc22da0916f8aca82294df02b71d680d8b709f6701276985",
-  "benchmarks/b02-next-source/qa-ordering.mjs": "0f6cd11237452b3189d4d5a5821965f5b7fcfc1bfd94bcffe6452d3fac51723b",
+  "benchmarks/b02-next-source/qa-ordering.mjs": "138cf3b08de9c5b4ff12c77524813d84926d7cb0a649c2e3899617faa4c17341",
   "benchmarks/b02-next-source/fixture.mjs": "e7111e3d6a22539daa63f16ada4478f209c2eab89f2ea760606dd17bf0cf982e",
   "benchmarks/b02-next-source/runtime-guard.mjs": "320a0e7d61192a27abebc91a98e22dfcafdf4109798e85135b6f32681bd4a773"
 });

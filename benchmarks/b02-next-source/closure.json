@@ -19,7 +19,7 @@
     "benchmarks/b02-next-source/spec.mjs": "39319ebc087131ee076c2de3d2783b18d4fcd03db1376272ef276ca0dab90f24",
     "benchmarks/b02-next-source/prior.mjs": "0096a0a2b2a8cac93687bf8e3fa2418e774d69518f90eb5604bdf6f7d15173e9",
     "benchmarks/b02-next-source/frozen-inputs.mjs": "a227b4bc6a2446cccc22da0916f8aca82294df02b71d680d8b709f6701276985",
-    "benchmarks/b02-next-source/qa-ordering.mjs": "0f6cd11237452b3189d4d5a5821965f5b7fcfc1bfd94bcffe6452d3fac51723b",
+    "benchmarks/b02-next-source/qa-ordering.mjs": "138cf3b08de9c5b4ff12c77524813d84926d7cb0a649c2e3899617faa4c17341",
     "benchmarks/b02-next-source/fixture.mjs": "e7111e3d6a22539daa63f16ada4478f209c2eab89f2ea760606dd17bf0cf982e",
     "benchmarks/b02-next-source/runtime-guard.mjs": "320a0e7d61192a27abebc91a98e22dfcafdf4109798e85135b6f32681bd4a773",
     "benchmarks/n06-evidence-storage/runner.mjs": "3d4840bd0f5e31778bef9b5be60ece8295899a11f930fb66145dd786e5a39dd8",
@@ -31,7 +31,7 @@
     "benchmarks/b02-next-source/ds-first/cli.mjs": "1d022a52bfc23518748c7a2dc2240e082bb293bce2d97a18e35eea8892cb085f",
     "benchmarks/b02-next-source/frozen-pins.json": "7033a70a608b8cd10893ae62878b8e46170e2aa17d4b1389447162c59a6932e9",
     "benchmarks/b02-next-source/homeai-second/cli.mjs": "1d022a52bfc23518748c7a2dc2240e082bb293bce2d97a18e35eea8892cb085f",
-    "benchmarks/b02-next-source/runtime-pins.mjs": "ec78ffd3f3afdbb5a3e49bb0d9ce877eb0b53680f776ad14d852399c07cb805f",
+    "benchmarks/b02-next-source/runtime-pins.mjs": "1b69c95e3e8c8d3b4d791fe84a5d397b00515f2181e57f76c49c3c41588dda37",
     "benchmarks/b02-next-source/runtime.mjs": "5085be8fbe0d2e121ca589ea0034e1b0634be89d374b75195a48b9a0962313c6",
     "benchmarks/b02-next-source/supervisor.mjs": "13776d02b712896ed075df81dcbd0d68b9e2b8fe47f4e57c3a6f588abf8ebcf2"
   },

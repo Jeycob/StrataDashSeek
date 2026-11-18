@@ -31,7 +31,7 @@ export function candidate(name) {
 export function classify(name) {
   name = name.replaceAll('\\', '/');
   if (name === 'benchmarks/b02-next-source/composition.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 7};
-  if (name === 'benchmarks/b02-next-source/contracts.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 10};
+  if (name === 'benchmarks/b02-next-source/contracts.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 11};
   if (name === 'benchmarks/b01-canonical-source/runner.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 8};
   if (name === 'benchmarks/b01-canonical-source/prior-supervisor.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 7};
   if (name === 'benchmarks/n06-finalization/finalization.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 13};
