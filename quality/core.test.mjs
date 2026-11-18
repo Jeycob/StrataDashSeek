@@ -20,6 +20,23 @@ async function project(t, checks, requiredKinds = ['test']) {
 }
 const passing = {id:'tests',kind:'test',command:command("console.log('# pass 3\\n# fail 0')")};
 
+test('browser failure detail survives missing screenshot evidence without passing verification', async t => {
+  const root = await project(t, [{id:'ui',kind:'browser',plan:'plan.json'}], ['browser']);
+  await fs.writeFile(path.join(root,'plan.json'), '{}');
+  const report = await verifyProject({workspace:root,run:async (_command,{env})=>{
+    await fs.writeFile(path.join(root,'.harness/quality/ui-browser.json'),JSON.stringify({
+      runId:env.HARNESS_QUALITY_RUN_ID,engine:'chromium',passed:0,failed:1,screenshots:[],
+      results:[{passed:false,code:'BROWSER_FLOW_FAILED',detail:'page.goto: net::ERR_CONNECTION_REFUSED at http://127.0.0.1:21000/'}],
+    }));
+    return {exitCode:1,stdout:'',stderr:''};
+  }});
+  assert.equal(report.passed,false);assert.equal(report.complete,false);
+  assert.equal(report.results[0].checksPassed,0);
+  assert(report.results[0].diagnostics.some(x=>x.includes('ERR_CONNECTION_REFUSED')),JSON.stringify(report));
+  assert(report.results[0].diagnostics.includes('BROWSER_EVIDENCE_MISSING'));
+  assert.equal(report.results[0].artifactPaths.filter(x=>x.endsWith('.png')).length,0);
+});
+
 test('quality uses the same bounded Node directory compatibility and retains setup versus test-body failures', async t => {
   const workspace = await project(t, [{ id: 'api', kind: 'test', command: [process.execPath, '--test', 'test/'] }]);
   await fs.mkdir(path.join(workspace, 'test'));

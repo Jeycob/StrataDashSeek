@@ -15,6 +15,36 @@ function shop(bug) {
   <p id="total">Košík je prázdný</p><script>document.querySelector('#add').onclick=()=>{document.querySelector('#total').textContent='Celkem: ${bug==='nan'?'NaN':'120'} Kč'};${bug==='console'?"console.error('fixture rendering failure')":''}</script></html>`;
 }
 
+// Disposable loopback fixture: verifies quality/Chromium diagnostics, not HOST
+// producer custody. The separate pinned-SDK suite covers owned job lifetime.
+test('real Chromium retains refused assigned-port cause before readiness and after server shutdown', {timeout:90000}, async t=>{
+  const root=await fs.mkdtemp(path.join(os.tmpdir(),'quality-readiness-'));
+  const server=http.createServer((_req,res)=>{res.setHeader('Content-Type','text/html');res.end('<h1>Ready fixture</h1>');});
+  const listen=port=>new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});
+  const close=()=>new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve()));
+  await listen(0);const port=server.address().port;await close();
+  t.after(async()=>{if(server.listening)await close();await fs.rm(root,{recursive:true,force:true});});
+  await fs.writeFile(path.join(root,'plan.json'),JSON.stringify({version:1,baseURL:'http://127.0.0.1:${PORT}',viewports:[{name:'desktop',width:800,height:600}],flows:[{name:'start',steps:[{action:'goto',path:'/'},{action:'expect',selector:'h1',textIncludes:'Ready fixture'},{action:'checkpoint',name:'ready'}]}]}));
+  await fs.writeFile(path.join(root,'.harness-quality.json'),JSON.stringify({version:1,sources:['plan.json'],requiredKinds:['browser'],checks:[{id:'ui',kind:'browser',plan:'plan.json',timeoutMs:20000}]}));
+  const env={...process.env,PORT:String(port),HARNESS_QUALITY_ALLOWED_PORTS:String(port)};
+  const verify=()=>verifyProject({workspace:root,env});
+  const refused=async()=>{
+    const report=await verify(),raw=JSON.parse(await fs.readFile(path.join(root,'.harness/quality/ui-browser.json'),'utf8'));
+    assert.equal(raw.engine,'chromium');assert.equal(raw.screenshots.length,0);assert.equal(raw.failed,1);
+    assert(raw.results.some(r=>!r.passed&&r.detail?.includes('ERR_CONNECTION_REFUSED')),JSON.stringify(raw));
+    assert.equal(report.complete,false);assert.equal(report.passed,false);
+    assert(report.results[0].diagnostics.some(d=>d.includes('ERR_CONNECTION_REFUSED')),JSON.stringify(report));
+    assert(report.results[0].diagnostics.includes('BROWSER_EVIDENCE_MISSING'));
+    assert.equal(report.results[0].artifactPaths.filter(p=>p.endsWith('.png')).length,0);
+    return report.runId;
+  };
+  const first=await refused();
+  await listen(port);const ready=await verify();assert.equal(ready.complete,true,JSON.stringify(ready));
+  const shots=ready.results[0].artifactPaths.filter(p=>p.endsWith('.png'));assert.equal(shots.length,1);
+  assert.equal((await fs.readFile(path.join(root,shots[0]))).subarray(0,8).toString('hex'),'89504e470d0a1a0a');
+  await close();const last=await refused();assert.notEqual(last,first);assert.notEqual(last,ready.runId);
+});
+
 test('real Chromium distinguishes working shop from four known UI regressions', {timeout:90000}, async t=>{
   const root=await fs.mkdtemp(path.join(os.tmpdir(),'quality-browser-'));
   const server=http.createServer((req,res)=>{res.setHeader('Content-Type','text/html; charset=utf-8');res.end(shop(new URL(req.url,'http://localhost').searchParams.get('bug')));});
