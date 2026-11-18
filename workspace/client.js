@@ -208,7 +208,10 @@
  }
  function renderReview(reconcile=true){
   const content=el('wb-content');content.replaceChildren();const sessionId=selectedSession,p=state.projects[sessionId],b=p?.budget,revision=fileNavigation;
-  const epoch=renderReview.epoch=(renderReview.epoch||0)+1,valid=()=>alive()&&tab==='review'&&selectedSession===sessionId&&revision===fileNavigation&&epoch===renderReview.epoch;
+  const epoch=renderReview.epoch=(renderReview.epoch||0)+1,valid=()=>alive()&&tab==='review'&&selectedSession===sessionId&&revision===fileNavigation;
+  // User checkpoint operations survive their own refresh and a background
+  // status repaint. Only reconcile reads must also match the current render.
+  const freshRead=()=>valid()&&epoch===renderReview.epoch;
   if(!b){content.append(node('p',t('notRun')));return;}
   const automatic=b.automatic,automaticRecovery=automatic?.recovery,phase=automatic?.phase||'working',running=state.running.includes(sessionId),legacyCount=['TASK_BUDGET','AUTOMATIC_CHECK_LIMIT','STAGE_BUDGET'].includes(b.blocked?.code);
   const uncertain=b.blocked?.code==='AUTOMATIC_VERIFICATION_UNCERTAIN'||automatic?.reason==='AUTOMATIC_VERIFICATION_UNCERTAIN'&&!(automaticRecovery?.state==='recovered'&&automaticRecovery.canContinue===true&&automatic.terminalAcknowledged===true);
@@ -255,11 +258,11 @@
   if(reconcile){
    const notice=node('p',at('reconcilingStatus'));notice.dataset.automaticReconciliation='true';notice.setAttribute('role','status');card.append(notice);
    void api({op:'automatic-reconcile',sessionId}).then(result=>{
-    if(!valid()||!notice.isConnected)return;
+    if(!freshRead()||!notice.isConnected)return;
     const next=result?.automatic,r=next?.recovery;
     if(!(next===null||next&&typeof next.terminalAcknowledged==='boolean'&&(r===undefined||r&&['pending','reconciling','recovered','blocked'].includes(r.state)&&typeof r.canContinue==='boolean'))||!(result.blocked===null||result.blocked&&typeof result.blocked.code==='string')||typeof result.continued!=='boolean')throw Object.assign(Error('Invalid automatic recovery response'),{code:'AUTOMATIC_RECOVERY_RESPONSE_INVALID'});
     p.budget.automatic=next;p.budget.blocked=result.blocked;renderReview.acceptance={sessionId,automatic:next,continued:result.continued};renderReview(false);
-   }).catch(error=>{if(valid()&&notice.isConnected){notice.textContent=at('reconciliationUnavailable')+' '+(error.code||error.message);notice.setAttribute('role','alert');}});
+   }).catch(error=>{if(freshRead()&&notice.isConnected){notice.textContent=at('reconciliationUnavailable')+' '+(error.code||error.message);notice.setAttribute('role','alert');}});
   }
  }
  function renderEnvironment(){const content=el('wb-content');content.replaceChildren();const e=state.environment;if(!e){content.append(node('p',t('notRun')));return;}for(const [label,value]of [[t('browser'),e.browser?.ok?t('ready')+' · '+e.browser.version:t('unavailable')],[t('console'),e.browser?.consoleVerified&&!e.browser.consoleErrors?.length?t('passed'):t('unavailable')],[t('webgl'),e.browser?.webgl?.available?t('ready')+' · '+t('software'):t('unavailable')],[t('dotnet'),e.dotnet?.available?e.dotnet.version:t('unavailable')]]){const row=node('div');row.className='wb-row';row.append(node('strong',label),node('span',value));content.append(row);}}
