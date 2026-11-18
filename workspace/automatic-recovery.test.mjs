@@ -11,6 +11,7 @@ import {registerOwnedRangeProvider} from './owned-range-state.mjs';
 import {sourceManifest} from './storage.mjs';
 import {hostExecutionBinding} from './fixtures/execution-binding.mjs';
 import {watchAutomaticCancellation} from './automatic-cancellation.mjs';
+import {continueAutomaticTask} from './automatic-continuation.mjs';
 
 async function fixture(t){
  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'automatic-recovery-')),root=path.join(directory,'project');await fs.mkdir(root);await fs.writeFile(path.join(root,'app.mjs'),'export const value=1;\n');
@@ -84,6 +85,27 @@ test('owner reconcile refuses missing and child identities without any prompt or
 function acceptFollowup(f){
  let sent=0;f.agent.status='idle';f.agent.followup=message=>{sent++;f.agent.inbox.nextTurn.push(message);f.events.push({seq:f.agent.session.seq++,type:'agent/inbox/spliced',data:{inserted:[structuredClone(message)]}});};return()=>sent;
 }
+async function readyContinuation(t){
+ const f=await fixture(t),sent=acceptFollowup(f);await f.terminal();
+ delete f.a.activeCallId;delete f.a.uncertain;f.budget.blocked=null;f.a.reconciledCallId=f.callId;f.a.continuationNeeded=true;f.a.recovery={state:'recovered',code:'AUTOMATIC_RESULT_RECONCILED',canContinue:true};return{...f,sent};
+}
+test('an expired or invalid owner continuation deadline refuses before persistence or followup',async t=>{
+ for(const deadline of [Date.now()-1,NaN]){
+  const f=await readyContinuation(t);let saves=0;f.manager.save=async()=>{saves++;};
+  assert.equal(await continueAutomaticTask(f.manager,'owner',{deadline}),false);assert.equal(saves,0);assert.equal(f.sent(),0);assert.equal(f.a.continuation,undefined);assert.equal(f.a.taskSteps,80);assert.equal(f.a.recovery.code,'AUTOMATIC_CONTINUATION_PERSISTENCE_UNCONFIRMED');
+ }
+});
+test('an originally live owner deadline cannot renew while dispatch-intent persistence settles late',async t=>{
+ const f=await readyContinuation(t);let now=Date.now(),release,entered;
+ const held=new Promise(resolve=>release=resolve),atDispatch=new Promise(resolve=>entered=resolve),save=f.manager.save.bind(f.manager);
+ t.mock.method(Date,'now',()=>now);
+ f.manager.save=()=>{const writing=save();if(f.a.continuation?.state==='dispatching'){entered();return Promise.all([writing,held]);}return writing;};
+ const deadline=now+1000,pending=continueAutomaticTask(f.manager,'owner',{deadline});
+ try{await atDispatch;assert.equal(f.sent(),0);now=deadline+1;release();assert.equal(await pending,false);}
+ finally{release();await f.manager.persistQueue;}
+ assert.equal(f.sent(),0);assert.equal(f.agent.inbox.nextTurn.length,0);assert.equal(f.a.continuation.state,'dispatching');assert.equal(f.a.recovery.code,'AUTOMATIC_CONTINUATION_PERSISTENCE_UNCONFIRMED');assert.equal(f.a.taskSteps,80);
+ const stored=JSON.parse(await fs.readFile(f.manager.file,'utf8'));assert.equal(stored.sessions.owner.budget.automatic.continuation.state,'dispatching','Late persistence is retained, not converted into dispatch or retry');
+});
 test('late SDK drain with closed panel autonomously queues exactly one durable same-task continuation',async t=>{
  const f=await fixture(t),sent=acceptFollowup(f);await f.terminal();await acknowledgeAutomatic(f.manager,'owner',f.callId);
  assert.equal(sent(),1);assert.equal(f.a.continuation.state,'accepted');assert.equal(f.a.continuationNeeded,false);assert.equal(f.a.taskSteps,80);
