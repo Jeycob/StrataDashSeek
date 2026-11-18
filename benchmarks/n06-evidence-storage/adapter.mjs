@@ -67,14 +67,14 @@ export function createRootIOAdapter({target,attemptId,ownerHost,ownerCookie,chec
   return new Promise((resolve,reject)=>{
    let req,res,ended=false,timeout,bytes=0;const chunks=[];
    const done=(error,value)=>{if(ended)return;ended=true;clear(timeout);signal?.removeEventListener('abort',abort);error?reject(error):resolve(value);};
-   const stop=code=>{done(fail(code));try{req?.destroy();}catch{}try{res?.destroy();}catch{}};
+   const stop=(code,context)=>{done(Object.assign(fail(code),context));try{req?.destroy();}catch{}try{res?.destroy();}catch{}};
    const abort=()=>stop('RPC_ABORTED');
    timeout=timer(()=>stop('RPC_DEADLINE'),Math.max(0,end-now()));signal?.addEventListener('abort',abort,{once:true});
    try{
     guard(end,signal);
     req=request({protocol:'http:',hostname:'127.0.0.1',port:3090,method:'POST',path:'/api/'+method,agent:false,headers:{...headers,Accept:'application/json','Content-Type':'application/json','Content-Length':body.length}},incoming=>{
      res=incoming;if(ended){res.destroy();return;}
-     if(res.statusCode!==200){stop('RPC_HTTP_STATUS');return;}
+     if(res.statusCode!==200){stop('RPC_HTTP_STATUS',{rpcMethod:method,httpStatus:Number.isInteger(res.statusCode)&&res.statusCode>=100&&res.statusCode<=599?res.statusCode:null});return;}
      if(res.headers?.['content-encoding']&&res.headers['content-encoding']!=='identity'){stop('RPC_ENCODING_REFUSED');return;}
      const length=res.headers?.['content-length'];if(length!==undefined&&(!/^\d+$/.test(String(length))||Number(length)>limits.responseBytes)){stop('RPC_RESPONSE_LIMIT');return;}
      res.on('aborted',()=>stop('RPC_RESPONSE_ABORTED'));res.on('error',()=>stop('RPC_TRANSPORT_FAILED'));

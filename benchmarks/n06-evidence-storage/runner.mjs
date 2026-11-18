@@ -101,13 +101,29 @@ export async function runPrimary({record,target,handoff,inputs,io,clock,signal})
  const output=structuredClone(record),sessionId=target.sessionId,requestId=randomUUID(),iso=at=>new Date(at).toISOString();
  const invoke=(fn,deadline,outerSignal)=>clock.bound(fn,deadline,outerSignal);
  const rpc=(method,data,deadline,outerSignal)=>{const bounded=Math.min(deadline,clock.now()+4000);return invoke(options=>io.rpc(method,data,{...options,deadline:bounded}),bounded,outerSignal);};
+ const observationRpcRetries={attempts:[],omitted:0};
+ const observationRpc=async(method,data,{deadline,signal}={})=>{
+  const end=Math.min(deadline,clock.now()+4000);
+  try{return await rpc(method,data,end,signal);}catch(first){
+   if(first.code!=='RPC_HTTP_STATUS'||first.httpStatus!==503||first.rpcMethod!==method||!['session/state','session/page'].includes(method))throw first;
+   const retry={method,firstStatus:503,attemptCount:1,retryOutcome:'not_dispatched'};
+   if(observationRpcRetries.attempts.length<64)observationRpcRetries.attempts.push(retry);else observationRpcRetries.omitted++;
+   if(output.nativeObservation)output.nativeObservation.observationRpcRetries=observationRpcRetries;
+   try{
+    need(!signal?.aborted,'USER_STOP');need(clock.now()<end,'DEADLINE');
+    await invoke(()=>clock.sleep(Math.min(100,end-clock.now())),end,signal);
+    need(!signal?.aborted,'USER_STOP');need(clock.now()<end,'DEADLINE');
+    retry.attemptCount=2;const value=await rpc(method,data,end,signal);retry.retryOutcome='succeeded';return value;
+   }catch(error){retry.retryOutcome=retry.attemptCount===2?'failed':'not_dispatched';throw error;}
+  }
+ };
  const verified=await inputs.verify(record);need(verified?.unchanged===true&&Buffer.isBuffer(verified.prompt)&&sha(verified.prompt)===record.identity.promptSha256,'FROZEN_INPUTS_CHANGED');
  const ready=await invoke(options=>io.preflight({record,target,handoff,...options}),clock.now()+10000);
  need(ready?.quiet===true&&ready.mode==='host-compat'&&ready.sourceCommit===handoff.sourceCommit&&ready.runtimeCommit===handoff.runtimeCommit&&ready.workspaceId===target.workspaceId&&ready.fixtureEvidence===target.preparedFixtureEvidence,'PREFLIGHT_UNCONFIRMED');
  need(ready.preview?.supported===true&&ready.preview.evidence,'HOST_PREVIEW_UNCONFIRMED');
  if(record.scenario==='B10')need(ready.restart?.supported===true&&ready.restart.evidence,'HOST_RESTART_UNCONFIRMED');
  need(JSON.stringify(ready.modelSelection)===JSON.stringify(target.modelSelection)&&ready.modelSelectionEvidence,'OWN_MODEL_SELECTION_UNCONFIRMED');
- const initial=await readOwnObservation({rpc:(m,d,o)=>rpc(m,d,o.deadline,o.signal),sessionId,afterSeq:-1,deadline:clock.now()+10000});
+ const initial=await readOwnObservation({rpc:observationRpc,sessionId,afterSeq:-1,deadline:clock.now()+10000});
  need(initial.state.active===true&&!initial.state.running&&initial.state.pendingInput.length===0&&initial.state.queue.every(contextItem),'OWN_SESSION_NOT_IDLE');
  need(!initial.events.some(row=>['user/message','turn/start','assistant/message'].includes(row.type)),'OWN_SESSION_NOT_FRESH');
  const cut=initial.state.cursor,started=clock.now(),mainDeadline=started+600000;
@@ -116,6 +132,7 @@ export async function runPrimary({record,target,handoff,inputs,io,clock,signal})
  output.operator={requestId,baselineSeq:cut,primaryDeadlineAt:iso(mainDeadline),rootHandoff:handoff.id,finalized:false};
  output.operator.persistence={lastDurableCheckpointId:null,unknownOutcome:false};
  output.nativeObservation={promptAdmission:'unknown',cancelAcknowledged:false,settled:false,events:[],usage:[],usageComplete:false};
+ if(observationRpcRetries.attempts.length||observationRpcRetries.omitted)output.nativeObservation.observationRpcRetries=observationRpcRetries;
  output.missingDataReasons=[{scope:'token totals and cost',reason:'No complete auxiliary/billing ledger is attached; raw own-event usage is retained separately and unknown values are not zero.'},{scope:'active/queue/model/tool/compaction/validation interval totals',reason:'No complete interval ledger is attached; do not derive missing waits from wall time.'},{scope:'independent acceptance',reason:'Existing QA collection has not yet finalized all required criteria.'}];
  output.status='BLOCKED';output.statusReason='Attempt entered; no acceptance yet.';
  // A timed-out callback may still be running. Quarantine that writer and never
@@ -156,7 +173,7 @@ export async function runPrimary({record,target,handoff,inputs,io,clock,signal})
    if(stopping)await stopOwn();
    const deadline=stopping?cleanupDeadline():mainDeadline;
    try{
-    const observation=await readOwnObservation({rpc:(m,d,o)=>rpc(m,d,o.deadline,o.signal),sessionId,afterSeq:cut,deadline,signal:stopping?undefined:signal});
+    const observation=await readOwnObservation({rpc:observationRpc,sessionId,afterSeq:cut,deadline,signal:stopping?undefined:signal});
     const events=observation.events,evidence=nativeEvidence(events);Object.assign(output.nativeObservation,evidence,{events,historyComplete:true});
     if(output.timestampsUtc.firstOutputAt===null&&events.some(row=>['assistant/message','assistant/attempt'].includes(row.type)))output.timestampsUtc.firstOutputAt=iso(clock.now());
     // Keep every header for QA to distinguish primary and auxiliary inference;
@@ -172,7 +189,9 @@ export async function runPrimary({record,target,handoff,inputs,io,clock,signal})
     if(!observation.state.running&&observation.state.queue.length===0&&observation.state.pendingInput.length===0&&(evidence.terminal||neverEntered)&&work?.settled===true&&work.evidence){
      output.nativeObservation.settled=true;output.settledEvidence={sessionCursor:observation.state.cursor,terminal:evidence.terminal??'cancelled-before-turn',work:work.evidence};output.timestampsUtc.settledAt=iso(clock.now());break;
     }
-   }catch(error){output.nativeObservation.observationError=error.code??error.message;beginStop(signal?.aborted?'user_stop':clock.now()>=mainDeadline?'main_deadline':'observation_unconfirmed');}
+   }catch(error){output.nativeObservation.observationError=error.code??error.message;
+    if(error.code==='RPC_HTTP_STATUS'&&['session/state','session/page'].includes(error.rpcMethod)&&!output.nativeObservation.observationErrorContext)output.nativeObservation.observationErrorContext={code:'RPC_HTTP_STATUS',rpcMethod:error.rpcMethod,httpStatus:Number.isInteger(error.httpStatus)&&error.httpStatus>=100&&error.httpStatus<=599?error.httpStatus:null};
+    beginStop(signal?.aborted?'user_stop':clock.now()>=mainDeadline?'main_deadline':'observation_unconfirmed');}
    if(!output.operator.persistenceFailed)try{await checkpoint('observation',stopping?cleanupDeadline():mainDeadline,stopping?undefined:signal);}catch{beginStop(signal?.aborted?'user_stop':clock.now()>=mainDeadline?'main_deadline':'evidence_write_failed');await stopOwn();}
    await clock.sleep(Math.min(500,Math.max(0,(stopping?cleanupDeadline():mainDeadline)-clock.now())));
   }

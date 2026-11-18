@@ -67,8 +67,30 @@ and does not accept missing or foreign results.
 
 ## Provenance and checks
 
-The adapter, runner and finalization modules preserve the exact reviewed source
-bytes from packet `c49c17316eb3afeb5769d0ad17395de86e46382677e6e8e46c82c53fe1ee7931`.
+The storage behavior of adapter, runner and finalization comes from reviewed
+packet `c49c17316eb3afeb5769d0ad17395de86e46382677e6e8e46c82c53fe1ee7931`.
+The adapter now retains the fixed own RPC method and numeric HTTP status on
+`RPC_HTTP_STATUS`; the runner carries the first terminating state/page HTTP failure context
+(fixed code, method and status) into its final Native observation, even after
+later cleanup observations. Response bodies, headers, credentials and server error text
+are never copied into this context. A final non-200 error still stops the primary
+as unconfirmed. These final observation diagnostics cover state/page reads;
+prompt and cancellation catches keep their existing admission/cleanup flags.
+The adapter exposes method/status to its caller for every non-200 response.
+
+Only an exact, method-matched HTTP 503 from a state/page read permits one reread.
+Both calls share `min(callerDeadline, firstReadStart + 4000)` and the same owner
+abort. The bounded backoff is at most 100 ms; expired or stopped work cannot
+dispatch the second read. This does not retry a prompt, cancellation, queue
+mutation, archive or preview operation, another HTTP status, or a transport,
+parse, schema or credential failure. It does not reset the primary clock or a
+cleanup cap, and does not establish the historical failed request's HTTP status.
+`nativeObservation.observationRpcRetries` retains up to 64 entries containing
+only method, firstStatus 503, attemptCount and retryOutcome, plus an explicit
+omitted count. `not_dispatched` retains attemptCount 1; an invoked second read
+records attemptCount 2 with `succeeded` or `failed`. Successful rereads remain
+visible in the complete final record. The historical operational closures remain
+unchanged.
 The lifecycle preserves the exact reviewed r4 bytes from packet
 `50c4f1ccb2daecb77b0c8b55d048dd3b94a8d9f10928562d543dcbee2a68c770`.
 Their hashes, the unchanged composition sources and the eight historical pins
