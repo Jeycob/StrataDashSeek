@@ -219,5 +219,8 @@ test('CI requires all three portable source suites and preserves historical benc
   const row=classify('benchmarks/n06-evidence-storage/'+name+'.test.mjs');assert.equal(row.required,true);assert.equal(row.kind,'node');assert.equal(row.lane,'portable');assert.equal(row.minTests,count);
  }
  assert.equal(classify('benchmarks/n06-finalization/finalization.test.mjs').minTests,13);
+ for(const[name,count]of [['composition',7],['contracts',10]]){
+  const row=classify('benchmarks/b10-next-pair-source/'+name+'.test.mjs');assert.equal(row.required,true);assert.equal(row.kind,'node');assert.equal(row.lane,'portable');assert.equal(row.minTests,count);
+ }
  assert.equal(classify('benchmarks/unrelated-history.test.mjs').required,false);
 });

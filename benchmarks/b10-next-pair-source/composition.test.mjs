@@ -19,7 +19,7 @@ async function composition({refuseCritical=false,observerStatuses=[],observerMet
  const {slot,previousRuns}=boundSlot(variant);
  const clock=new Clock(),memory=new MemoryFS(),began=clock.now(),log=[],checkpoints=[],own=slot.target;
  const record=JSON.parse(await fs.readFile(new URL((variant==='DS'?'ds-first':'homeai-second')+'/primary.record.json',import.meta.url)));
- const prompt=await fs.readFile(new URL('../../../../homeai-team-20261116/reviewer/benchmarks/paired-20261116/prompts/B10.txt',import.meta.url));
+ const prompt=Buffer.from('Synthetic B10 composition input; not a benchmark prompt');record.identity.promptSha256=hash(prompt);
  let submitted=false,archived=false,ready=false,requestId,observerResponses=0,errorInjected=false;const rpcCalls=[],outerAbort=new AbortController();
  const history=[{seq:0,type:'session/context',data:{}}];
  const add=(type,data)=>history.push({seq:history.length,type,data});

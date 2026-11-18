@@ -54,10 +54,11 @@ test('prior envelope hash, final clock, identity, fence and durability failures 
 });
 
 function fixture({extra=false,symlink=false,changed=false}={}){
- const pins=frozen.files.filter(x=>x.path.startsWith('fixtures/B10/')),base=new URL('../../../../homeai-team-20261116/reviewer/benchmarks/paired-20261116/',import.meta.url),root='/synthetic/project',nodes=new Map();let ino=1,output='',error='';
+ const synthetic=new Map(frozen.files.filter(x=>x.path.startsWith('fixtures/B10/')).map(x=>[x.path,Buffer.from('Synthetic inspector bytes: '+x.path)]));
+ const pins=[...synthetic].map(([path,bytes])=>({path,bytes:bytes.length,sha256:sha(bytes)})),root='/synthetic/project',nodes=new Map();let ino=1,output='',error='';
  const stat=(kind,bytes=Buffer.alloc(0))=>({dev:1,ino:ino++,uid:1001,gid:1001,mode:kind==='dir'?0o40700:0o100600,nlink:1,size:bytes.length,mtimeMs:1,ctimeMs:1,bytes,isDirectory:()=>kind==='dir',isFile:()=>kind==='file',isSymbolicLink:()=>kind==='link'});
  nodes.set('/synthetic',stat('dir'));nodes.set(root,stat('dir'));nodes.set(root+'/.harness',stat('dir'));nodes.set(root+'/.gitignore',stat('file'));nodes.set(root+'/test',stat('dir'));
- for(const p of pins)nodes.set(root+'/'+p.path.slice(13),stat('file',fs.readFileSync(new URL(p.path,base))));
+ for(const p of pins)nodes.set(root+'/'+p.path.slice(13),stat('file',synthetic.get(p.path)));
  if(extra)nodes.set(root+'/notes.json',stat('file',Buffer.from('[]')));
  if(symlink)nodes.get(root+'/app.js').isSymbolicLink=()=>true;
  const handles=new Map();let fd=1,read=false;
@@ -65,7 +66,7 @@ function fixture({extra=false,symlink=false,changed=false}={}){
  const proc={argv:['-e',root,JSON.stringify(pins)],getuid:()=>1001,getgid:()=>1001,stdout:{write:s=>output+=s},stderr:{write:s=>error+=s},exitCode:0};
  vm.runInNewContext('('+b10FixtureChild.toString()+')()',{require:name=>name==='node:fs'?fake:crypto,process:proc,Buffer});return{proc,output,error,pins};
 }
-test('B10 service-UID inspector accepts exactly six original files, rejects saved state, symlink and change during read',()=>{
+test('B10 service-UID inspector accepts six synthetic files at original paths, rejects saved state, symlink and change during read',()=>{
  const good=fixture();assert.equal(good.proc.exitCode,0,good.error);assert.deepEqual(JSON.parse(good.output).files,good.pins);
  for(const options of [{extra:true},{symlink:true},{changed:true}]){const f=fixture(options);assert.equal(f.proc.exitCode,1);assert.equal(f.output,'');assert.equal(f.error,'B10_FIXTURE_REFUSED\n');}
 });
