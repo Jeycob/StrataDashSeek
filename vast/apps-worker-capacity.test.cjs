@@ -12,6 +12,7 @@ function fixture({grown=false}={}){
  const fakeFS={lstatSync(){throw Object.assign(Error('absent'),{code:'ENOENT'});},existsSync:()=>true,readFileSync(file){const name=String(file).replaceAll('\\','/');if(name.endsWith('/manifest.json'))return Buffer.from(JSON.stringify(current));if(name.endsWith('/vm.json'))return JSON.stringify({workerProcess:{version:1,state:'absent'},initialized:true,controlIsolationVersion:1,resourceBootstrapVersion:2,resumeIds:[]});throw Object.assign(Error('absent'),{code:'ENOENT'});},unlinkSync(){events.push('remove-stale-ipc');},statfsSync(){afterStat?.();return{bavail:16*GiB,bsize:1};},openSync(){events.push('open-qemu-log');throw Error('Unexpected spawn path');}};
  vm.runInNewContext(source,{module,exports:module.exports,process:{getuid:()=>1001},Buffer,Date,setTimeout,clearTimeout,console,require(name){
   if(name==='node:fs')return fakeFS;
+  if(name==='./apps-vm-reconciliation.cjs')return{gatePending:()=>false};
   if(name==='./apps-worker-growth-policy.cjs')return{inspectWorkerCapacity(){events.push('capacity-read');return validateCapacity({guard,manifest:current,manifestSha256:hash(current),raw,workerRoot:root});}};
   if(name==='node:child_process')return{spawn(){events.push('spawn');throw Error('No real process may start');}};
   return require(name.startsWith('.')?path.join(__dirname,name):name);

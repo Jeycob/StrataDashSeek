@@ -22,6 +22,7 @@ function fixture({mode='host-compat',enabled=true,execution=executionBindingFixt
  const module={exports:{}};
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'apps-vm.cjs'),'utf8'),{module,exports:module.exports,process:{getuid:()=>1001},Buffer,Date,setTimeout,clearTimeout,structuredClone,console,require(name){
   if(name==='node:fs')return fakeFS;
+  if(name==='./apps-vm-reconciliation.cjs')return{gatePending:()=>false};
   if(name==='node:child_process')return{spawn(binary,args,options){events.push('spawn');spawned={binary,args,options};throw Object.assign(Error('inert spawn boundary'),{code:'SYNTHETIC_SPAWN'});}};
   if(name==='./apps-project-vm.cjs')return projectAdapter;
   if(name==='./apps-worker-growth-policy.cjs')return{inspectWorkerCapacity(){events.push('capacity');return{allowed:true,phase:'legacy',diskBytes:manifest.diskBytes,manifestSha256};}};

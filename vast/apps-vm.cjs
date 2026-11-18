@@ -7,6 +7,7 @@ const {inspectWorkerCapacity}=require('./apps-worker-growth-policy.cjs');
 const {fixedguestOverlayProbe,parseOverlayProbe}=require('./apps-overlay-probe.cjs');
 const projectVM=require('./apps-project-vm.cjs');
 const {bindAppsExecution,assertAppsExecution}=require('./apps-execution-mode.cjs');
+const {gatePending}=require('./apps-vm-reconciliation.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Only a ChildProcess returned by THIS controller's spawn is ownership. A PID
 // file, matching argv or an old saved state cannot manufacture that handle.
@@ -40,6 +41,7 @@ function processObservation(vm){
  }
  const receipt=vm.saved.workerProcess,absentReceipt=receipt?.version===1&&receipt.state==='absent'&&Object.keys(receipt).length===2;
  if(own?.child&&own.closed&&!own.absenceConfirmed)return{kind:'UNKNOWN'};
+ if(gatePending(vm.root,fs))return{kind:'UNKNOWN'};
  return record.kind==='ABSENT'&&(absentReceipt||own?.admitting||own?.fresh&&receipt===undefined)?record:{kind:'UNKNOWN'};
 }
 function requireProcess(vm,{absent=false}={}){
@@ -328,4 +330,4 @@ class DockerVM {
   }catch(e){this.phase='error';this.error=e.message;throw e;}finally{this.stopping=false;}
  }
 }
-module.exports={DockerVM,bootstrap,controlFirewall};
+module.exports={DockerVM,bootstrap,controlFirewall,RECONCILIATION_CONTRACT:require('./apps-vm-reconciliation.cjs').CONTRACT};

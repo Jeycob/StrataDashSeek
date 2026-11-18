@@ -30,6 +30,8 @@ export function candidate(name) {
 }
 export function classify(name) {
   name = name.replaceAll('\\', '/');
+  if (name === 'vast/apps-vm-reconciliation.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:11};
+  if (name === 'development/apps-vm-reconcile-primitives.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:19};
   if (name === 'benchmarks/b02-next-source/composition.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 7};
   if (name === 'benchmarks/b02-next-source/contracts.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 11};
   if (name === 'benchmarks/b01-canonical-source/runner.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 8};
