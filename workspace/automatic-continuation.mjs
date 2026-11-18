@@ -14,7 +14,7 @@ const evidence=async(manager,agent,intent)=>{
 };
 // Only called under the owner's reconciliation single-flight. There is one
 // durable dispatch intent; an uncertain queue write is observed, never retried.
-export async function continueAutomaticTask(manager,id){
+export async function continueAutomaticTask(manager,id,{deadline:ownerDeadline=Infinity}={}){
  const budget=manager.budgets.get(id),a=budget?.automatic,record=manager.data.sessions[id];
  const cancelled=()=>{a.continuationNeeded=false;a.phase='cancelled';a.recovery={state:'recovered',code:'AUTOMATIC_CANCELLED',canContinue:false};releaseAutomaticCancellation(manager,id,a.operation);return false;};
  if(a?.operation?.cancelledByCaller)return cancelled();
@@ -23,7 +23,8 @@ export async function continueAutomaticTask(manager,id){
  const observingUnknown=['dispatching','unknown'].includes(a.continuation?.state)&&a.recovery?.code==='AUTOMATIC_CONTINUATION_UNCONFIRMED';
  if(!a.recovery?.canContinue&&!observingUnknown)return false;
  const block=reason=>{a.recovery={state:'blocked',code:reason,canContinue:false};return false;};
- const deadline=Date.now()+4000;
+ const deadline=Math.min(Date.now()+4000,ownerDeadline);
+ if(!Number.isFinite(deadline)||Date.now()>=deadline)return block('AUTOMATIC_CONTINUATION_PERSISTENCE_UNCONFIRMED');
  const save=()=>automaticBound(manager.save(),deadline);
  if(!agent||manager.ownerAgent(agent)!==agent||!a.receipt||a.reconciledCallId!==a.receipt.callId)return block('AUTOMATIC_CONTINUATION_IDENTITY_UNAVAILABLE');
  const task=record.automaticRequest??record.budgetRequest,operation=a.operation;
