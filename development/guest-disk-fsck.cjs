@@ -76,7 +76,8 @@ function assertWitness(value,geometry){
 }
 async function runFsck({setpriv,e2fsck,uid,gid,fd,timeoutMs,tool}){
  if(!toolValid(tool)||tool.path!==e2fsck||!integer(uid)||!integer(gid)||!integer(fd)||!integer(timeoutMs)||timeoutMs<1000||timeoutMs>120000)throw fail();
- const child=cp.spawn(setpriv,['--reuid',String(uid),'--regid',String(gid),'--clear-groups','--no-new-privs','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--',e2fsck,'-f','-n','/proc/self/fd/3'],{cwd:'/',env:{PATH:'/usr/sbin:/usr/bin:/sbin:/bin',HOME:'/nonexistent',LANG:'C',LC_ALL:'C'},stdio:['ignore','pipe','pipe',fd],windowsHide:true});
+ // Explicit slots4..9 clear inherited non-CLOEXEC descriptors, including the Root lease.
+ const child=cp.spawn(setpriv,['--reuid',String(uid),'--regid',String(gid),'--clear-groups','--no-new-privs','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--',e2fsck,'-f','-n','/proc/self/fd/3'],{cwd:'/',env:{PATH:'/usr/sbin:/usr/bin:/sbin:/bin',HOME:'/nonexistent',LANG:'C',LC_ALL:'C'},stdio:['ignore','pipe','pipe',fd,'ignore','ignore','ignore','ignore','ignore','ignore'],windowsHide:true});
  const capture=Object.fromEntries(['stdout','stderr'].map(name=>[name,{hash:crypto.createHash('sha256'),bytes:0,chunks:[]}]));
  let kept=0,expired=false,clipped=false,spawnError=false,streamError=false,killRequested=false;
  const stop=()=>{if(!killRequested){killRequested=true;child.kill('SIGKILL');}};

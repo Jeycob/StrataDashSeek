@@ -47,7 +47,7 @@ const options={setpriv:'/usr/bin/setpriv',e2fsck:tool.path,uid:1001,gid:1001,fd:
 test('actual runner passes only held FD3, drops inherited environment/lease, and waits for exact owned close',async()=>{
  const f=runner();let settled=false;const done=f.api.runFsck(options).then(p=>{settled=true;return p;});
  f.child.stdout.emit('data',stdout);f.child.stderr.emit('data',stderr);f.child.emit('exit',0,null);await Promise.resolve();assert.equal(settled,false);
- const call=f.calls[0];assert.equal(call.exe,'/usr/bin/setpriv');assert.deepEqual(Array.from(call.options.stdio),['ignore','pipe','pipe',27]);assert(call.args.includes('--no-new-privs'));assert.deepEqual(Array.from(call.args.slice(-3)),['-f','-n','/proc/self/fd/3']);assert.equal(call.options.env.HOME,'/nonexistent');
+ const call=f.calls[0];assert.equal(call.exe,'/usr/bin/setpriv');assert.deepEqual(Array.from(call.options.stdio),['ignore','pipe','pipe',27,'ignore','ignore','ignore','ignore','ignore','ignore']);assert(call.args.includes('--no-new-privs'));assert.deepEqual(Array.from(call.args.slice(-3)),['-f','-n','/proc/self/fd/3']);assert.equal(call.options.env.HOME,'/nonexistent');
  f.child.emit('close',0,null);assertWitness(await done,geometry);
 });
 test('actual runner overflow keeps complete per-stream hashes/counts after kill and separate capped prefixes',async()=>{
