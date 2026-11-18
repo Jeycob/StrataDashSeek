@@ -6,7 +6,9 @@ const matches=(message,intent)=>message?.id===intent.message.id&&sha(message)===
 const evidence=async(manager,agent,intent)=>{
  if(await manager.ctx.sessions.flush(agent.session)!==true)return false;
  const saved=await manager.ctx.sessionQuery.readSession(agent.id);
- return Array.isArray(saved.events)&&saved.events.some(event=>event.seq>intent.baselineSeq&&(
+ // Session.seq is the NEXT append offset, so the first admitted splice can
+ // have exactly baselineSeq. Matching message identity/hash remains required.
+ return Array.isArray(saved.events)&&saved.events.some(event=>event.seq>=intent.baselineSeq&&(
   event.type==='agent/inbox/spliced'&&event.data?.inserted?.some(message=>matches(message,intent))
   ||event.type==='user/message'&&matches(event.data,intent)));
 };

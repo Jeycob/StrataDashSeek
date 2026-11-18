@@ -215,7 +215,7 @@ test('actual pinned SDK executor runs its guard and single final observer for co
  for(let n=12;n<=31;n++)await advance(n);
  const caller=new AbortController(),events=[];let followups=0,stopDeadline,stoppedExecution;
  f.agent.session.seq=0;f.agent.inbox={nextTurn:[],nextStep:[]};
- f.agent.followup=message=>{followups++;f.agent.inbox.nextTurn.push(message);events.push({seq:++f.agent.session.seq,type:'agent/inbox/spliced',data:{inserted:[message]}});};
+ f.agent.followup=message=>{followups++;f.agent.inbox.nextTurn.push(message);events.push({seq:f.agent.session.seq++,type:'agent/inbox/spliced',data:{inserted:[message]}});};
  ctx.provide('sessions',{flush:async()=>true});ctx.provide('sessionQuery',{readSession:async()=>({events})});
  releaseHang=undefined;
  const stopTimer=t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>{if(ms>=110000&&ms<=120000){stopDeadline=()=>fn(...args);return{unref(){}};}return originalTimer(fn,ms,...args);});

@@ -82,7 +82,7 @@ test('owner reconcile refuses missing and child identities without any prompt or
 });
 
 function acceptFollowup(f){
- let sent=0;f.agent.status='idle';f.agent.followup=message=>{sent++;f.agent.inbox.nextTurn.push(message);f.events.push({seq:++f.agent.session.seq,type:'agent/inbox/spliced',data:{inserted:[structuredClone(message)]}});};return()=>sent;
+ let sent=0;f.agent.status='idle';f.agent.followup=message=>{sent++;f.agent.inbox.nextTurn.push(message);f.events.push({seq:f.agent.session.seq++,type:'agent/inbox/spliced',data:{inserted:[structuredClone(message)]}});};return()=>sent;
 }
 test('late SDK drain with closed panel autonomously queues exactly one durable same-task continuation',async t=>{
  const f=await fixture(t),sent=acceptFollowup(f);await f.terminal();await acknowledgeAutomatic(f.manager,'owner',f.callId);
