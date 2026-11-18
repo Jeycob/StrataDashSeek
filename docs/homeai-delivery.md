@@ -2,6 +2,20 @@
 
 Postup vychází z integračních zkušeností 16.–18. listopadu 2026. Cílem je rychleji doručovat ověřené uživatelské výsledky a omezit přípravy, které jejich dostupnost neposouvají.
 
+## Plynulé předávání práce
+
+Koordinátor drží integraci, aktuální stav a jediný slot pro změny sdíleného runtime. Vymezenou diagnostiku, implementaci a přípravu QA přiděluje dostupným autorům. Téměř dokončenou malou opravu může dokončit sám; rozpracované soubory nepředává bez popisu stavu a výslovného převodu vlastnictví.
+
+Každý implementátor má jeden aktivní a jeden připravený nezávislý úkol ze schváleného backlogu. V existující matici stačí vlastník, dotčené soubory, nejbližší ověřitelný výstup, podmínka přijetí, další úkol a případná blokující událost. Připravený úkol je zásoba práce, nikoli další souběžná rozpracovaná změna. Po předání kandidáta nebo během čekání na CI, QA či live slot autor pokračuje tímto úkolem, pokud je skutečně nezávislý. Koordinátor při předání nebo běžné kontrole ověří převzetí; odeslaná zpráva ani neaktivní chat se nepočítají jako běžící práce.
+
+Předání připravené k integraci obsahuje problém a výsledné chování, větev/SHA, soubory, relevantní kontroly s odkazy a konkrétní další krok. Hotový nezávislý blok nečeká na celý backlog; povinné CI zůstává. Nasazeno, funkčně přijato a změřeno benchmarkem jsou různé stavy.
+
+QA připravuje scénáře souběžně a přebírá přesný commit nebo hash artefaktu, cestu či session, způsob spuštění, očekávaný výsledek a známá omezení. Při čekání na živé prostředí může nezávisle ověřit místní artefakt. Opravená kopie má vlastní verzi; původní neúspěch a jeho důkazy zůstávají. Lokální PASS nenahrazuje přijetí nasazené aplikace. Zdrojové opravy a lokální QA mohou běžet souběžně; konkurenční zátěž ve stejném prostředí nesmí změnit podmínky měřeného benchmarku.
+
+Udržuj jediný krátký současný souhrn, přibližně do 800 slov. Staré průběžné zápisy zachovej v označené historii s odkazem a neprezentuj je jako aktuální. Dostupnost autorů, výsledky QA a konkrétní čekání aktualizuj v existujících registrech při předání. Z existujících časových údajů sleduj čekání na integraci a čas od připraveného artefaktu k QA; nezaváděj další deník, dashboard ani povinný interval reportů. Rozdělení práce nerozšiřuje oprávnění a nemění zmrazené benchmarkové podmínky.
+
+## Oprávnění a ověřování výsledku
+
 **Souhlas s původní benchmarkovou sadou:** uživatel 18. listopadu 2026 přímo v koordinačním chatu potvrdil všech 20 již zadaných běhů HomeAI/DS na stávajícím Vastu podle původního zmrazeného manifestu, včetně jeho omezených opravných pokusů. Jednotlivé běhy této sady nevyžadují další souhlas. Oprávnění platí do jejího dokončení nebo změny či odvolání uživatelem; nezahrnuje nové placené prostředky, neomezené opakování ani rozšíření sady. Původní časové limity, povinné přijetí a omezení nástrojů zůstávají. Přímé potvrzení a uzavření původní otázky uchovává projektové předání; případné konkrétní nové odmítnutí nástroje posuzuj podle jeho skutečného důvodu.
 
 **Souhlas s běžným staging nasazováním z 18. listopadu 2026:** na přímou otázku „Schvalujete také běžná nasazení na stávající Vast až do odvolání, včetně krátkého zastavení a restartu služby?“ uživatel v koordinačním chatu odpověděl „ano“ (zpráva `01a1ed8d-302b-7043-af78-48b0ef7d7c44`). Původní otázka výslovně vymezila opravy HomeAI / StrataDashSeek, krátké zastavení předem ověřeného klidového runtime, změnu source pinu, start nové verze a obnovu guardu; bez mazání uživatelských dat a bez nových placených prostředků. Souhlas platí do odvolání jen pro tento projekt na stávajícím Vastu; pro jednotlivé takové releasy se znovu nevyžaduje. Nasazuje jediný operátor po relevantním CI a s funkčním ověřením a obnovou původního guardu. Přesné obě otázky a přímou odpověď uchovává osobní workflow a projektová evidence `standing-deployment-authorization-root-20261118/authorization.json`. Dosavadní oprávnění pro `main`, přenosy a původní benchmarkovou sadu i omezení nástrojů zůstávají beze změny.
