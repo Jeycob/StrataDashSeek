@@ -9,6 +9,7 @@ import {createOwnPeerConnector} from '../workspace/host-peer-connector.mjs';
 import {sameHostCustodyBackend} from '../workspace/preview-backend.mjs';
 import {previewSupported} from '../workspace/host-preview.mjs';
 import {retainHeavyToolLease} from '../efficiency/heavy-tool-lease.mjs';
+import {browserServerInspection,readInspectionDiagnostic} from './browser-server-diagnostic.mjs';
 const failure=code=>Object.assign(Error(code),{code}),need=(ok,code)=>{if(!ok)throw failure(code);};
 const quote=x=>"'"+String(x).replaceAll("'","'\\''")+"'";
 const inspector=fileURLToPath(new URL('./browser-server-inspect.mjs',import.meta.url));
@@ -54,8 +55,7 @@ export async function createBrowserServerChannel(ctx,manager,run,{execution,proj
     await confined(projectRoot,message.contractPath);
     const signal=AbortSignal.any([execution.signal,controller.signal]);
     const inspected=await run({command:[process.execPath,inspector,projectRoot,message.contractPath,message.checkId].map(quote).join(' '),description:'Inspect declared browser server',timeoutMs:Math.min(120000,message.deadline-Date.now())},{...execution,signal});check();
-    need(inspected.result?.exitCode===0&&!inspected.result.stdout?.truncated&&typeof inspected.result.stdout?.text==='string'&&Buffer.byteLength(inspected.result.stdout.text)<=32768,'BROWSER_SERVER_INSPECTION_FAILED');
-    const data=JSON.parse(inspected.result.stdout.text);need(data.checkId===message.checkId&&data.contractHash===message.contractHash&&data.planHash===message.planHash&&record.ports.includes(data.port),'BROWSER_SERVER_CONTRACT_CHANGED');
+    const data=browserServerInspection(inspected.result);need(data.checkId===message.checkId&&data.contractHash===message.contractHash&&data.planHash===message.planHash&&record.ports.includes(data.port),'BROWSER_SERVER_CONTRACT_CHANGED');
     const spec=validateBrowserServer(data.server),cwd=await confined(projectRoot,data.cwd);check();
     need(await f.backend(ctx,{mode:'workspace-write',workspaceRoot:projectRoot,additionalWritableRoots:record.gitWritableRoots??[]},signal),'BROWSER_SERVER_BACKEND_UNAVAILABLE');check();
     const remaining=message.deadline-Date.now();need(remaining>=1000,'BROWSER_SERVER_TIMEOUT');
@@ -96,7 +96,7 @@ export async function createBrowserServerChannel(ctx,manager,run,{execution,proj
       let at;while((at=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,at);buffer=buffer.slice(at+1);
         if(++messages>65){socket.destroy();break;}
         if(!authorized){try{const value=JSON.parse(line);need(!authenticated&&Object.keys(value).sort().join(',')==='nonce,type'&&value.type==='hello'&&value.nonce===nonce,'BROWSER_SERVER_CHANNEL_INVALID');authenticated=socket;authorized=true;socket.write(JSON.stringify({ok:true,value:{connected:true}})+'\n');}catch{socket.destroy();}continue;}
-        chain=chain.then(async()=>{try{const value=await handle(JSON.parse(line));if(!socket.destroyed)socket.write(JSON.stringify({ok:true,value})+'\n');}catch(error){if(!socket.destroyed)socket.write(JSON.stringify({ok:false,code:/^[A-Z][A-Z0-9_]{1,63}$/.test(error.code)?error.code:'BROWSER_SERVER_FAILED'})+'\n');}});
+        chain=chain.then(async()=>{try{const value=await handle(JSON.parse(line));if(!socket.destroyed)socket.write(JSON.stringify({ok:true,value})+'\n');}catch(error){const inspection=readInspectionDiagnostic(error.inspection);if(!socket.destroyed)socket.write(JSON.stringify({ok:false,code:/^[A-Z][A-Z0-9_]{1,63}$/.test(error.code)?error.code:'BROWSER_SERVER_FAILED',...(inspection?{inspection}:{})})+'\n');}});
       }
     });
   });

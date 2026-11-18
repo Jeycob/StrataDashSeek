@@ -1,4 +1,5 @@
 import net from 'node:net';
+import {readInspectionDiagnostic} from './browser-server-diagnostic.mjs';
 const failure=code=>Object.assign(Error(code),{code});
 export async function connectBrowserServerControl(envelope,{signal}={}){
   if(!envelope||Object.keys(envelope).sort().join(',')!=='deadline,nonce,path,version'||envelope.version!==1||!/^[a-f0-9]{64}$/.test(envelope.nonce)||typeof envelope.path!=='string'||envelope.path.length>4096||!Number.isSafeInteger(envelope.deadline))throw failure('BROWSER_SERVER_CHANNEL_INVALID');
@@ -9,7 +10,7 @@ export async function connectBrowserServerControl(envelope,{signal}={}){
   socket.on('error',end);socket.on('close',end);socket.setEncoding('utf8');
   socket.on('data',chunk=>{
     buffer+=chunk;if(Buffer.byteLength(buffer)>16384){socket.destroy();return;}
-    let at;while((at=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,at);buffer=buffer.slice(at+1);try{const reply=JSON.parse(line),waiting=pending;pending=undefined;if(!waiting)throw Error('Unsolicited control reply');if(reply.ok===true)waiting.resolve(reply.value);else waiting.reject(failure(typeof reply.code==='string'?reply.code:'BROWSER_SERVER_CHANNEL_FAILED'));}catch{socket.destroy();}}
+    let at;while((at=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,at);buffer=buffer.slice(at+1);try{const reply=JSON.parse(line),waiting=pending;pending=undefined;if(!waiting)throw Error('Unsolicited control reply');if(reply.ok===true)waiting.resolve(reply.value);else{const error=failure(typeof reply.code==='string'?reply.code:'BROWSER_SERVER_CHANNEL_FAILED'),inspection=readInspectionDiagnostic(reply.inspection);if(inspection&&inspection.code===error.code)error.inspection=inspection;waiting.reject(error);}}catch{socket.destroy();}}
   });
   signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)abort();
   const request=value=>new Promise((resolve,reject)=>{if(closed||pending){reject(failure('BROWSER_SERVER_CHANNEL_CLOSED'));return;}pending={resolve,reject};socket.write(JSON.stringify(value)+'\n');});

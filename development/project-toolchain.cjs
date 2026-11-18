@@ -7,6 +7,7 @@ const PINS=Object.freeze({codeServer:'4.145.2',codeServerSHA256:'2f6db6c3e8b733d
 const SOURCE_FILES=Object.freeze({
  'quality/core.mjs':'homeai/quality/core.mjs','quality/browser.mjs':'homeai/quality/browser.mjs','quality/cli.mjs':'homeai/quality/cli.mjs','quality/README.md':'homeai/quality/README.md',
  'quality/browser-server-contract.mjs':'homeai/quality/browser-server-contract.mjs','quality/browser-server-client.mjs':'homeai/quality/browser-server-client.mjs',
+ 'quality/browser-server-diagnostic.mjs':'homeai/quality/browser-server-diagnostic.mjs',
  'workspace/tool-recovery.mjs':'homeai/workspace/tool-recovery.mjs','workspace/source-private.cjs':'homeai/workspace/source-private.cjs','workspace/process-lock.mjs':'homeai/workspace/process-lock.mjs',
  'development/test-command.cjs':'homeai/development/test-command.cjs','development/versions.json':'homeai/development/versions.json','development/doctor.cjs':'homeai/development/doctor.cjs','runtime/require.cjs':'homeai/runtime/require.cjs',
  'workspace/editor-runtime/socket-relay.cjs':'homeai/socket-relay.cjs','workspace/egress-runtime/egress-launch.cjs':'homeai/egress-launch.cjs','workspace/egress-runtime/connect-proxy.cjs':'homeai/connect-proxy.cjs'});

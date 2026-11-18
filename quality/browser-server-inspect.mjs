@@ -2,6 +2,7 @@ import {isMain} from '../runtime/require.cjs';
 import {readJson,validateContract,digest,confined} from './core.mjs';
 import {validatePlan,resolveBaseURL} from './browser.mjs';
 import {validateBrowserServer} from './browser-server-contract.mjs';
+import {safeInspectionCode} from './browser-server-diagnostic.mjs';
 
 // Executed by the existing confined SDK project runner, never a host fs read
 // of a model-supplied command. The host compares these exact contract hashes.
@@ -21,5 +22,5 @@ if(isMain(import.meta.url)){
     const [workspace,contractPath,checkId,...rest]=process.argv.slice(2);
     if(!workspace||!contractPath||!checkId||rest.length)throw Error('Invalid browser server inspection arguments.');
     console.log(JSON.stringify(await inspectBrowserServer({workspace,contractPath,checkId})));
-  }catch(error){console.log(JSON.stringify({code:error.code??'BROWSER_SERVER_INSPECTION_FAILED'}));process.exitCode=1;}
+  }catch(error){console.log(JSON.stringify({code:safeInspectionCode(error.code)}));process.exitCode=1;}
 }
