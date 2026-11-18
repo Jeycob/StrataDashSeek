@@ -9,6 +9,7 @@ const helpers = new Map([
   ['vast/apps-browser-check.cjs', 'Owned-release browser verification adapter; requires a project, plan and release ID.']
 ]);
 const hostFixtures = new Map([
+  ['development/guest-disk-owned-overlay-check.cjs', 'Default-disabled manual Root private-mount-namespace fixture on only new synthetic16MiB files; actual overlay/unshare/Python qualification, never a production raw or automatic CI mount.'],
   ['workspace/owned-range-linux.test.mjs', 'Explicit operator-prepared nonroot /var/lib fixture and actual same-host SDK backend; proves leader-surviving descendant range and retained permit before preview activation.'],
   ['workspace/project-custody-linux.test.mjs', 'Root-prepared existing nonroot account and canonical /var/lib fixture with explicit real Landlock/bwrap backend; operator qualification records positive custody and namespace refusal separately.'],
   ['workspace/host-peer-connector-linux.test.mjs', 'Explicit Root-controlled real SDK loopback fixture with probed Landlock; production service-UID proc visibility is separately qualified before preview activation.'],
@@ -32,6 +33,7 @@ export function classify(name) {
   name = name.replaceAll('\\', '/');
   if (name === 'vast/apps-vm-reconciliation.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:11};
   if (name === 'development/apps-vm-reconcile-primitives.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:19};
+  if (name === 'development/guest-disk-owned-copyup.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:24};
   if (name === 'benchmarks/b02-next-source/composition.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 7};
   if (name === 'benchmarks/b02-next-source/contracts.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 11};
   if (name === 'benchmarks/b01-canonical-source/runner.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 8};

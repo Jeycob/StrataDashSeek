@@ -39,10 +39,10 @@ function assessCapacity(plan,observation){
  if(projectedFree<cap.guestReserveBytes+cap.guestNewBytes||plan.source.fs.freeInodes<cap.guestReserveInodes+cap.guestNewInodes)throw fail('GROW_GUEST_CAPACITY');
  return{deltaBytes:delta,requiredHostBytes:requiredBytes,projectedGuestFreeBytes:projectedFree};
 }
-function assertIdentity(plan,observation,{target=false,manifestHash=plan.source.manifestSha256}={}){
+function assertIdentity(plan,observation,{target=false,manifestHash=plan.source.manifestSha256,allocatedBytes=plan.source.allocatedBytes}={}){
  const raw=observation?.raw,fs=observation?.fs;
  if(!raw||['dev','ino','uid','gid'].some(key=>raw[key]!==plan.source[key])||raw.links!==1||raw.bytes!==(target?plan.targetBytes:plan.source.bytes)||!integer(raw.allocatedBytes,raw.bytes)||observation.manifestSha256!==manifestHash)throw fail('GROW_IDENTITY_CHANGED');
- if(!target&&raw.allocatedBytes!==plan.source.allocatedBytes)throw fail('GROW_IDENTITY_CHANGED');
+  if(!target&&raw.allocatedBytes!==allocatedBytes)throw fail('GROW_IDENTITY_CHANGED');
  if(!fs||fs.uuid!==plan.source.fs.uuid||fs.blockSize!==plan.source.fs.blockSize||fs.blockCount*fs.blockSize!==(target?plan.targetBytes:plan.source.bytes)||!integer(fs.freeBlocks)||fs.freeBlocks>fs.blockCount||!integer(fs.freeInodes)||fs.freeInodes>fs.inodeCount)throw fail('GROW_FILESYSTEM_CHANGED');
  if(!target&&['blockCount','freeBlocks','inodeCount','freeInodes'].some(key=>fs[key]!==plan.source.fs[key]))throw fail('GROW_FILESYSTEM_CHANGED');
 }
@@ -55,8 +55,10 @@ function approvedGuard(plan,record){return{version:1,contract:CONTRACT,phase:'ap
 /** Adapter seam is for synthetic fixtures. Production callers use growOffline.
  * Every mutating intent is durable before its side effect. Existing ambiguous
  * journals are never replayed, and no failure shrinks or reformats anything. */
-async function runGrowth(input,ops){
+async function runGrowthInternal(input,ops,owned){
  const plan=validatePlan(input,{fixture:ops.fixture===true}),planSha256=sha256(plan);
+  const identity=(observation,options={})=>assertIdentity(plan,observation,{...options,...(owned?{allocatedBytes:owned.allocatedBytes()}: {})});
+  const capacity=host=>owned?owned.capacity(host):assessCapacity(plan,host);
  await ops.assertCold();await ops.assertConsumer(CONTRACT);
  const prior=await ops.readJournal();
  if(prior){
@@ -67,12 +69,12 @@ async function runGrowth(input,ops){
   if(canonical(await ops.readGuard())!==canonical(approvedGuard(plan,prior)))throw fail('GROW_RECOVERY_REQUIRED');
   return{...prior,observedOnly:true};
  }
- const initial=await ops.inspect();assertIdentity(plan,initial);
+  const initial=await ops.inspect();identity(initial);
  const existingGuard=await ops.readGuard();
  const sourceCapacity=require('../vast/apps-worker-growth-policy.cjs').validateCapacity({guard:existingGuard,manifest:initial.manifest,manifestSha256:initial.manifestSha256,raw:initial.raw,workerRoot:plan.workerRoot});
  const freshTinyFixture=ops.fixture===true&&existingGuard===undefined&&initial.manifest?.version===1&&plan.source.bytes<3*GiB;
  if(!sourceCapacity.allowed&&!freshTinyFixture)throw fail('GROW_RECOVERY_REQUIRED');
- const budget=assessCapacity(plan,initial.host),manifest=candidateManifest(plan,initial.manifest,planSha256),manifestSha256=sha256(manifest);
+  const budget=capacity(initial.host),manifest=candidateManifest(plan,initial.manifest,planSha256),manifestSha256=sha256(manifest);
  let record={version:1,contract:CONTRACT,migrationId:plan.migrationId,planSha256,phase:'prepared',lastConfirmed:'prepared',source:plan.source,targetBytes:plan.targetBytes,manifestSha256,budget};
  const guard=()=>({...approvedGuard(plan,record),phase:record.phase==='recovery_required'?'recovery_required':'running',fsckVerified:false});
  async function stage(phase,confirmed=false){await ops.assertCold();record={...record,phase,...(confirmed?{lastConfirmed:phase}:{})};await ops.writeJournal(record);}
@@ -81,10 +83,11 @@ async function runGrowth(input,ops){
  try{
   await ops.writeGuard(guard());
   await stage('fsck_before');const beforeFsck=retainWitness(await ops.fsck(plan.toolTimeoutMs));record={...record,beforeFsck};
-  const checkedBefore=await ops.inspect();assertIdentity(plan,checkedBefore);assertWitness(beforeFsck,checkedBefore.fs);
+   const checkedBefore=await ops.inspect();identity(checkedBefore);assertWitness(beforeFsck,checkedBefore.fs);
+   if(owned){await stage('copyup_intent');record={...record,copyUp:await owned.materialize()};await stage('copyup_completed',true);}
   // Consumer support and physical/copy-up budgets must hold before write-open.
-  await ops.assertConsumer(CONTRACT);assessCapacity(plan,(await ops.inspect()).host);
-  await stage('allocation_intent');const allocation=await ops.inspect();assertIdentity(plan,allocation);assertWitness(record.beforeFsck,allocation.fs);assessCapacity(plan,allocation.host);
+   await ops.assertConsumer(CONTRACT);capacity((await ops.inspect()).host);
+   await stage('allocation_intent');const allocation=await ops.inspect();identity(allocation);assertWitness(record.beforeFsck,allocation.fs);capacity(allocation.host);
   await ops.allocate(budget.deltaBytes,plan.toolTimeoutMs);await reserve();await stage('allocated',true);
   await stage('length_intent');await ops.extend(plan.targetBytes);await stage('extended',true);
   await stage('resize_intent');await ops.resize(plan.targetBytes/plan.source.fs.blockSize,plan.toolTimeoutMs);await stage('resized',true);
@@ -113,9 +116,14 @@ async function runGrowth(input,ops){
   throw Object.assign(fail('GROW_RECOVERY_REQUIRED'),{cause:error,record});
  }
 }
+// The ordinary API never accepts a materialized flag, receipt or third argument.
+async function runGrowth(input,ops){return runGrowthInternal(input,ops);}
+// Internal worker composition only; the Linux factory brands its still-live
+// operations after independently obtaining the real cold locks and raw FD.
+async function runOwnedGrowth(input,ops){const owned=require('./guest-disk-owned-linux.cjs').ownedFor(ops,input);return runGrowthInternal(input,ops,owned);}
 async function growOffline(planFile,{expectedPlanSha256}={}){
  const {createLinuxOperations}=require('./guest-disk-grow-linux.cjs');
  const owner=await createLinuxOperations(planFile,{expectedPlanSha256});
  try{return await runGrowth(owner.plan,owner.ops);}finally{await owner.close();}
 }
-module.exports={CONTRACT,validatePlan,assessCapacity,assertIdentity,candidateManifest,canonical,sha256,runGrowth,growOffline};
+module.exports={CONTRACT,validatePlan,assessCapacity,assertIdentity,candidateManifest,canonical,sha256,runGrowth,growOffline,runOwnedGrowth};

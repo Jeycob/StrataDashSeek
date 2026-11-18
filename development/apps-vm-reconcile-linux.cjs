@@ -90,18 +90,22 @@ function qualifyLoops(rows,configured,raw){
  for(const row of rows){const ino=typeof row['back-ino']==='string'?row['back-ino']:Number.isSafeInteger(row['back-ino'])?String(row['back-ino']):'',device=row['back-maj:min'];if(!/^\/dev\/loop\d+$/.test(row.name)||!/^\d+$/.test(ino)||typeof device!=='string'||!/^\d+:\d+$/.test(device)||typeof row['back-file']!=='string'||!row['back-file'].startsWith('/')||row['back-file'].includes('\0'))throw fail('VM_RECONCILE_LOOP_UNKNOWN');const[ma,mi]=device.split(':').map(BigInt);if(BigInt(ino)===BigInt(raw.ino)&&ma===major&&mi===minor)throw fail('VM_RECONCILE_RAW_ATTACHED');}
 }
 async function flock(fd,check){check();const child=cp.spawn('/usr/bin/flock',['-n','3'],{cwd:'/',env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'},stdio:['ignore','ignore','ignore',fd,'ignore','ignore','ignore','ignore','ignore','ignore']});let error;child.once('error',e=>error=e);const timer=setTimeout(()=>child.kill('SIGKILL'),1000);const result=await new Promise(resolve=>child.once('close',(code,signal)=>resolve({code,signal})));clearTimeout(timer);check();if(error||result.code!==0||result.signal)throw fail('VM_RECONCILE_LOCK_BUSY');}
-async function reconcileOffline({planFile,expectedPlanSha256}){
+// Internal shared factory. A completed journal is never a cold capability:
+// each caller independently opens and holds these actual locks and raw FD.
+async function createColdWorkerFile({planFile,expectedPlanSha256,deadline},purpose='reconcile'){
  if(process.platform!=='linux'||process.getuid?.()!==0||process.getgid?.()!==0||process.env.NODE_OPTIONS||process.env.NODE_PATH)throw fail('VM_RECONCILE_ROOT_REQUIRED');
- const end=Date.now()+120000,check=()=>{if(Date.now()>=end)throw fail('VM_RECONCILE_DEADLINE');};
+  if(!['reconcile','owned-copyup'].includes(purpose))throw fail('VM_RECONCILE_PLAN_INVALID');
+  const end=purpose==='reconcile'?Date.now()+120000:deadline??Date.now()+120000;if(!Number.isSafeInteger(end)||end<=Date.now()||end>Date.now()+600000)throw fail('VM_RECONCILE_DEADLINE');const check=()=>{if(Date.now()>=end)throw fail('VM_RECONCILE_DEADLINE');};
  if(typeof planFile!=='string'||!planFile.startsWith(PRIVATE+'/')||path.dirname(planFile)!==PRIVATE||!planFile.endsWith('.json')||!/^[a-f0-9]{64}$/.test(expectedPlanSha256||''))throw fail('VM_RECONCILE_PLAN_INVALID');
- parents(planFile);const planBytes=boundedRead(planFile,16384,check).bytes;if(sha(planBytes)!==expectedPlanSha256)throw fail('VM_RECONCILE_PLAN_CHANGED');const plan=validatePlan(JSON.parse(planBytes));
+  parents(planFile);const planBytes=boundedRead(planFile,16384,check).bytes;if(sha(planBytes)!==expectedPlanSha256)throw fail('VM_RECONCILE_PLAN_CHANGED');const document=purpose==='reconcile'?validatePlan(JSON.parse(planBytes)):require('./guest-disk-owned-copyup.cjs').validateOwnedPlan(JSON.parse(planBytes)),plan=purpose==='reconcile'?document:document.cold;
  const release=ROOT+'/releases/'+plan.sourceCommit;if(fs.realpathSync(__dirname)!==release+'/development')throw fail('VM_RECONCILE_SIGNED_SOURCE_REQUIRED');
  const source=require('../vast/runtime-release.cjs');if(source.currentCommit(ROOT)!==plan.sourceCommit)throw fail('VM_RECONCILE_SOURCE_CHANGED');source.verifySync(ROOT,plan.sourceCommit);check();
  const consumerFile=release+'/vast/apps-vm.cjs',qualifierFile=release+'/development/guest-disk-fsck.cjs',consumer=boundedRead(consumerFile,128*1024,check),qualifierBytes=boundedRead(qualifierFile,64*1024,check);
  if(sha(qualifierBytes.bytes)!==plan.fsckQualifierSha256||require(consumerFile).RECONCILIATION_CONTRACT!==CONTRACT)throw fail('VM_RECONCILE_CONSUMER_REQUIRED');
- const fsck=require(qualifierFile),journalFile=PRIVATE+'/apps-vm-reconcile-'+plan.reconciliationId+'.json',originalFile=PRIVATE+'/apps-vm-legacy-'+plan.reconciliationId+'.json',gateFile=PUBLIC+'/apps-vm-reconciliation.json',stateFile=APPS+'/vm.json',rawFile=WORKER+'/volume.raw';
- const locks=[],rawfd=fs.openSync(rawFile,F.O_RDONLY|F.O_NOFOLLOW|F.O_NONBLOCK|0x40000);let initialDirs;
- const currentRaw=()=>{const s=fs.fstatSync(rawfd,{bigint:true}),named=fs.lstatSync(rawFile,{bigint:true});if(!s.isFile()||s.isSymbolicLink()||!equal(meta(s),meta(named))||!equal(meta(s),plan.raw))throw fail('VM_RECONCILE_RAW_CHANGED');return{...meta(s),fd:rawfd};};
+ const rawFile=WORKER+'/volume.raw';
+  const locks=[];let rawfd=fs.openSync(rawFile,F.O_RDONLY|F.O_NOFOLLOW|F.O_NONBLOCK|0x40000),initialDirs,expectedRaw=purpose==='reconcile'?plan.raw:Object.fromEntries(fields.map(k=>[k,plan.raw[k]])),closed=false;
+  const currentRaw=()=>{check();if(closed)throw fail('VM_RECONCILE_RAW_CLOSED');const s=fs.fstatSync(rawfd,{bigint:true}),named=fs.lstatSync(rawFile,{bigint:true});if(!s.isFile()||s.isSymbolicLink()||!equal(meta(s),meta(named))||!equal(meta(s),expectedRaw))throw fail('VM_RECONCILE_RAW_CHANGED');return{...meta(s),fd:rawfd};};
+  const close=()=>{if(closed)return;closed=true;fs.closeSync(rawfd);for(const fd of locks.reverse())fs.closeSync(fd);};
  const assertSource=()=>{check();if(source.currentCommit(ROOT)!==plan.sourceCommit||!equal(consumer.identity,boundedRead(consumerFile,128*1024,check).identity)||!equal(qualifierBytes.identity,boundedRead(qualifierFile,64*1024,check).identity))throw fail('VM_RECONCILE_SOURCE_CHANGED');};
  try{
   const loopTool=fs.realpathSync('/usr/sbin/losetup');if(!/^\/(?:usr\/)?sbin\/losetup$/.test(loopTool))throw fail('VM_RECONCILE_TOOL_UNSAFE');
@@ -128,15 +132,32 @@ async function reconcileOffline({planFile,expectedPlanSha256}){
    try{fs.lstatSync(WORKER+'/qemu.pid');throw fail('VM_RECONCILE_PIDFILE_REQUIRES_SEPARATE_REVIEW');}catch(e){if(e.code!=='ENOENT')throw e;}
    currentRaw();scanCold(currentRaw(),oldActors,check,loopRows);
   }
-  const jsonRead=(file,optional=false)=>{const r=boundedRead(file,MAX,check,{optional});return r?JSON.parse(r.bytes):null;};
+   assertCold();
+   // No generic caller receipt changes an identity. Only the separately
+   // validated, owned materialization workflow can adopt its own held FD after
+   // its full content checks. Reconciliation never calls this surface.
+   function adoptRaw(fd,size,{mtime=false}={}){
+    check();if(purpose!=='owned-copyup'||closed||!Number.isSafeInteger(fd)||fd<0||![Number(plan.raw.size),document.growth.targetBytes].includes(size))throw fail('VM_RECONCILE_RAW_CHANGED');
+    const s=fs.fstatSync(fd,{bigint:true}),named=fs.lstatSync(rawFile,{bigint:true}),m=meta(s);
+    if(!s.isFile()||!equal(m,meta(named))||['dev','ino','uid','gid','mode','nlink'].some(k=>m[k]!==plan.raw[k])||s.size!==BigInt(size)||!mtime&&m.mtimeNs!==expectedRaw.mtimeNs)throw fail('VM_RECONCILE_RAW_CHANGED');
+    const old=rawfd;rawfd=fd;expectedRaw=m;if(old!==fd)fs.closeSync(old);return{...m,fd:rawfd};
+   }
+   return{document,plan,rawFile,get rawFd(){currentRaw();return rawfd;},currentRaw,adoptRaw,check,assertCold,assertSource,close,end,helpers:{boundedRead,atomic,meta,sync,parents,directory}};
+  }catch(error){close();throw error;}
+}
+async function reconcileOffline({planFile,expectedPlanSha256}){
+  const owner=await createColdWorkerFile({planFile,expectedPlanSha256}),{plan,assertCold,assertSource,currentRaw,check}=owner;
+  const release=ROOT+'/releases/'+plan.sourceCommit,qualifierFile=release+'/development/guest-disk-fsck.cjs',fsck=require(qualifierFile),journalFile=PRIVATE+'/apps-vm-reconcile-'+plan.reconciliationId+'.json',originalFile=PRIVATE+'/apps-vm-legacy-'+plan.reconciliationId+'.json',gateFile=PUBLIC+'/apps-vm-reconciliation.json',stateFile=APPS+'/vm.json';
+  try{
+   const jsonRead=(file,optional=false)=>{const r=boundedRead(file,MAX,check,{optional});return r?JSON.parse(r.bytes):null;};
   const ops={assertCold,assertSource,readJournal:()=>jsonRead(journalFile,true),readGate:()=>jsonRead(gateFile,true),readState:()=>boundedRead(stateFile,MAX,check,{owner:1001,gid:1001}).bytes,stateIdentity:()=>boundedRead(stateFile,MAX,check,{owner:1001,gid:1001}).identity,
    assertRaw:()=>{check();currentRaw();if(sha(boundedRead(WORKER+'/manifest.json',16384,check,{owner:1001,gid:1001}).bytes)!==plan.manifestSha256)throw fail('VM_RECONCILE_MANIFEST_CHANGED');},
    async fsck(timeoutMs){assertCold();const e2fsck=fs.realpathSync('/usr/sbin/e2fsck'),t=boundedRead(e2fsck,8*1024**2,check),s=t.identity;if(!/^\/(?:usr\/)?sbin\/e2fsck$/.test(e2fsck)||!(BigInt(s.mode)&0o111n))throw fail('VM_RECONCILE_TOOL_UNSAFE');const tool={path:e2fsck,sha256:sha(t.bytes),...Object.fromEntries(['dev','ino','size','mtimeNs','ctimeNs'].map(k=>[k,s[k]])),uid:Number(s.uid),gid:Number(s.gid),mode:Number(s.mode)};
-    const result=await fsck.runFsck({setpriv:'/usr/bin/setpriv',e2fsck,uid:1001,gid:1001,fd:rawfd,timeoutMs:Math.min(timeoutMs,end-Date.now()),tool});
+    const result=await fsck.runFsck({setpriv:'/usr/bin/setpriv',e2fsck,uid:1001,gid:1001,fd:owner.rawFd,timeoutMs:Math.min(timeoutMs,owner.end-Date.now()),tool});
     const after=boundedRead(e2fsck,8*1024**2,check);if(!equal(t.identity,after.identity)||!t.bytes.equals(after.bytes))result.toolStable=false;try{currentRaw();}catch{result.inputStable=false;}
-    assertCold();const witness=fsck.assertWitness(result,require('./guest-disk-grow-linux.cjs').superblock(rawfd));return{code:0,warningFree:true,outputSha256:sha(Buffer.from(JSON.stringify([witness.stdout,witness.stderr]))),witness};},
+    assertCold();const witness=fsck.assertWitness(result,require('./guest-disk-grow-linux.cjs').superblock(owner.rawFd));return{code:0,warningFree:true,outputSha256:sha(Buffer.from(JSON.stringify([witness.stdout,witness.stderr]))),witness};},
    writeOriginal:b=>writeExclusive(originalFile,b,check),writeJournal:v=>atomic(journalFile,Buffer.from(JSON.stringify(v)),check),writeGate:v=>atomic(gateFile,Buffer.from(JSON.stringify(v)),check,{mode:0o644,...(v.phase==='complete'?{beforeCommit:assertCold}:{})}),publishState:(b,expected)=>atomic(stateFile,b,check,{owner:1001,gid:1001,expected,beforeCommit:()=>{assertCold();currentRaw();if(sha(boundedRead(WORKER+'/manifest.json',16384,check,{owner:1001,gid:1001}).bytes)!==plan.manifestSha256||sha(boundedRead(stateFile,MAX,check,{owner:1001,gid:1001}).bytes)!==expected)throw fail('VM_RECONCILE_STATE_CHANGED');}})};
   assertCold();return await runReconciliation(plan,ops);
- }finally{fs.closeSync(rawfd);for(const fd of locks.reverse())fs.closeSync(fd);}
+  }finally{owner.close();}
 }
-module.exports={reconcileOffline,CONTRACT,rawMapping,qualifyLoops,qualifyProcVisibility};
+module.exports={reconcileOffline,CONTRACT,rawMapping,qualifyLoops,qualifyProcVisibility,createColdWorkerFile};
