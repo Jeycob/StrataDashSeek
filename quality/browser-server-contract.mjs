@@ -51,9 +51,10 @@ export async function withBrowserServer({server,deadline,readinessDeadline,signa
   }finally{
     clearTimeout(timer);clearTimeout(readinessTimer);signal?.removeEventListener('abort',abort);
     controller.abort(fail('BROWSER_SERVER_STOPPED','Owned verification phase is closing.'));
-    if(lease){stop();await lease.done;}
-    // Observe cancellation cleanup of the active browser/peer phase as well.
-    await phase?.catch(()=>{});
+    try{if(lease){stop();await lease.done;}}
+    // Observe cancellation cleanup even when a proven-empty SDK range has a
+    // rejected direct outcome. Unknown range quiescence stays pending in SDK.
+    finally{await phase?.catch(()=>{});}
     if(stopError)throw fail('BROWSER_SERVER_STOP_FAILED','Owned server termination failed; its range was drained.');
   }
 }

@@ -11,9 +11,9 @@ const {LocalSubprocessRuntime}=runtimeRequire('@deepseek-ai/dsh-subprocess-local
 const deferred=()=>{let resolve;const promise=new Promise(r=>{resolve=r;});return{promise,resolve};};
 const tick=()=>new Promise(r=>setTimeout(r,5));
 async function until(check){for(let n=0;n<200;n++){if(check())return;await tick();}assert.fail('bounded SDK fixture wait');}
-function fixture(t){
+function fixture(t,{rangeUnknown=false}={}){
   const ctx=new Context(),direct=deferred(),range=deferred();let kills=0,waits=0,settled=false;
-  t.mock.method(LocalSubprocessRuntime.prototype,'spawn',()=>({done:direct.promise,terminate(){kills++;},waitForExit(){waits++;return range.promise;}}));
+  t.mock.method(LocalSubprocessRuntime.prototype,'spawn',()=>({done:direct.promise,terminate(){kills++;},waitForExit(){waits++;return rangeUnknown?Promise.resolve(false):range.promise;}}));
   const provider=new OwnedRangeSubprocess(ctx);
   t.after(async()=>{direct.resolve({exitCode:0,signal:null});range.resolve(true);await ctx.fiber.dispose();});
   return{direct,range,get kills(){return kills;},get waits(){return waits;},start(){const owned=provider.spawn({argv:['node','server.mjs'],cwd:process.cwd(),stdio:{stdin:'ignore',stdout:{maxBytes:65536},stderr:{maxBytes:65536}},graceMs:100});void owned.done.then(()=>{settled=true;});return{...owned,assertCurrent(){assert.equal(settled,false);}};}};
@@ -54,4 +54,14 @@ test('Stop during browser waits browser cancellation and the same SDK range, wit
   await entered.promise;controller.abort(Error('browser Stop'));await until(()=>f.kills===1);assert.equal(browserClosed,true);
   f.direct.resolve({exitCode:null,signal:'SIGTERM'});await until(()=>f.waits===1);assert.equal(finished,false);assert.equal(starts,1);
   f.range.resolve(true);await assert.rejects(pending,/browser Stop/);
+});
+
+test('unknown actual SDK range exit cannot become completed verification after Stop',async t=>{
+  const f=fixture(t,{rangeUnknown:true}),controller=new AbortController(),entered=deferred();let finished=false;
+  const pending=withBrowserServer({...options(),signal:controller.signal,start:()=>f.start(),ready:({signal})=>{entered.resolve();return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));},verify:async()=>assert.fail('browser must not start')});
+  void pending.then(()=>{finished=true;},()=>{finished=true;});
+  await entered.promise;controller.abort(Error('unknown-range Stop'));f.direct.resolve({exitCode:0,signal:null});await until(()=>f.waits===1);await tick();
+  assert.equal(finished,false);assert(f.kills>=1);
+  // Deliberately unresolved: SDK cannot prove quiescence. A pending promise
+  // holds no timers; disposal only releases the inert original fake handle.
 });
