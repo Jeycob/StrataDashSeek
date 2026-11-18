@@ -50,6 +50,7 @@ export async function withBrowserServer({server,deadline,readinessDeadline,signa
     const result=await Promise.race([phase,aborted,exited]);check();return result;
   }finally{
     clearTimeout(timer);clearTimeout(readinessTimer);signal?.removeEventListener('abort',abort);
+    controller.abort(fail('BROWSER_SERVER_STOPPED','Owned verification phase is closing.'));
     if(lease){stop();await lease.done;}
     // Observe cancellation cleanup of the active browser/peer phase as well.
     await phase?.catch(()=>{});

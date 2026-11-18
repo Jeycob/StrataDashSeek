@@ -40,3 +40,18 @@ test('failed owned readiness preserves its concrete failure and drains before re
   await until(()=>f.kills===1);f.direct.resolve({exitCode:1,signal:null});await until(()=>f.waits===1);assert.equal(finished,false);assert.equal(verified,0);
   f.range.resolve(true);await assert.rejects(pending,{code:'ECONNREFUSED'});
 });
+
+test('owned range exit aborts and observes active browser cleanup instead of leaving it detached',async t=>{
+  const f=fixture(t),entered=deferred();let browserClosed=false;
+  const pending=withBrowserServer({...options(),start:()=>f.start(),ready:async()=>{},verify:({signal})=>{entered.resolve();return new Promise((_,reject)=>signal.addEventListener('abort',()=>{browserClosed=true;reject(signal.reason);},{once:true}));}});
+  await entered.promise;f.direct.resolve({exitCode:1,signal:null});f.range.resolve(true);
+  await assert.rejects(pending,{code:'BROWSER_SERVER_EXITED'});assert.equal(browserClosed,true);
+});
+
+test('Stop during browser waits browser cancellation and the same SDK range, with no second start',async t=>{
+  const f=fixture(t),controller=new AbortController(),entered=deferred();let browserClosed=false,finished=false,starts=0;
+  const pending=withBrowserServer({...options(),signal:controller.signal,start:()=>{starts++;return f.start();},ready:async()=>{},verify:({signal})=>{entered.resolve();return new Promise((_,reject)=>signal.addEventListener('abort',()=>{browserClosed=true;reject(signal.reason);},{once:true}));}}).catch(error=>{finished=true;throw error;});
+  await entered.promise;controller.abort(Error('browser Stop'));await until(()=>f.kills===1);assert.equal(browserClosed,true);
+  f.direct.resolve({exitCode:null,signal:'SIGTERM'});await until(()=>f.waits===1);assert.equal(finished,false);assert.equal(starts,1);
+  f.range.resolve(true);await assert.rejects(pending,/browser Stop/);
+});
