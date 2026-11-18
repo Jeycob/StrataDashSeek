@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runPrimary,finishAcceptance,collectorIdentity} from '../n06-evidence-storage/runner.mjs';
+import {runPrimary,finishAcceptance,collectorIdentity} from './runner.mjs';
 import {readB01PreviousRuns,requireB01PreviousRuns,validatePriorBytes,maxPriorBytes} from './prior.mjs';
 import {createB01Supervisor} from './supervisor.mjs';
 import {serviceCommit,ineligibleSession} from './policy.mjs';

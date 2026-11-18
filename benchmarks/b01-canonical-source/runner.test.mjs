@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {runPrimary,finishAcceptance,acceptancePlan,assessAcceptance,criteria} from '../n06-evidence-storage/runner.mjs';
+import fs from 'node:fs';
+import {createHash} from 'node:crypto';
+import {runPrimary,finishAcceptance,acceptancePlan,assessAcceptance,criteria} from './runner.mjs';
+import {runPrimary as canonicalRunPrimary,acceptancePlan as canonicalAcceptancePlan} from '../n06-evidence-storage/runner.mjs';
 import {campaign,report} from './test-fixtures.mjs';
 import {primaryPolicy,matchesPrimaryLimits,originalPrimaryDeadline,b01Criteria} from './policy.mjs';
 import {classify} from '../../development/ci/inventory.mjs';
@@ -10,9 +13,13 @@ test('frozen policy preserves B03/B10 exact600 and B01 exact900 with one separat
  }
  assert.equal(primaryPolicy('B02'),null);
  for(const [name,count]of [['runner',8],['prior-supervisor',7]]){const row=classify('benchmarks/b01-canonical-source/'+name+'.test.mjs');assert.equal(row.required,true);assert.equal(row.kind,'node');assert.equal(row.lane,'portable');assert.equal(row.minTests,count);}
+ const closure=JSON.parse(fs.readFileSync(new URL('./closure.json',import.meta.url))),sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+ for(const [path,pin]of Object.entries(closure.files))assert.equal(sha(fs.readFileSync(new URL('../../'+path,import.meta.url))),pin,path);
+ assert.equal(closure.canonicalB03B10.sha256,'3d4840bd0f5e31778bef9b5be60ece8295899a11f930fb66145dd786e5a39dd8');assert.equal(sha(fs.readFileSync(new URL('../../'+closure.canonicalB03B10.path,import.meta.url))),closure.canonicalB03B10.sha256);assert.equal(closure.qualifiedProducerCommit,null);assert.equal(closure.executionEnabled,false);
+ assert.throws(()=>canonicalAcceptancePlan({scenario:'B01'},{}),/SCENARIO_UNSUPPORTED/);
 });
-test('B03/B10 still stop at actual600 deadline and never inherit900',async()=>{
- for(const scenario of ['B03','B10']){const c=campaign({scenario,variant:scenario==='B10'?'DS':'HomeAI',completionMs:Infinity}),out=await runPrimary(c);assert.equal(c.rawClock.now()-Date.parse(out.timestampsUtc.submittedAt),600000);assert.equal(out.stopReason,'main_deadline');assert.equal(c.stats().prompts,1);assert.equal(c.stats().cancels,1);assert.equal(out.limits.repairSeconds,300);assert.equal(out.limits.maxRepairs,1);}
+test('canonical3d48 and separate B01 entry both preserve B03/B10 actual600 deadline',async()=>{
+ for(const entry of [canonicalRunPrimary,runPrimary])for(const scenario of ['B03','B10']){const c=campaign({scenario,variant:scenario==='B10'?'DS':'HomeAI',completionMs:Infinity}),out=await entry(c);assert.equal(c.rawClock.now()-Date.parse(out.timestampsUtc.submittedAt),600000);assert.equal(out.stopReason,'main_deadline');assert.equal(c.stats().prompts,1);assert.equal(c.stats().cancels,1);assert.equal(out.limits.repairSeconds,300);assert.equal(out.limits.maxRepairs,1);}
 });
 test('both B01 positions really run beyond600 through actual adapter/runner/writer and preserve one900 deadline',async()=>{
  for(const variant of ['HomeAI','DS']){const c=campaign({variant}),out=await runPrimary(c);assert.equal(out.comparison.orderPosition,variant==='HomeAI'?5:6);assert.equal(out.blockingPhase,'independent_acceptance');assert.equal(c.stats().prompts,1);assert.equal(c.stats().cancels,0);assert.equal(c.rawClock.now()-Date.parse(out.timestampsUtc.submittedAt),620000);assert.equal(Date.parse(out.operator.primaryDeadlineAt)-Date.parse(out.timestampsUtc.submittedAt),900000);assert(c.calls.every(x=>x.deadline-x.at<=4000));assert(c.checkpoints.some(x=>x.phase==='intent'&&x.receipt.durable));assert(c.checkpoints.at(-1).receipt.durable);assert(c.checkpoints.length<2048);}
@@ -32,6 +39,7 @@ test('B01 requires all eleven frozen criteria, original cards/API and own task r
  assert.throws(()=>assessAcceptance('B01',{checks:b01Criteria.slice(0,10).map(id=>({id,status:'PASS',evidence:['synthetic']}))}),/QA_CRITERIA_INCOMPLETE/);
 });
 test('wrong B01 limit, claimed priors and missing host restart refuse before any prompt',async()=>{
+ const legacy=campaign();await assert.rejects(()=>canonicalRunPrimary(legacy),/PRIMARY_NOT_PREPARED/);assert.equal(legacy.stats().prompts,0);
  const wrong=campaign();wrong.record.limits={...wrong.record.limits,mainSeconds:600};await assert.rejects(()=>runPrimary(wrong),/PRIMARY_NOT_PREPARED/);assert.equal(wrong.stats().prompts,0);
  const claimed=campaign();claimed.handoff.previousRuns=claimed.handoff.previousRuns.map(x=>({...x}));await assert.rejects(()=>runPrimary(claimed),/ACTUAL_BOUND_B01_PRIORS/);assert.equal(claimed.stats().prompts,0);
  const unavailable=campaign({missingRestart:true});await assert.rejects(()=>runPrimary(unavailable),/HOST_RESTART_UNCONFIRMED/);assert.equal(unavailable.stats().prompts,0);

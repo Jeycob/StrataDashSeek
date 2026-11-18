@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "kind": "DISABLED_SEPARATE_B01_OPERATOR_SOURCE_CLOSURE",
+  "executionEnabled": false,
+  "baseCanonicalProducerCommit": "04b631bd64e4b1681c2a8ee1fd6ffcc48199ff05",
+  "derivedFromSourceCommit": "a05d6f7038e52ea21f099a538d8c4f71790da0dd",
+  "expectedServiceCommit": "266196e9427db575609cbbe5c8c6fb7c814f27ff",
+  "entries": {
+    "runner": "benchmarks/b01-canonical-source/runner.mjs",
+    "supervisor": "benchmarks/b01-canonical-source/supervisor.mjs"
+  },
+  "files": {
+    "benchmarks/b01-canonical-source/runner.mjs": "fc79afca3d3adfe8bc27a0aa04bf6b97924fb677816f57650edf2557ae1b698b",
+    "benchmarks/b01-canonical-source/policy.mjs": "a31c4f06829f2863f512b435430e5bdba4a6028f21a71171e24256b3905c4633",
+    "benchmarks/b01-canonical-source/prior.mjs": "e2889aef1ab78c6eae1ace6bfe0ea15f33c87911ebceef4a7a799c2b8fc63031",
+    "benchmarks/b01-canonical-source/supervisor.mjs": "b427e1a0897667a4e082ff624fe053cf7861b19fc8941e43cac5270fe3acc783"
+  },
+  "canonicalB03B10": {
+    "path": "benchmarks/n06-evidence-storage/runner.mjs",
+    "sha256": "3d4840bd0f5e31778bef9b5be60ece8295899a11f930fb66145dd786e5a39dd8"
+  },
+  "canonicalAdapter": {
+    "path": "benchmarks/n06-evidence-storage/adapter.mjs",
+    "sha256": "3dc9dae4b47fd6e0846bf34dbf0fab102a1eebbf55781269dbfe67f779d2bb16"
+  },
+  "qualifiedProducerCommit": null,
+  "actualRuntimeProof": null,
+  "authorizationReference": null
+}

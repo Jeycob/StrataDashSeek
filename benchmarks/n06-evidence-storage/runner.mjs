@@ -1,11 +1,9 @@
 // SOURCE ONLY. No CLI, network client, credentials, process execution, or import
 // of QA runners. Root supplies its bounded own-session transport and callbacks.
 import {randomUUID,createHash} from 'node:crypto';
-import {campaignOrder,b01Criteria,matchesPrimaryLimits,originalPrimaryDeadline} from '../b01-canonical-source/policy.mjs';
-import {requireB01PreviousRuns} from '../b01-canonical-source/prior.mjs';
 const need=(value,code)=>{if(!value)throw Object.assign(Error(code),{code});};
-export const order=campaignOrder;
-export const criteria=Object.freeze({B03:Array.from({length:12},(_,i)=>'B03-'+String(i+1).padStart(2,'0')),B10:['D1','D2','D3','S1','S2','S3','S4','C1','C2','C3','C4','C5','R1','R2','R3','R4','U1','U2','U3'].map(id=>'B10-'+id),B01:b01Criteria});
+export const order=Object.freeze(['B03 HomeAI','B03 DS','B10 DS','B10 HomeAI']);
+export const criteria=Object.freeze({B03:Array.from({length:12},(_,i)=>'B03-'+String(i+1).padStart(2,'0')),B10:['D1','D2','D3','S1','S2','S3','S4','C1','C2','C3','C4','C5','R1','R2','R3','R4','U1','U2','U3'].map(id=>'B10-'+id)});
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const contextItem=item=>item?.placement==='context'&&!Object.hasOwn(item,'rpcId');
 function checkState(state){need(state&&Number.isSafeInteger(state.cursor)&&state.cursor>=0&&typeof state.running==='boolean'&&Array.isArray(state.queue)&&Array.isArray(state.pendingInput),'OWN_STATE_UNKNOWN');}
@@ -53,10 +51,10 @@ export function nativeEvidence(events){
 export function acceptancePlan(record,refs){
  need(criteria[record.scenario],'SCENARIO_UNSUPPORTED');
  return{scenario:record.scenario,acceptanceVersion:'paired-20261116 v1 + product-qa supplement v1',
-  api:['B10','B01'].includes(record.scenario)?{module:refs.apiAcceptance,export:'runAcceptance',args:[record.scenario,'ACTUAL_OWN_USER_PREVIEW_URL']}:null,
+  api:record.scenario==='B10'?{module:refs.apiAcceptance,export:'runAcceptance',args:['B10','ACTUAL_OWN_USER_PREVIEW_URL']}:null,
   browser:{module:refs.browserAcceptance,export:'runBrowser',scenario:record.scenario,viewports:[{width:1440,height:900},{width:390,height:844}],engines:'Existing QA handoff engine list; exact version and unrun branches must be recorded'},
-  manualCriteria:criteria[record.scenario],manualSource:record.scenario==='B01'?refs.acceptanceCards:refs.productQA,supplement:record.scenario==='B03'?refs.supplementProtocol:null,
-  restart:record.scenario==='B10'?{required:true,criterion:'B10-R3',instruction:'Root-supported restart of only this own app process; before/after saved note and version, actual process restart evidence, same user preview'}:record.scenario==='B01'?{required:true,criterion:'B01-06',commonCriterion:'B01-C05',instruction:'Root-supported restart of only this own app process; saved task id/title/due/tags/done unchanged before/after, actual process restart evidence, same user preview'}:null,
+  manualCriteria:criteria[record.scenario],manualSource:refs.productQA,supplement:record.scenario==='B03'?refs.supplementProtocol:null,
+  restart:record.scenario==='B10'?{required:true,criterion:'B10-R3',instruction:'Root-supported restart of only this own app process; before/after saved note and version, actual process restart evidence, same user preview'}:null,
   warning:'Frozen automatic runners are only a subset. QA collects all criterion evidence; this module does not implement UI or replace its pending tool.'};
 }
 
@@ -93,11 +91,10 @@ export function realClock(){
 // the per-session registered model selection. No repairs or session creation
 // happen implicitly here. Actual QA collection stays with its existing tool.
 export async function runPrimary({record,target,handoff,inputs,io,clock,signal}){
- need(record.status==='NOT RUN'&&record.attemptId&&matchesPrimaryLimits(record),'PRIMARY_NOT_PREPARED');
+ need(record.status==='NOT RUN'&&record.attemptId&&record.limits.mainSeconds===600,'PRIMARY_NOT_PREPARED');
  need(handoff.liveAuthorized===true&&handoff.rootOperator===true&&handoff.id&&handoff.sourceCommit&&handoff.runtimeCommit,'ROOT_HANDOFF_REQUIRED');
  need(Array.isArray(handoff.previousRuns)&&handoff.previousRuns.every(row=>row.settled===true&&row.finalized===true)&&Number.isSafeInteger(handoff.settlementObservationMs)&&handoff.settlementObservationMs>0,'PRIOR_SETTLEMENT_OR_STOP_WINDOW_REQUIRED');
  need(order[handoff.orderPosition-1]===record.scenario+' '+record.variant&&handoff.previousRuns.length===handoff.orderPosition-1,'RUN_ORDER_REQUIRED');
- if(record.scenario==='B01')requireB01PreviousRuns({record,target,handoff});
  need(target.owned===true&&target.sessionId&&target.workspaceId&&target.projectId&&target.preparedFixtureEvidence&&target.modelSelection?.provider&&target.modelSelection?.model,'OWN_TARGET_REQUIRED');
  for(const name of ['rpc','preflight','observeWork','stopOwnedWork','checkpoint'])need(typeof io[name]==='function','ROOT_ADAPTER_REQUIRED');
  need(clock&&['now','sleep','bound'].every(name=>typeof clock[name]==='function'),'BOUNDED_CLOCK_REQUIRED');
@@ -124,12 +121,12 @@ export async function runPrimary({record,target,handoff,inputs,io,clock,signal})
  const ready=await invoke(options=>io.preflight({record,target,handoff,...options}),clock.now()+10000);
  need(ready?.quiet===true&&ready.mode==='host-compat'&&ready.sourceCommit===handoff.sourceCommit&&ready.runtimeCommit===handoff.runtimeCommit&&ready.workspaceId===target.workspaceId&&ready.fixtureEvidence===target.preparedFixtureEvidence,'PREFLIGHT_UNCONFIRMED');
  need(ready.preview?.supported===true&&ready.preview.evidence,'HOST_PREVIEW_UNCONFIRMED');
- if(['B10','B01'].includes(record.scenario))need(ready.restart?.supported===true&&ready.restart.evidence,'HOST_RESTART_UNCONFIRMED');
+ if(record.scenario==='B10')need(ready.restart?.supported===true&&ready.restart.evidence,'HOST_RESTART_UNCONFIRMED');
  need(JSON.stringify(ready.modelSelection)===JSON.stringify(target.modelSelection)&&ready.modelSelectionEvidence,'OWN_MODEL_SELECTION_UNCONFIRMED');
  const initial=await readOwnObservation({rpc:observationRpc,sessionId,afterSeq:-1,deadline:clock.now()+10000});
  need(initial.state.active===true&&!initial.state.running&&initial.state.pendingInput.length===0&&initial.state.queue.every(contextItem),'OWN_SESSION_NOT_IDLE');
  need(!initial.events.some(row=>['user/message','turn/start','assistant/message'].includes(row.type)),'OWN_SESSION_NOT_FRESH');
- const cut=initial.state.cursor,started=clock.now(),mainDeadline=originalPrimaryDeadline(record,started);
+ const cut=initial.state.cursor,started=clock.now(),mainDeadline=started+600000;
  Object.assign(output.identity,{sessionId,workspaceId:target.workspaceId,projectId:target.projectId,sessionUrl:target.sessionUrl??null,sourceCommit:handoff.sourceCommit,runtimeCommit:handoff.runtimeCommit,requestedModel:target.modelSelection});
  output.isTemplate=false;output.slotHandoffEvidence=handoff.id;output.timestampsUtc.runSubmittedAt=output.timestampsUtc.submittedAt=iso(started);
  output.operator={requestId,baselineSeq:cut,primaryDeadlineAt:iso(mainDeadline),rootHandoff:handoff.id,finalized:false};
@@ -248,7 +245,7 @@ function checkCollectorIdentity(record,report){
 export function finishAcceptance({record,report,now=Date.now()}){
  const timestamp=value=>typeof value==='string'?Date.parse(value):NaN;
  const output=structuredClone(record),started=timestamp(output.timestampsUtc.runSubmittedAt),submitted=timestamp(output.timestampsUtc.submittedAt),ready=timestamp(output.timestampsUtc.implementationReadyAt),deadline=timestamp(output.operator?.primaryDeadlineAt);
- need([started,submitted,ready,deadline,now].every(Number.isFinite)&&submitted===started&&matchesPrimaryLimits(output)&&deadline===originalPrimaryDeadline(output,started)&&ready>=started&&ready<=deadline&&now>=ready,'ORIGINAL_DEADLINE_INVALID');
+ need([started,submitted,ready,deadline,now].every(Number.isFinite)&&submitted===started&&output.limits.mainSeconds===600&&deadline===started+600000&&ready>=started&&ready<=deadline&&now>=ready,'ORIGINAL_DEADLINE_INVALID');
  need(output.nativeObservation?.historyComplete===true&&output.nativeObservation?.settled===true&&output.nativeObservation.promptAdmission==='accepted'&&output.nativeObservation.terminal==='completed'&&!output.stopReason&&!output.operator.persistenceFailed&&!output.operator.finalized,'ATTEMPT_NOT_READY_FOR_QA');
  checkCollectorIdentity(output,report);
  const assessed=assessAcceptance(output.scenario,report),validation=timestamp(report.validationStartedAt),finished=timestamp(report.finishedAt),settled=timestamp(report.qaWorkSettledAt);

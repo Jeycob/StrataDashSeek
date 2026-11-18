@@ -196,7 +196,7 @@ test('published generic modules are byte-pinned; historical eight-source closure
   'driver-core.mjs':'0b5e666bb1d2143f8d08130861d8ff6d16638b9046aeec905ca705db1f647922',
   'stop-scope.mjs':'8768d4a17a384baf964fee8fbcab2122293c14caf6ba4de1ef22a15c288e0e72',
   'adapter.mjs':'3dc9dae4b47fd6e0846bf34dbf0fab102a1eebbf55781269dbfe67f779d2bb16',
-  'runner.mjs':'fcef48dc5582db57a765550524926f5ca7fd203735524cf11b3e20e4a8b2315d',
+  'runner.mjs':'3d4840bd0f5e31778bef9b5be60ece8295899a11f930fb66145dd786e5a39dd8',
   'finalization.mjs':'e6c25073472114777fcf9c32db0054b33fbae29ab9dfbc5df3c86157d62f443e',
   'lifecycle.mjs':'21d75d10d59bba22564a9d1758f2817bb345d438854346f9105404d1d170bea7',
   'native-transport.mjs':'11375282950bf54dfdaaf7a148d602a20c52453653ddc2f4debbf5aafb5fe026',

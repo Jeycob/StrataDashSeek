@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {Clock,MemoryFS,dependencies,syntheticRecord} from '../n06-evidence-storage/fixtures.mjs';
 import {createRootIOAdapter} from '../n06-evidence-storage/adapter.mjs';
 import {createFinalizerWriter} from '../n06-evidence-storage/finalization.mjs';
-import {collectorIdentity,criteria} from '../n06-evidence-storage/runner.mjs';
+import {collectorIdentity,criteria} from './runner.mjs';
 import {readB01PreviousRuns} from './prior.mjs';
 import {campaignOrder,manifestSha256,acceptanceVersion,promptHashes,primaryPolicy,modelFor,serviceCommit,disabledB01Slot} from './policy.mjs';
 export const hash=b=>createHash('sha256').update(b).digest('hex'),uuid=n=>'aaaaaaaa-bbbb-4ccc-8ddd-'+String(n).padStart(12,'0');
