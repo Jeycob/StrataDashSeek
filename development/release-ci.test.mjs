@@ -4,10 +4,43 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {spawnSync} from 'node:child_process';
-import {summary, gateOutcome, testEnvironment, combineReports, failureAnnotations, nativeFixtureAssertion} from './release-ci.mjs';
+import {summary, gateOutcome, testEnvironment, combineReports, failureAnnotations, nativeFixtureAssertion, executeSuites, growFixtureFailureCode} from './release-ci.mjs';
 import {candidate, classify, inventory} from './ci/inventory.mjs';
 const run = (stdout, extra = {}) => ({stdout, stderr: '', exitCode: 0, error: null, timedOut: false, truncated: false, aborted: false, ...extra});
 const tap = '# tests 2\n# pass 2\n# fail 0\n# skipped 0\n# cancelled 0\n# todo 0\n';
+
+test('root fixture bodies never observe another suite using their host-wide identity', async () => {
+  for (const lanes of [['linux-root','linux-root','linux-root'],['portable','linux-root','portable']]) {
+    const suites=lanes.map((lane,id)=>({lane,id})), events=[]; let identityInUse=false;
+    await executeSuites(suites,async suite=>{
+      assert.equal(identityInUse,false,'another fixture still owns the shared identity');
+      identityInUse=true;events.push('start'+suite.id);
+      await new Promise(resolve=>setImmediate(resolve));
+      events.push('end'+suite.id);identityInUse=false;
+    });
+    assert.deepEqual(events,['start0','end0','start1','end1','start2','end2']);
+  }
+});
+
+test('portable fixture bodies retain two concurrent workers and execute every suite once', async () => {
+  let running=0,peak=0;const visited=[];
+  await executeSuites([0,1,2,3].map(id=>({lane:'portable',id})),async suite=>{
+    running++;peak=Math.max(peak,running);visited.push(suite.id);
+    await new Promise(resolve=>setImmediate(resolve));running--;
+  });
+  assert.equal(peak,2);assert.equal(running,0);assert.deepEqual(visited.sort(),[0,1,2,3]);
+});
+
+test('grow diagnostics expose only the actual top-level TAP code and keep failed evidence failed', () => {
+  const raw=run("not ok 1 - grow\n  ---\n  error: 'GROW_WRITER_ACTIVE'\n  code: 'GROW_WRITER_ACTIVE'\n  stack: PRIVATE_PATH\n  ...\n",{exitCode:1});
+  assert.equal(growFixtureFailureCode(raw),'GROW_WRITER_ACTIVE');
+  for(const text of ["# code: 'GROW_WRITER_ACTIVE'","    code: 'GROW_WRITER_ACTIVE'","  code: 'GROW_TOOL_FAILED PRIVATE_VALUE'","  code: 'ERR_ASSERTION'","  error: 'GROW_WRITER_ACTIVE'","  code: 'GROW_"+'X'.repeat(81)+"'"])assert.equal(growFixtureFailureCode(run(text)),null);
+  const failed={file:'development/guest-disk-grow-linux-check.cjs',lane:'linux-root',...summary('node',raw),fixtureFailureCode:growFixtureFailureCode(raw)};
+  assert.equal(failed.outcome,'failed');
+  const [line]=failureAnnotations({passed:false,results:[failed]});assert.match(line,/GROW_WRITER_ACTIVE/);assert.equal(line.includes('PRIVATE_PATH'),false);
+  assert.equal(failureAnnotations({passed:false,results:[{...failed,file:'other.test.mjs'}]})[0].includes('GROW_WRITER_ACTIVE'),false);
+  assert.equal(failureAnnotations({passed:false,results:[{...failed,fixtureFailureCode:'GROW_BAD\nPRIVATE_VALUE'}]})[0].includes('PRIVATE_VALUE'),false);
+});
 
 test('failed release suites produce escaped public annotations without process output or changing the gate',()=>{
   const report={passed:false,results:[{file:'vast/bad,\n%fixture.test.cjs',lane:'linux-root',outcome:'failed',exitCode:1,counts:{failed:2,skipped:0,cancelled:0},stdout:'PRIVATE_PROCESS_OUTPUT',stderr:'PRIVATE_ENV_VALUE'}]};

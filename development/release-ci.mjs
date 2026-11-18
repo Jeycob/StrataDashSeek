@@ -7,6 +7,21 @@ import {inventory} from './ci/inventory.mjs';
 import {runProgram} from '../quality/core.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+export async function executeSuites(suites, execute) {
+  // Root fixtures inspect host-wide UID/process state. Separate directories do
+  // not isolate those observations from another fixture using the same UID.
+  // Also serialize mixed --lane all runs; portable-only runs keep two workers.
+  const concurrency = suites.some(suite => suite.lane === 'linux-root') ? 1 : 2;
+  let cursor = 0;
+  await Promise.all(Array.from({length: concurrency}, async () => {
+    while (cursor < suites.length) await execute(suites[cursor++]);
+  }));
+}
+export function growFixtureFailureCode(run) {
+  // Only the top-level TAP error code of the one synthetic grow test is public.
+  // Nested assertion expectations, comments and arbitrary log text are ignored.
+  return (run.stdout + '\n' + run.stderr).match(/^  code: '(GROW_[A-Z0-9_]{1,80})'\r?$/mu)?.[1] ?? null;
+}
 export function summary(kind, run) {
   const text = run.stdout + '\n' + run.stderr;
   if (run.error || run.timedOut || run.aborted || run.truncated) return {outcome: 'unrunnable', reason: run.error ? 'PROCESS_START_FAILED' : run.timedOut ? 'TEST_TIMEOUT' : run.aborted ? 'TEST_CANCELLED' : 'OUTPUT_LIMIT', counts: null};
@@ -106,15 +121,14 @@ export async function releaseCI({lane = 'all', output, inventoryOnly = false, al
   const serviceRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'release-ci-service-')), childEnv = testEnvironment(env, serviceRoot);
   childEnv.HARNESS_NATIVE_EVIDENCE=path.join(output,'screenshots/native');childEnv.HARNESS_EDITOR_EVIDENCE=path.join(output,'screenshots/editor');
   const suites = list.entries.filter(row => row.required && row.kind !== 'unclassified' && (lane === 'all' || row.lane === lane)), results = [];
-  let cursor = 0, dependencyAdmission, bundleReproduction;
+  let dependencyAdmission, bundleReproduction;
   try {
     for(const directory of new Set(['HOME','USERPROFILE','APPDATA','LOCALAPPDATA','DSH_HOME','XDG_CONFIG_HOME'].map(name=>childEnv[name])))await fs.mkdir(directory,{recursive:true,mode:0o700});
     if(env.HARNESS_PYTHON)childEnv.HARNESS_PYTHON=env.HARNESS_PYTHON;
     dependencyAdmission=await dependencies(childEnv,{requirePython:suites.some(row=>row.kind==='python')});
     bundleReproduction=await reproduceBundle(serviceRoot,childEnv,before.nativeBundleSha256);
-    await Promise.all(Array.from({length: 2}, async () => {
-      while (cursor < suites.length) {
-        const suite = suites[cursor++], log = suite.file.replaceAll('/', '__') + '.log', began = Date.now(); let result;
+    await executeSuites(suites, async suite => {
+        const log = suite.file.replaceAll('/', '__') + '.log', began = Date.now(); let result;
         if (suite.lane === 'linux-root' && (process.platform !== 'linux' || process.getuid?.() !== 0)) result = {outcome: 'unrunnable', reason: 'LINUX_ROOT_FIXTURE_REQUIRED', counts: null};
         else {
           const command = suite.kind === 'python' ? [env.HARNESS_PYTHON || 'python3', suite.file] : suite.kind === 'workerd' ? [process.execPath, suite.file] : [process.execPath, '--test', '--test-reporter=tap', '--test-timeout=120000', suite.file];
@@ -122,11 +136,11 @@ export async function releaseCI({lane = 'all', output, inventoryOnly = false, al
           await fs.writeFile(path.join(output, log), redact(run.stdout + '\n[stderr]\n' + run.stderr));
           result = {...summary(suite.kind, run), exitCode: run.exitCode, timedOut: run.timedOut, truncated: run.truncated, log};
           if(suite.file==='workspace/native-ui/native.test.cjs')result.fixtureAssertion=nativeFixtureAssertion(run);
+          if(suite.file==='development/guest-disk-grow-linux-check.cjs'&&result.outcome==='failed')result.fixtureFailureCode=growFixtureFailureCode(run);
           if(result.outcome==='passed'&&suite.minTests&&!(result.counts?.total>=suite.minTests))result={...result,outcome:'unrunnable',reason:'REQUIRED_FIXTURE_NOT_EXECUTED'};
         }
         results.push({...suite, ...result, durationMs: Date.now() - began});
-      }
-    }));
+    });
   } finally {
     const resolved = await fs.realpath(serviceRoot), parent = await fs.realpath(os.tmpdir()), info = await fs.lstat(serviceRoot);
     if (info.isDirectory() && !info.isSymbolicLink() && path.dirname(resolved) === parent && path.basename(resolved).startsWith('release-ci-service-')) await fs.rm(resolved, {recursive: true, force: true});
@@ -175,9 +189,10 @@ export function failureAnnotations(report) {
   return rows.slice(0, 30).map(row => {
     const counts = row.counts ? `; failed=${row.counts.failed ?? 0}; skipped=${row.counts.skipped ?? 0}; cancelled=${row.counts.cancelled ?? 0}` : '';
     const reason = /^[A-Z0-9_]+$/.test(row.reason || '') ? `; ${row.reason}` : '';
-    // Only structured metadata and an explicit isolated Native assertion are public.
+    const fixtureCode = row.file === 'development/guest-disk-grow-linux-check.cjs' && /^GROW_[A-Z0-9_]{1,80}$/.test(row.fixtureFailureCode || '') ? '; ' + row.fixtureFailureCode : '';
+    // Only structured metadata, a grow error code and an explicit Native assertion are public.
     // Never copy arbitrary process logs or environment values.
-    const message = `${row.lane || 'unknown'}: ${row.outcome || 'unrunnable'}${Number.isInteger(row.exitCode) ? '; exit=' + row.exitCode : ''}${counts}${reason}${row.fixtureAssertion ? '; '+row.fixtureAssertion : ''}`;
+    const message = `${row.lane || 'unknown'}: ${row.outcome || 'unrunnable'}${Number.isInteger(row.exitCode) ? '; exit=' + row.exitCode : ''}${counts}${reason}${fixtureCode}${row.fixtureAssertion ? '; '+row.fixtureAssertion : ''}`;
     return `::error file=${property(row.file)},line=1,title=Release check failed::${escape(message)}`;
   });
 }
