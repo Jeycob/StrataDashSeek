@@ -18,7 +18,7 @@ export async function executeVerification(ctx, args, execution, config = {}) {
   if (!review?.root || !review.sourceHash || review.legacy === true) return errorResult('NO_MANAGED_PROJECT', 'Start an isolated managed project before verification.');
   const sessionId=review.sessionId??accessSessionId;
   const root = path.resolve(review.root), kind = args.kind ?? 'all';
-  let result, report;
+  let result, report,serverChannel;
   try {
     if(mode.snapshot.mode==='isolated-guest'){
       check();
@@ -36,19 +36,26 @@ export async function executeVerification(ctx, args, execution, config = {}) {
       // Preserve the current host executor only under explicit host-compat.
       const values = ctx.shellEnv.collect(execution);
       const spec = ctx.shell.resolve({ command, workdir: root, timeoutMs: 120000, dshEnv: values, signal: execution.signal, sandboxPolicy: { mode: 'workspace-write', workspaceRoot: root } });
+      let candidate;
+      try{candidate=await ctx.waterfall('workspace-runtime/browser-server-channel',{execution,projectRoot:root,sourceHash:review.sourceHash,kind,deadline:Date.now()+110000},()=>undefined);}
+      catch(error){if(error.code!=='BROWSER_SERVER_CHANNEL_UNAVAILABLE')throw error;}
+      if(candidate?.envelope&&typeof candidate.attach==='function'&&typeof candidate.close==='function'){
+        serverChannel=candidate;spec.stdin=JSON.stringify(candidate.envelope);spec.env={...spec.env,HARNESS_QUALITY_SERVER_CHANNEL:'1'};
+      }
       check();
       // Once started, await actual quiescence even if policy changes while
       // execute/result is pending; do not abandon an owned process handle.
-      const process=await ctx.shell.execute(spec),outcome=process.result();
+      const process=await ctx.shell.execute(spec),owned=serverChannel?serverChannel.attach(process):process,outcome=process.result();
       void outcome.catch(()=>{});
       // Private trusted event only: the controller can retain this exact owned
       // verifier range for bounded cleanup. No model/HTTP handle or PID input.
       try {
-        if(execution.callId?.startsWith('automatic-review-'))await ctx.serial('workspace-runtime/verification-process',{execution,projectRoot:root,sourceHash:review.sourceHash,process});
+        if(execution.callId?.startsWith('automatic-review-'))await ctx.serial('workspace-runtime/verification-process',{execution,projectRoot:root,sourceHash:review.sourceHash,process:owned});
         result=await outcome;
+        if(serverChannel)await owned.done;
       }catch(error){
-        if(typeof process.kill==='function')process.kill();
-        if(process.done)await process.done;
+        if(typeof owned.kill==='function')owned.kill();
+        if(owned.done)await owned.done;
         // Always observe the foreground projection, including hook failure.
         await outcome.catch(()=>{});throw error;
       }
@@ -63,7 +70,7 @@ export async function executeVerification(ctx, args, execution, config = {}) {
     if (execution.signal.aborted) throw e;
     check();
     report = errorResult('QUALITY_RUNNER_FAILED', e.message);
-  }
+  }finally{await serverChannel?.close();}
   const after = await ctx.waterfall('workspace-runtime/review', { sessionId:accessSessionId,execution }, () => undefined);
   check();
   const stale = !after || after.root !== review.root || after.sourceHash !== review.sourceHash || report.stale;

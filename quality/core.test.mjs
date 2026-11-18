@@ -8,6 +8,7 @@ import {validatePlan, resolveBaseURL, verifyBrowser} from './browser.mjs';
 import {executeVerification, apply} from './plugin.mjs';
 import {createHash} from 'node:crypto';
 import {createProjectExecutionMode} from '../workspace/execution-mode-service.mjs';
+import {inspectBrowserServer} from './browser-server-inspect.mjs';
 function hostMode(){const policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},policySha256=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(policy).sort(([a],[b])=>a.localeCompare(b))))).digest('hex'),snapshot={...policy,policySha256,sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'};return createProjectExecutionMode({snapshot,assertUnchanged:()=>snapshot}).service;}
 
 const command = code => [process.execPath, '-e', code];
@@ -35,6 +36,20 @@ test('browser failure detail survives missing screenshot evidence without passin
   assert(report.results[0].diagnostics.some(x=>x.includes('ERR_CONNECTION_REFUSED')),JSON.stringify(report));
   assert(report.results[0].diagnostics.includes('BROWSER_EVIDENCE_MISSING'));
   assert.equal(report.results[0].artifactPaths.filter(x=>x.endsWith('.png')).length,0);
+});
+
+test('explicit browser server fails closed outside managed SDK control and validates exact assigned endpoint',async t=>{
+  const root=await project(t,[{id:'ui',kind:'browser',plan:'plan.json',server:{command:['node','server.mjs']}}],['browser']);
+  const plan={version:1,baseURL:'http://127.0.0.1:${PORT}',viewports:[{name:'desktop',width:800,height:600}],flows:[{name:'start',steps:[{action:'goto',path:'/'},{action:'expect',selector:'h1',textIncludes:'ready'},{action:'checkpoint',name:'ready'}]}]};
+  await fs.writeFile(path.join(root,'plan.json'),JSON.stringify(plan));let runs=0;
+  const report=await verifyProject({workspace:root,run:async()=>{runs++;throw Error('No unmanaged browser');}});
+  assert.equal(runs,0);assert.equal(report.complete,false);assert(report.results[0].diagnostics.includes('BROWSER_SERVER_CHANNEL_UNAVAILABLE'));
+  const env={PORT:'21000',HARNESS_QUALITY_ALLOWED_PORTS:'21000,21001,21002,21003'};
+  const inspected=await inspectBrowserServer({workspace:root,contractPath:'.harness-quality.json',checkId:'ui',env});assert.equal(inspected.port,21000);assert.deepEqual(inspected.server.command,['node','server.mjs']);
+  await assert.rejects(inspectBrowserServer({workspace:root,contractPath:'.harness-quality.json',checkId:'ui',env:{PORT:'22000',HARNESS_QUALITY_ALLOWED_PORTS:'21000'}}),{code:'UNASSIGNED_PORT'});
+  plan.baseURL='http://localhost:${PORT}';await fs.writeFile(path.join(root,'plan.json'),JSON.stringify(plan));
+  await assert.rejects(inspectBrowserServer({workspace:root,contractPath:'.harness-quality.json',checkId:'ui',env}),{code:'BROWSER_SERVER_IPV4_REQUIRED'});
+  assert.throws(()=>validateContract({version:1,sources:['source.txt'],requiredKinds:['test'],checks:[{...passing,server:{command:['node','server.mjs']}}]}),{code:'INVALID_BROWSER_SERVER'});
 });
 
 test('quality uses the same bounded Node directory compatibility and retains setup versus test-body failures', async t => {
@@ -152,6 +167,12 @@ test('plugin uses managed root and native confinement and reports once',async()=
   assert.equal(r.complete,true); assert.deepEqual(f.specs[0].sandboxPolicy,{mode:'workspace-write',workspaceRoot:f.root});
   assert.equal(f.specs[0].workdir,f.root); assert.deepEqual(f.specs[0].dshEnv,{DSH_APP_PORT:'4000'});
   assert.equal(f.events.length,1); assert.equal(f.events[0].value.sourceHash,'original'); assert.equal(f.events[0].value.checksTotal,4);
+});
+
+test('unavailable optional server control preserves existing verification checks',async()=>{
+  const f=pluginContext(),waterfall=f.ctx.waterfall;
+  f.ctx.waterfall=async(name,...args)=>{if(name==='workspace-runtime/browser-server-channel')throw Object.assign(Error('No private transport'),{code:'BROWSER_SERVER_CHANNEL_UNAVAILABLE'});return waterfall(name,...args);};
+  const report=await executeVerification(f.ctx,{},f.execution);assert.equal(report.complete,true);assert.equal(f.events.length,1);assert.equal(f.specs[0].stdin,undefined);
 });
 test('native tool definition uses a concurrency callback',()=>{
   let definition;apply({projectExecutionMode:hostMode(),tools:{register:tool=>{definition=tool;}}});

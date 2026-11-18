@@ -1,5 +1,6 @@
 import {isMain} from '../runtime/require.cjs';
 import { verifyProject, compactReport } from './core.mjs';
+import {connectBrowserServerControl,readBrowserServerEnvelope} from './browser-server-client.mjs';
 
 export function argumentsOf(argv) {
   const options = {}; const [operation, ...rest] = argv;
@@ -14,10 +15,14 @@ export function argumentsOf(argv) {
 
 export async function main(argv) {
   const controller = new AbortController();
+  let serverControl;
   const abort = () => controller.abort(Error('Verification cancelled.'));
   process.once('SIGINT', abort); process.once('SIGTERM', abort);
-  try { const report = await verifyProject({ ...argumentsOf(argv), signal: controller.signal }); console.log(JSON.stringify(compactReport(report))); return report.passed ? 0 : 1; }
+  try {
+    if(process.env.HARNESS_QUALITY_SERVER_CHANNEL==='1')serverControl=await connectBrowserServerControl(await readBrowserServerEnvelope(),{signal:controller.signal});
+    const report = await verifyProject({ ...argumentsOf(argv), signal: controller.signal,serverControl }); console.log(JSON.stringify(compactReport(report))); return report.passed ? 0 : 1;
+  }
   catch (e) { console.log(JSON.stringify({ passed: false, complete: false, stale: false, checks: [], code: e.code ?? 'VERIFICATION_FAILED', error: e.message })); return 1; }
-  finally { process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort); }
+  finally {serverControl?.close();process.removeListener('SIGINT', abort); process.removeListener('SIGTERM', abort); }
 }
 if (isMain(import.meta.url)) process.exitCode = await main(process.argv.slice(2));

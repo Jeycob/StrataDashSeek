@@ -7,6 +7,7 @@ import { classifyToolOutcome } from '../workspace/tool-recovery.mjs';
 import testRuntime from '../development/test-command.cjs';
 import privateSource from '../workspace/source-private.cjs';
 import { acquireProcessLock } from '../workspace/process-lock.mjs';
+import {validateBrowserServer} from './browser-server-contract.mjs';
 const { isPrivateSourcePath } = privateSource;
 
 export const KINDS = ['build', 'test', 'browser', 'acceptance'];
@@ -44,12 +45,14 @@ export function validateContract(c) {
   if (!Array.isArray(c.checks) || !c.checks.length || c.checks.length > 32) throw new QualityError('INVALID_CONTRACT', 'Declare 1–32 checks.');
   const ids = new Set();
   for (const check of c.checks) {
-    if (check && Object.keys(check).some(k => !['id','kind','command','plan','timeoutMs','cwd','env','artifacts','resultFile'].includes(k))) throw new QualityError('INVALID_CHECK', 'Unknown check option.');
+    if (check && Object.keys(check).some(k => !['id','kind','command','plan','timeoutMs','cwd','env','artifacts','resultFile','server'].includes(k))) throw new QualityError('INVALID_CHECK', 'Unknown check option.');
     if (!check || !/^[a-z][a-z0-9_-]{0,63}$/u.test(check.id) || ids.has(check.id) || !KINDS.includes(check.kind)) throw new QualityError('INVALID_CHECK', 'Checks need a unique id and supported kind.');
     ids.add(check.id);
     if (check.kind === 'browser') {
       if (typeof check.plan !== 'string' || check.command !== undefined) throw new QualityError('INVALID_BROWSER_CHECK', 'Browser checks use the real built-in driver and a plan, never a replacement command.');
+      validateBrowserServer(check.server);
     } else {
+      if(check.server!==undefined)throw new QualityError('INVALID_BROWSER_SERVER','Only a browser check may own a server.');
       if (!Array.isArray(check.command) || !check.command.length || check.command.length > 64 || check.command.some(x => typeof x !== 'string' || x.includes('\0') || x.length > 16384)) throw new QualityError('INVALID_COMMAND', 'Use a bounded program-and-arguments array.');
       const program = path.basename(check.command[0]).toLowerCase().replace(/\.exe$/u, '');
       if (['bash', 'sh', 'dash', 'zsh', 'cmd', 'powershell', 'pwsh'].includes(program)) throw new QualityError('SHELL_REFUSED', 'Call verification programs directly; shell pipelines can hide failed exits.');
@@ -118,7 +121,7 @@ export async function runProgram(command, { cwd, env = process.env, signal, time
   });
 }
 
-export async function verifyProject({ workspace, contractPath = '.harness-quality.json', kind = 'all', signal, run = runProgram, env = process.env, budgetMs = 110000 } = {}) {
+export async function verifyProject({ workspace, contractPath = '.harness-quality.json', kind = 'all', signal, run = runProgram, env = process.env, budgetMs = 110000,serverControl } = {}) {
   const root = await fs.realpath(workspace);
   if (kind !== 'all' && !KINDS.includes(kind)) throw new QualityError('INVALID_KIND', 'Unknown verification kind.');
   const contract = validateContract(await readJson(root, contractPath));
@@ -136,13 +139,22 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
     for (const check of selected) {
       signal?.throwIfAborted();
       const start = Date.now(), diagnostics = []; let measured = { passed: 0, failed: 1 }, artifacts = [], result, evidenceErrorCode;
-      const remaining = budgetMs - (start - startedAt);
+      const remaining = Math.min(startedAt+budgetMs,serverControl?.deadline??Infinity)-start;
       if (remaining < 100) { results.push({ id: check.id, kind: check.kind, passed: false, exitCode: null, checksPassed: 0, checksTotal: 1, diagnostics: ['VERIFICATION_BUDGET_EXHAUSTED'], artifactPaths: [] }); break; }
       const cwd = await confined(root, check.cwd ?? '.');
       const resultFile = check.kind === 'browser' ? `.harness/quality/${check.id}-browser.json` : check.resultFile;
       if (resultFile) await confined(root, resultFile, { missing: true });
       const command = check.kind === 'browser' ? [process.execPath, path.join(HERE, 'browser.mjs'), '--workspace', root, '--plan', check.plan, '--output', resultFile, '--run-id', runId] : check.command;
-      result = await run(command, { cwd, env: { ...env, ...check.env, HARNESS_QUALITY_RUN_ID: runId }, signal, timeoutMs: Math.min(check.timeoutMs ?? 30000, remaining), lockFd: lock.inheritedFd });
+      const deadline=start+Math.min(check.timeoutMs??30000,remaining);let serverStarted=false;
+      try{
+        if(check.server){
+          if(!serverControl)throw new QualityError('BROWSER_SERVER_CHANNEL_UNAVAILABLE','Owned browser server requires the managed SDK verification channel.');
+          await serverControl.start({checkId:check.id,contractPath,contractHash:digest(JSON.stringify(contract)),planHash:digest(JSON.stringify(await readJson(root,check.plan))),deadline});serverStarted=true;
+        }
+        if(Date.now()>=deadline)throw new QualityError('CHECK_TIMEOUT','Original check deadline exhausted before browser.');
+        result = await run(command, { cwd, env: { ...env, ...check.env, HARNESS_QUALITY_RUN_ID: runId }, signal, timeoutMs: Math.max(1,deadline-Date.now()), lockFd: lock.inheritedFd });
+      }catch(error){if(signal?.aborted)throw error;result={exitCode:1,stdout:'',stderr:error.code??error.message,error:error.code??error.message};}
+      finally{if(serverStarted)await serverControl.stop(check.id);}
       if (result.aborted || signal?.aborted) throw signal?.reason ?? new QualityError('ABORTED', 'Verification cancelled.');
       if (result.exitCode !== 0 || result.timedOut) diagnostics.push(result.timedOut ? 'CHECK_TIMEOUT' : `EXIT_${result.exitCode ?? 'UNAVAILABLE'}`);
       if (result.error) diagnostics.push(result.error);

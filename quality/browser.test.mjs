@@ -39,10 +39,18 @@ test('real Chromium retains refused assigned-port cause before readiness and aft
     return report.runId;
   };
   const first=await refused();
-  await listen(port);const ready=await verify();assert.equal(ready.complete,true,JSON.stringify(ready));
+  const contract=JSON.parse(await fs.readFile(path.join(root,'.harness-quality.json'),'utf8'));
+  const ownedContract=structuredClone(contract);ownedContract.checks[0].server={command:['node','fixture-server.mjs']};
+  await fs.writeFile(path.join(root,'.harness-quality.json'),JSON.stringify(ownedContract));
+  let stopped=false;
+  // Local driver fixture seam only; actual SDK channel/custody has separate
+  // inert-kernel tests and still requires Root's real Linux qualification.
+  const ready=await verifyProject({workspace:root,env,serverControl:{deadline:Date.now()+25000,async start(request){assert.equal(request.checkId,'ui');await listen(port);},async stop(id){assert.equal(id,'ui');await close();stopped=true;}}});
+  assert.equal(ready.complete,true,JSON.stringify(ready));assert.equal(stopped,true);assert.equal(server.listening,false);
   const shots=ready.results[0].artifactPaths.filter(p=>p.endsWith('.png'));assert.equal(shots.length,1);
   assert.equal((await fs.readFile(path.join(root,shots[0]))).subarray(0,8).toString('hex'),'89504e470d0a1a0a');
-  await close();const last=await refused();assert.notEqual(last,first);assert.notEqual(last,ready.runId);
+  await fs.writeFile(path.join(root,'.harness-quality.json'),JSON.stringify(contract));
+  const last=await refused();assert.notEqual(last,first);assert.notEqual(last,ready.runId);
 });
 
 test('real Chromium distinguishes working shop from four known UI regressions', {timeout:90000}, async t=>{

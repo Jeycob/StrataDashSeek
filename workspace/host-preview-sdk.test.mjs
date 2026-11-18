@@ -16,6 +16,10 @@ import {createProjectExecutionMode} from './execution-mode-service.mjs';
 import {hostExecutionBinding} from './fixtures/execution-binding.mjs';
 import {apply as applyEfficiency} from '../efficiency/plugin.mjs';
 import {apply as applyQuality} from '../quality/plugin.mjs';
+import {createBrowserServerChannel} from '../quality/browser-server-host.mjs';
+import {connectBrowserServerControl} from '../quality/browser-server-client.mjs';
+import {inspectBrowserServer} from '../quality/browser-server-inspect.mjs';
+import {verifyProject,compactReport,digest} from '../quality/core.mjs';
 import protocol from '../development/project-custody.cjs';
 let modules;
 function sdk(){return modules??=(async()=>{
@@ -74,13 +78,65 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
   preview.install(a);return a;
  }
  let sequence=0;
- async function call(a,name,value,signal=new AbortController().signal){const toolSet=await ctx.tools.resolve({agent:a,modelSelection:a.model.current(),signal});try{const report=await ctx.tools.execute({agent:a,signal,toolSet,calls:[{id:'preview-'+(++sequence),name,arguments:JSON.stringify(value)}]});return report.results[0].result;}finally{toolSet.dispose();}}
+ async function call(a,name,value,signal=new AbortController().signal,callId){const toolSet=await ctx.tools.resolve({agent:a,modelSelection:a.model.current(),signal});try{const report=await ctx.tools.execute({agent:a,signal,toolSet,calls:[{id:callId??'preview-'+(++sequence),name,arguments:JSON.stringify(value)}]});return report.results[0].result;}finally{toolSet.dispose();}}
  const control=input=>preview.operation(input,{ownerControl:true});
  t.after(async()=>{for(const p of processes){p.hold=false;if(p.kills)p.release();}await preview.dispose();await run.dispose();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();assert(path.resolve(directory).startsWith(path.resolve(os.tmpdir())+path.sep+'host-preview-sdk-'));await fs.rm(directory,{recursive:true,force:true});});
  return{ctx,manager,run,preview,agent,call,control,processes,calls,targets,brokers,relays,routes,workspaces,state,projects,archive,set rejectPeer(value){rejectPeer=value;}};
 }
 async function start(f,agent){const result=await f.call(agent,'project_exec',args);assert.equal(result.isError,false,JSON.stringify(result));return result.value.jobId;}
 async function open(f,agent,jobId){const result=await f.call(agent,'project_preview',{operation:'open',jobId});assert.equal(result.isError,false,JSON.stringify(result));return result.value;}
+
+for(const mode of ['complete','cli-exit','owner-stop','readiness-failure','stale-contract'])test('one actual SDK verify execution owns server and channel through '+mode, {timeout:10000},async t=>{
+ const f=await fixture(t,{heavy:true}),a=await f.agent('owner'),root=f.manager.data.sessions[a.id].root;
+ await fs.writeFile(path.join(root,'plan.json'),JSON.stringify({version:1,baseURL:'http://127.0.0.1:${PORT}',viewports:[{name:'desktop',width:800,height:600}],flows:[{name:'start',steps:[{action:'goto',path:'/'},{action:'expect',selector:'h1',textIncludes:'Ready fixture'},{action:'checkpoint',name:'ready'}]}]}));
+ await fs.writeFile(path.join(root,'.harness-quality.json'),JSON.stringify({version:1,sources:['plan.json'],requiredKinds:['browser'],checks:[{id:'ui',kind:'browser',plan:'plan.json',server:{command:['node','server.mjs']},timeoutMs:5000}]}));
+ f.manager.review=async()=>({root,sourceHash:'original',ports:f.manager.data.sessions[a.id].ports});
+ f.ctx.on('workspace-runtime/review',()=>f.manager.review());
+ const phases=[];let channel,cliKilled=0,retained,rangeSettled=false;
+ f.ctx.on('workspace-runtime/verification-process',value=>{retained=value.process;void retained.done.then(()=>{rangeSettled=true;});});
+ f.ctx.on('workspace-runtime/browser-server-channel',async input=>channel=await createBrowserServerChannel(f.ctx,f.manager,f.run,input,{supported:()=>true,backend:async()=>true,uid:()=>1001,connector:({binding,custodyFor})=>({async connect(){const target=await binding(),capture=await custodyFor(target.jobId,target.owner);capture.assertCurrent();if(mode==='readiness-failure')throw Object.assign(Error('inert refused owned peer'),{code:'ECONNREFUSED'});phases.push('owned-ready');return{close(){},done:Promise.resolve()};}})}));
+ const execute=f.ctx.shell.execute;
+ f.ctx.shell.execute=async spec=>{
+  if(spec.command.includes('browser-server-inspect.mjs'))return{async result(){const inspected=await inspectBrowserServer({workspace:root,contractPath:'.harness-quality.json',checkId:'ui',env:{PORT:'21000',HARNESS_QUALITY_ALLOWED_PORTS:'21000,21001,21002,21003'}});if(mode==='stale-contract')inspected.contractHash='0'.repeat(64);return{exitCode:0,stdout:{text:JSON.stringify(inspected)}};}};
+  if(!spec.command.includes('cli.mjs'))return execute(spec);
+  let complete;const done=new Promise(resolve=>{complete=resolve;});
+  const outcome=(async()=>{let control;try{
+   const envelope=JSON.parse(spec.stdin);
+   await assert.rejects(connectBrowserServerControl({...envelope,nonce:'0'.repeat(64)}));
+   control=await connectBrowserServerControl(envelope,{signal:spec.signal});
+   const request={checkId:'ui',contractPath:'.harness-quality.json',contractHash:digest(JSON.stringify(JSON.parse(await fs.readFile(path.join(root,'.harness-quality.json'),'utf8')))),planHash:digest(JSON.stringify(JSON.parse(await fs.readFile(path.join(root,'plan.json'),'utf8')))),deadline:Date.now()+5000};
+   await assert.rejects(control.start({...request,port:21000}),{code:'BROWSER_SERVER_REQUEST_INVALID'});
+   if(mode==='cli-exit'){
+    await control.start(request);f.processes[0].hold=true;control.close();
+    return{exitCode:137,stdout:{text:JSON.stringify({passed:false,complete:false,stale:false,checks:[]})}};
+   }
+   const report=await verifyProject({workspace:root,serverControl:control,signal:spec.signal,run:async(_command,{env,signal})=>{
+    assert.deepEqual(phases,['owned-ready']);assert.equal(f.processes[0].status,'running');phases.push('browser-driver');
+    if(mode==='owner-stop'){f.processes[0].hold=true;return new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));}
+    // Exercise scheduling/lifetime, never fabricate a real browser PASS.
+    await fs.writeFile(path.join(root,'.harness/quality/ui-browser.json'),JSON.stringify({runId:env.HARNESS_QUALITY_RUN_ID,engine:'chromium',passed:0,failed:1,screenshots:[],results:[{passed:false,code:'FIXTURE_NO_BROWSER',detail:'No real browser in this inert SDK test'}]}));
+    return{exitCode:1,stdout:'',stderr:''};
+   }});return{exitCode:1,stdout:{text:JSON.stringify(compactReport(report))}};
+  }finally{control?.close();complete();}})();void outcome.catch(()=>{});
+  return{done,kill(){cliKilled++;complete();return true;},result:()=>outcome};
+ };
+ applyQuality(f.ctx);
+ const controller=new AbortController();let finished=false;
+ const pending=f.call(a,'verify_project',{kind:'browser'},controller.signal,'automatic-review-11111111-1111-4111-8111-111111111111').then(result=>{finished=true;return result;});
+ if(['cli-exit','owner-stop'].includes(mode)){
+  await until(()=>mode==='cli-exit'?f.processes[0]?.kills>0:phases.includes('browser-driver'));
+  if(mode==='owner-stop')controller.abort(Error('actual SDK owner Stop'));
+  await until(()=>f.processes[0].kills>0);assert.equal(finished,false);assert(retained);assert.equal(rangeSettled,false);assert.equal(f.processes[0].status,'running');f.processes[0].release();
+ }
+ const result=await pending;
+ assert(retained);assert.equal(rangeSettled,true);
+ if(mode==='owner-stop')assert.equal(result.isError,true,JSON.stringify(result));
+ else{assert.equal(result.value.complete,false);assert.equal(result.value.passed,false);}
+ const expected=['complete','owner-stop'].includes(mode)?['owned-ready','browser-driver']:mode==='cli-exit'?['owned-ready']:[];
+ assert.deepEqual(phases,expected,JSON.stringify(result));
+ assert.equal(f.calls.length,mode==='stale-contract'?0:1);if(f.processes[0])assert.equal(f.processes[0].status,'killed');
+ if(mode==='complete')assert.equal(cliKilled,0);await channel.close();
+});
 
 test('actual SDK browser verification queues behind its own live producer until actual done', {timeout:10000},async t=>{
  const f=await fixture(t,{heavy:true}),a=await f.agent('owner');applyQuality(f.ctx);
