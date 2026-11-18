@@ -50,6 +50,14 @@ test('offline recipe requires concrete pinned inputs, whitelists sources and onl
  const lock=require('./project-toolchain-lock.json');assert.deepEqual(lock.npm,{version:T.NPM_VERSION,integrity:T.NPM_INTEGRITY});assert.equal(lock.playwright.integrity,T.PINS.playwrightIntegrity);assert.equal(lock.playwrightCore.integrity,T.PINS.playwrightCoreIntegrity);assert.equal(lock.dotnet.sha512,T.PINS.dotnetSHA512);
  const versions=require('./versions.json'),ci=require('./ci/package-lock.json');assert.equal(versions.dotnetSHA512,T.PINS.dotnetSHA512);assert.equal(versions.playwrightIntegrity,T.PINS.playwrightIntegrity);assert.equal(ci.packages['node_modules/playwright'].integrity,T.PINS.playwrightIntegrity);assert.equal(ci.packages['node_modules/playwright-core'].integrity,T.PINS.playwrightCoreIntegrity);
 });
+test('actual transformed quality sources have an explicit minimal offline dependency closure',()=>{
+ const sourceRoot=path.resolve(__dirname,'..'),sources=new Map(Object.keys(T.SOURCE_FILES).map(name=>{const original=fs.readFileSync(path.join(sourceRoot,name));return[name,{original,installed:B.transformSource(name,original)}];}));
+ assert.doesNotThrow(()=>B.auditSources(sources));
+ for(const name of ['quality/browser-server-contract.mjs','quality/browser-server-client.mjs'])assert.equal(T.SOURCE_FILES[name],'homeai/'+name);
+ assert.equal(T.SOURCE_FILES['quality/browser-server-host.mjs'],undefined);
+ assert.equal(T.SOURCE_FILES['quality/browser-server-inspect.mjs'],undefined);
+});
+
 test('exact Git source ignores local replace refs and disables lazy fetch',{skip:process.platform!=='linux'},t=>{
  const repo=fs.mkdtempSync(path.join(os.tmpdir(),'homeai-toolchain-git-'));t.after(()=>fs.rmSync(repo,{recursive:true,force:true}));
  const git=(...args)=>{const result=spawnSync('/usr/bin/git',['-C',repo,'-c','user.name=Synthetic','-c','user.email=synthetic@example.invalid','-c','commit.gpgsign=false',...args],{encoding:'utf8',env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent',GIT_CONFIG_NOSYSTEM:'1'}});assert.equal(result.status,0,result.stderr);return result.stdout.trim();};
