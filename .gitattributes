@@ -2,3 +2,6 @@
 *.png -text
 # Preserve the byte-pinned benchmark dependency snapshots across checkouts.
 benchmarks/n06-finalization/frozen/** -text
+
+# Preserve the byte-pinned reusable evidence-storage modules and tests.
+benchmarks/n06-evidence-storage/*.mjs -text

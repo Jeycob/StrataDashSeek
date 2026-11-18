@@ -31,6 +31,9 @@ export function candidate(name) {
 export function classify(name) {
   name = name.replaceAll('\\', '/');
   if (name === 'benchmarks/n06-finalization/finalization.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 13};
+  if (name === 'benchmarks/n06-evidence-storage/checkpoint.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 10};
+  if (name === 'benchmarks/n06-evidence-storage/lifecycle.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 5};
+  if (name === 'benchmarks/n06-evidence-storage/composition.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 4};
   if (name.startsWith('benchmarks/')) return {file: name, kind: 'historical', lane: 'outside-ci', required: false, reason: 'Historical challenge/dataset fixture, explicitly outside the production infrastructure gate.'};
   if (helpers.has(name)) return {file: name, kind: 'helper', lane: 'outside-ci', required: false, reason: helpers.get(name)};
   if (hostFixtures.has(name)) return {file: name, kind: 'existing-host-fixture', lane: 'outside-ci', required: false, outcome: 'unrunnable', reason: hostFixtures.get(name)};
