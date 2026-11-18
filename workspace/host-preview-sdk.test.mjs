@@ -168,7 +168,7 @@ test('assembled SDK controller, real HTTP broker and private relay preserve app 
  const seen=[],sockets=new Set(),app=http.createServer(async(req,res)=>{let body='';for await(const bytes of req)body+=bytes;seen.push({url:req.url,method:req.method,headers:req.headers,body});res.writeHead(409,{'content-type':'application/json; charset=utf-8','set-cookie':'owner-fixation=bad','access-control-allow-origin':'*'});res.end(JSON.stringify({error:'Poznámka byla změněna',body}));});
  app.on('connection',socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket));});await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
  t.after(async()=>{for(const socket of sockets)socket.destroy();await new Promise(resolve=>app.close(resolve));});
- const f=await fixture(t,{transport:true,operationMs:40}),a=await f.agent('owner');f.manager.data.sessions[a.id].ports[0]=app.address().port;
+ const f=await fixture(t,{transport:true}),a=await f.agent('owner');f.manager.data.sessions[a.id].ports[0]=app.address().port;
  const id=await start(f,a),capture=await f.run.custodyFor(id,a.id);
  const before=await f.control({operation:'status',sessionId:a.id});assert.equal(before.state,'closed');assert.equal(before.workSettled,true);
  capture.assertCurrent();assert.equal(f.processes[0].status,'running'); // No preview entry is not producer settlement.
