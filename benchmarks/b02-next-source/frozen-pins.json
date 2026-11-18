@@ -1,0 +1,77 @@
+{
+  "sourceManifestSha256": "42fd252df7390ea830b9225b08e0d3f48b49b5358b94dfc7dee4f262d02e832f",
+  "qaManifestSha256": "0f3aefd09c40868109a3972c41a4d417d088181cb8066b8fe8701c2a9cf02e4a",
+  "acceptanceVersion": "paired-20261116 v1 + product-qa supplement v1",
+  "expectedServiceCommit": "266196e9427db575609cbbe5c8c6fb7c814f27ff",
+  "baseB01ProducerCommit": "8bb4c757edf5d63e8969ac4f4b0ff401188a87f3",
+  "b10ReferenceCommit": "c0e7856446922985f1ac524002e39066ca5df8eb",
+  "orderingReference": {
+    "commit": "18232a4697ff5aa29caca313789674be49035ff6",
+    "sha256": "c6c7e0021fef764418207dc13789edad7dd1af6b920e660f05a19da3d4463630"
+  },
+  "scenario": {
+    "id": "B02",
+    "title": "Evidence domácího vybavení",
+    "seconds": 900,
+    "repairSeconds": 300,
+    "order": [
+      "DS",
+      "HomeAI"
+    ],
+    "ui": [
+      "Nahrát fixture inventory.csv; vidět 4 přijaté a 1 chybný řádek s číslem 6.",
+      "Vyhledat Žárovka; ověřit české pořadí Čajník, Hrnek…, Žárovka pro neútočné položky.",
+      "Útočný název je text, nevznikne dialog ani window.__xss; stáhnout CSV, vyprázdnit jen fixture a znovu importovat."
+    ],
+    "expectedVariants": 2
+  },
+  "files": [
+    {
+      "path": "specs.mjs",
+      "bytes": 15165,
+      "sha256": "bfee00bb6f0a7725afffe612b6dddde07aafe287b634b0f07714ac9ec89aca95"
+    },
+    {
+      "path": "api-acceptance.mjs",
+      "bytes": 17173,
+      "sha256": "2961d30d21b132d946a40dbdea8a1ec622fbbac71f98ab9602a5c9adaa86a378"
+    },
+    {
+      "path": "browser-acceptance.mjs",
+      "bytes": 9268,
+      "sha256": "192277ea3d3c0140829a6cff91f769587a01540db8194c63d6604025e6aadb29"
+    },
+    {
+      "path": "fixtures/B02/inventory.csv",
+      "bytes": 156,
+      "sha256": "835c004b6c4eede84ff87038b2d07b58adfcb23e56c494a67f959df4cc1acd7a"
+    },
+    {
+      "path": "prompts/B02.txt",
+      "bytes": 2367,
+      "sha256": "dcade0591f5d6f70ffb7ee11f9f17b276f01e2568e98f8cd5b6dd1365028196f"
+    }
+  ],
+  "expectedImportedRows": [
+    {
+      "name": "Žárovka",
+      "category": "Elektro",
+      "quantity": 2
+    },
+    {
+      "name": "Čajník",
+      "category": "Kuchyně",
+      "quantity": 1
+    },
+    {
+      "name": "Hrnek, velký",
+      "category": "Kuchyně",
+      "quantity": 3
+    },
+    {
+      "name": "<img src=x onerror=window.__xss=1>",
+      "category": "Test",
+      "quantity": 1
+    }
+  ]
+}

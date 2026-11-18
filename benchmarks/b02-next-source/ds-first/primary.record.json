@@ -1,0 +1,66 @@
+{
+  "recordVersion": 1,
+  "isTemplate": true,
+  "recordKind": "model_benchmark_attempt",
+  "status": "NOT RUN",
+  "statusReason": "SOURCEONLY; fresh Root target, current final priors and qualified producer required",
+  "scenario": "B02",
+  "variant": "DS",
+  "pairId": null,
+  "runId": null,
+  "attemptId": null,
+  "baselineAttemptId": null,
+  "qualifiedProducerCommit": null,
+  "identity": {
+    "sessionId": null,
+    "workspaceId": null,
+    "projectId": null,
+    "sessionUrl": null,
+    "sourceCommit": "266196e9427db575609cbbe5c8c6fb7c814f27ff",
+    "runtimeCommit": "266196e9427db575609cbbe5c8c6fb7c814f27ff",
+    "manifestSha256": "42fd252df7390ea830b9225b08e0d3f48b49b5358b94dfc7dee4f262d02e832f",
+    "promptSha256": "dcade0591f5d6f70ffb7ee11f9f17b276f01e2568e98f8cd5b6dd1365028196f",
+    "acceptanceVersion": "paired-20261116 v1 + product-qa supplement v1",
+    "requestedModel": {
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-pro",
+      "reasoningEffort": "high"
+    },
+    "fixtureFiles": [
+      {
+        "path": "fixtures/B02/inventory.csv",
+        "bytes": 156,
+        "sha256": "835c004b6c4eede84ff87038b2d07b58adfcb23e56c494a67f959df4cc1acd7a"
+      }
+    ]
+  },
+  "limits": {
+    "mainSeconds": 900,
+    "repairSeconds": 300,
+    "maxRepairs": 1
+  },
+  "comparison": {
+    "orderPosition": 7
+  },
+  "timestampsUtc": {
+    "runSubmittedAt": null,
+    "submittedAt": null,
+    "firstOutputAt": null,
+    "implementationReadyAt": null,
+    "validationStartedAt": null,
+    "acceptedAt": null,
+    "limitReachedAt": null,
+    "stopRequestedAt": null,
+    "finishedAt": null,
+    "settledAt": null
+  },
+  "stopReason": null,
+  "timingMs": {},
+  "counts": {},
+  "quality": {
+    "accepted": null,
+    "checks": []
+  },
+  "settledEvidence": {},
+  "missingDataReasons": []
+}

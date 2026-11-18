@@ -1,0 +1,26 @@
+// Six/seven exact current predecessors, not renamed B01-first assumptions.
+import {createHash} from 'node:crypto';
+import {need,hex,uuid,frozen,serviceCommit,modelFor,promptHashes,primaryPolicy,validateFixedSlot,validatePrimary} from './spec.mjs';
+export const maxPriorBytes=2097152+8192;
+const sha=b=>createHash('sha256').update(b).digest('hex'),same=(a,b)=>a&&Object.entries(b).every(([k,v])=>a[k]===v),bindings=new WeakMap();
+const key=(record,target)=>JSON.stringify([record.scenario,record.variant,record.pairId,record.runId,record.attemptId,record.comparison.orderPosition,target.sessionId,target.workspaceId,target.projectId,target.projectRoot,target.modelSelection,serviceCommit]);
+const slotKey=s=>key({...s,comparison:{orderPosition:s.orderPosition}},s.target);
+export function validatePriorBytes(expected,bytes){
+ need(hex(expected?.checkpointSha256)&&Buffer.isBuffer(bytes)&&bytes.length>0&&bytes.length<=maxPriorBytes,'ACTUAL_BOUNDED_PRIOR_REQUIRED');need(sha(bytes)===expected.checkpointSha256,'PRIOR_CHECKPOINT_HASH_MISMATCH');
+ const e=JSON.parse(bytes),r=e.snapshot,own=Object.fromEntries(['sessionId','workspaceId','projectId'].map(k=>[k,expected[k]]));
+ need(e.version===1&&e.phase==='final'&&e.attemptId===expected.attemptId&&same(e.target,own)&&uuid(e.checkpointId)&&uuid(e.previousCheckpointId)&&uuid(e.requestId),'ACTUAL_PRIOR_FINAL_ENVELOPE_REQUIRED');
+ need(r&&hex(e.snapshotSha256)&&Buffer.byteLength(JSON.stringify(r))<=2097152&&sha(JSON.stringify(r))===e.snapshotSha256,'PRIOR_SNAPSHOT_HASH_MISMATCH');
+ need(r.isTemplate===false&&['PASS','FAIL','BLOCKED'].includes(r.status)&&same(r,Object.fromEntries(['scenario','variant','pairId','runId','attemptId'].map(k=>[k,expected[k]])))&&r.comparison?.orderPosition===expected.orderPosition,'ACTUAL_CURRENT_PRIOR_ATTEMPT_REQUIRED');
+ need(same(r.identity,own)&&r.identity.sourceCommit===serviceCommit&&r.identity.runtimeCommit===serviceCommit&&r.identity.manifestSha256===frozen.sourceManifestSha256&&r.identity.promptSha256===promptHashes[expected.scenario]&&r.identity.acceptanceVersion===frozen.acceptanceVersion&&same(r.identity.requestedModel,modelFor(expected.variant)),'PRIOR_FROZEN_IDENTITY_MISMATCH');
+ const op=r.operator,obs=r.nativeObservation,start=Date.parse(r.timestampsUtc?.runSubmittedAt),finished=Date.parse(r.timestampsUtc?.finishedAt),settled=Date.parse(r.timestampsUtc?.settledAt),policy=primaryPolicy(expected.scenario);
+ need(op?.finalized===true&&op.requestId===e.requestId&&Number.isSafeInteger(op.baselineSeq)&&op.baselineSeq>=0&&typeof op.rootHandoff==='string'&&op.rootHandoff.length>0&&r.slotHandoffEvidence===op.rootHandoff,'ACTUAL_PRIOR_FINALIZED_INTENT_REQUIRED');
+ need(op.persistence?.unknownOutcome===false&&op.persistenceFailed!==true&&op.persistence.pendingCheckpointId===e.checkpointId&&op.persistence.lastDurableCheckpointId===e.previousCheckpointId,'ACTUAL_PRIOR_DURABLE_CHAIN_REQUIRED');
+ need(obs?.promptAdmission==='accepted'&&obs.settled===true&&obs.historyComplete===true&&Array.isArray(obs.events)&&obs.events.some(x=>x.type==='turn/start'&&x.seq>op.baselineSeq)&&obs.events.some(x=>x.type==='turn/end'&&x.seq>op.baselineSeq),'ACTUAL_PRIOR_SUBMITTED_SETTLED_REQUIRED');
+ need(policy&&Object.entries(policy).every(([k,v])=>r.limits?.[k]===v)&&[start,finished,settled].every(Number.isFinite)&&finished>=start&&settled>=finished&&Date.parse(op.primaryDeadlineAt)===start+policy.mainSeconds*1000,'PRIOR_ORIGINAL_SCENARIO_CLOCK_REQUIRED');
+ const f=r.rootFinalization;need(f?.status==='SETTLED_VISIBLE'&&f.settled===true&&f.visible===true&&f.archiveState==='visible'&&f.sourceCommit===serviceCommit&&f.requestId===op.requestId&&same(f.target,own)&&hex(f.tupleSha256)&&Number.isSafeInteger(f.deadline),'ACTUAL_PRIOR_SETTLED_VISIBLE_REQUIRED');
+ if(expected.actualWriterReceipt!=null){const x=expected.actualWriterReceipt;need(x.durable===true&&x.checkpointId===e.checkpointId&&x.sha256===expected.checkpointSha256&&x.bytes===bytes.length,'ACTUAL_PRIOR_RECEIPT_MISMATCH');}
+ return Object.freeze({settled:true,finalized:true,scenario:expected.scenario,variant:expected.variant,pairId:expected.pairId,attemptId:expected.attemptId,sessionId:expected.sessionId,requestId:e.requestId,checkpointId:e.checkpointId,checkpointSha256:expected.checkpointSha256,submittedAt:start,settledAt:settled});
+}
+export function readActualPreviousRuns(slot,protectedRead){validateFixedSlot(slot);need(typeof protectedRead==='function','ACTUAL_PROTECTED_PRIOR_READER_REQUIRED');const rows=Object.freeze(slot.previous.map(p=>validatePriorBytes(p,protectedRead(p.checkpointFile,maxPriorBytes))));need(rows.every((r,i)=>i===0||r.submittedAt>=rows[i-1].settledAt),'CURRENT_CAMPAIGN_CHRONOLOGY_REQUIRED');bindings.set(rows,slotKey(slot));return rows;}
+export function requireBoundPreviousRuns(slot,rows){validateFixedSlot(slot);need(bindings.get(rows)===slotKey(slot),'ACTUAL_BOUND_B02_PRIORS_REQUIRED');return rows;}
+export function requireB02PreviousRuns({record,target,handoff}){validatePrimary(record,target);need(handoff?.sourceCommit===serviceCommit&&handoff.runtimeCommit===serviceCommit&&bindings.get(handoff.previousRuns)===key(record,target),'ACTUAL_BOUND_B02_PRIORS_REQUIRED');return handoff.previousRuns;}
