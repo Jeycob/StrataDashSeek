@@ -15,6 +15,7 @@ import {createProjectCommandRunner,registerProjectTool} from './project-tool.mjs
 import {createProjectExecutionMode} from './execution-mode-service.mjs';
 import {hostExecutionBinding} from './fixtures/execution-binding.mjs';
 import {apply as applyEfficiency} from '../efficiency/plugin.mjs';
+import {apply as applyQuality} from '../quality/plugin.mjs';
 import protocol from '../development/project-custody.cjs';
 let modules;
 function sdk(){return modules??=(async()=>{
@@ -81,6 +82,27 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
 async function start(f,agent){const result=await f.call(agent,'project_exec',args);assert.equal(result.isError,false,JSON.stringify(result));return result.value.jobId;}
 async function open(f,agent,jobId){const result=await f.call(agent,'project_preview',{operation:'open',jobId});assert.equal(result.isError,false,JSON.stringify(result));return result.value;}
 
+test('actual SDK browser verification queues behind its own live producer until actual done', {timeout:10000},async t=>{
+ const f=await fixture(t,{heavy:true}),a=await f.agent('owner');applyQuality(f.ctx);
+ let guarded=0,reviews=0;f.ctx.tools.guard(exec=>{if(exec.name==='verify_project')guarded++;});
+ f.ctx.on('workspace-runtime/review',()=>{reviews++;});
+ const id=await start(f,a);await until(()=>f.calls.length===1);
+ const capture=await f.run.custodyFor(id,a.id),cancel=new AbortController();
+ let finished=false;const queued=f.call(a,'verify_project',{kind:'browser'},cancel.signal).then(result=>{finished=true;return result;});
+ await until(()=>guarded>0);await tick();await tick();
+ assert.equal(finished,false);assert.equal(reviews,0);capture.assertCurrent();assert.equal(f.processes[0].status,'running');
+ cancel.abort(Error('cancel queued verification'));assert.equal((await queued).isError,true);
+ capture.assertCurrent();assert.equal(f.processes[0].kills,0);
+ f.processes[0].hold=true;let stopped=false;
+ const stopping=f.run.stopOwned(id,a.id).then(()=>{stopped=true;});await until(()=>f.processes[0].kills>0);
+ assert.equal(stopped,false);assert.equal(f.processes[0].status,'running');
+ let afterFinished=false;const after=f.call(a,'verify_project',{kind:'browser'}).then(value=>{afterFinished=true;return value;});
+ await until(()=>guarded>1);await tick();assert.equal(afterFinished,false);assert.equal(reviews,0);
+ f.processes[0].release();await stopping;await capture.done;
+ const result=await after;assert.equal(reviews,1);assert.equal(result.value.code,'NO_MANAGED_PROJECT');
+ assert.equal(f.calls.length,1);assert.equal(f.processes[0].status,'killed');
+});
+
 test('actual scoped SDK tool registers an own preview with Apps absent and no public authority arguments',async t=>{
  const f=await fixture(t),a=await f.agent('owner'),id=await start(f,a),opened=await open(f,a,id);
  assert.equal(opened.state,'ready');assert.match(opened.url,/https:\/\/same.test:8443\/__preview\/bootstrap#/);assert.equal(opened.generation,(await f.run.custodyFor(id,a.id)).identity.generation);assert.equal(f.targets.length,1);assert.equal(f.targets[0].port,21000);assert.equal(f.targets[0].owner,a.id);assert.equal(f.targets[0].workspaceId,'workspace-owner');assert(!('pid'in opened));
@@ -146,8 +168,11 @@ test('assembled SDK controller, real HTTP broker and private relay preserve app 
  const seen=[],sockets=new Set(),app=http.createServer(async(req,res)=>{let body='';for await(const bytes of req)body+=bytes;seen.push({url:req.url,method:req.method,headers:req.headers,body});res.writeHead(409,{'content-type':'application/json; charset=utf-8','set-cookie':'owner-fixation=bad','access-control-allow-origin':'*'});res.end(JSON.stringify({error:'Poznámka byla změněna',body}));});
  app.on('connection',socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket));});await new Promise(resolve=>app.listen(0,'127.0.0.1',resolve));
  t.after(async()=>{for(const socket of sockets)socket.destroy();await new Promise(resolve=>app.close(resolve));});
- const f=await fixture(t,{transport:true}),a=await f.agent('owner');f.manager.data.sessions[a.id].ports[0]=app.address().port;
- const opened=await open(f,a,await start(f,a)),broker=f.brokers[0],origin=new URL(opened.url).origin;
+ const f=await fixture(t,{transport:true,operationMs:40}),a=await f.agent('owner');f.manager.data.sessions[a.id].ports[0]=app.address().port;
+ const id=await start(f,a),capture=await f.run.custodyFor(id,a.id);
+ const before=await f.control({operation:'status',sessionId:a.id});assert.equal(before.state,'closed');assert.equal(before.workSettled,true);
+ capture.assertCurrent();assert.equal(f.processes[0].status,'running'); // No preview entry is not producer settlement.
+ const opened=await open(f,a,id),broker=f.brokers[0],origin=new URL(opened.url).origin;
  function request(route,{method='GET',headers={},body}={}){return new Promise((resolve,reject)=>{const req=http.request({host:'127.0.0.1',port:broker.server.address().port,path:route,method,headers:{host:new URL(origin).host,'sec-fetch-site':'same-origin',...headers}},res=>{let text='';res.on('data',c=>text+=c);res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,text}));});req.on('error',reject);req.end(body);});}
  assert.equal(seen.length,0); // The initial connector probe sent no HTTP.
  const claim=await request('/__preview/claim',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({grant:opened.url.split('#')[1]})});assert.equal(claim.status,200);const cookie=claim.headers['set-cookie'][0].split(';')[0];
@@ -155,7 +180,15 @@ test('assembled SDK controller, real HTTP broker and private relay preserve app 
  const body=JSON.stringify({text:'Příliš žluťoučký kůň'}),response=await request('/api/notes/n1',{method:'PATCH',headers:{cookie:cookie+'; dsh-auth-owner=SECRET',origin,authorization:'Bearer SECRET','x-harness-owner':'SECRET','tailscale-user-login':'SECRET','content-type':'application/json'},body});
  assert.equal(response.status,409);assert.deepEqual(JSON.parse(response.text),{error:'Poznámka byla změněna',body});assert.equal(response.headers['set-cookie'],undefined);assert.equal(response.headers['access-control-allow-origin'],undefined);assert.equal(seen.length,1);assert.equal(seen[0].method,'PATCH');assert.equal(seen[0].url,'/api/notes/n1');assert.equal(seen[0].body,body);assert(!/SECRET|cookie|authorization|tailscale|x-harness/.test(JSON.stringify(seen[0].headers)));
  f.rejectPeer=true;assert.equal((await request('/foreign',{headers:{cookie}})).status,502);assert.equal(seen.length,1);assert.equal(app.listening,true);
- const closed=await f.control({operation:'close',sessionId:a.id});assert.equal(closed.workSettled,true);assert.equal(broker.server.listening,false);assert.equal(app.listening,true);assert.equal(f.processes[0].kills,1);
+ f.processes[0].hold=true;
+ const blocked=await f.control({operation:'close',sessionId:a.id});assert.equal(blocked.state,'blocked');assert.equal(blocked.workSettled,false);
+ assert.equal(broker.server.listening,false);assert.equal(f.processes[0].status,'running');
+ assert.equal((await f.call(a,'project_preview',{operation:'open',jobId:id})).isError,true);assert.equal(f.calls.length,1);assert.equal(f.brokers.length,1);
+ f.processes[0].release();await capture.done;
+ const closed=await f.control({operation:'close',sessionId:a.id});assert.equal(closed.workSettled,true);assert.equal(app.listening,true);
+ assert.equal((await f.call(a,'project_preview',{operation:'open',jobId:id})).isError,true);assert.equal(f.calls.length,1);
+ f.rejectPeer=false;const replacement=await open(f,a,await start(f,a));assert.equal(replacement.state,'ready');assert.notEqual(replacement.generation,opened.generation);assert.equal(f.calls.length,2);
+ await f.control({operation:'close',sessionId:a.id});
 });
 
 test('a lost restart acknowledgement stops the exact newly admitted producer and never retries it',async t=>{
