@@ -1,0 +1,53 @@
+{
+  "kind": "DISABLED_B10_SOURCE_RETARGET",
+  "liveEffects": false,
+  "slots": [
+    {
+      "scenario": "B10",
+      "variant": "DS",
+      "orderPosition": 3,
+      "requiredPriors": [
+        "B03 HomeAI",
+        "B03 DS"
+      ]
+    },
+    {
+      "scenario": "B10",
+      "variant": "HomeAI",
+      "orderPosition": 4,
+      "requiredPriors": [
+        "B03 HomeAI",
+        "B03 DS",
+        "B10 DS"
+      ]
+    }
+  ],
+  "runtimeIsNotProducer": true,
+  "canonical": [
+    {
+      "path": "benchmarks/n06-evidence-storage/adapter.mjs",
+      "sha256": "3dc9dae4b47fd6e0846bf34dbf0fab102a1eebbf55781269dbfe67f779d2bb16"
+    },
+    {
+      "path": "benchmarks/n06-evidence-storage/runner.mjs",
+      "sha256": "3d4840bd0f5e31778bef9b5be60ece8295899a11f930fb66145dd786e5a39dd8"
+    },
+    {
+      "path": "benchmarks/n06-evidence-storage/lifecycle.mjs",
+      "sha256": "21d75d10d59bba22564a9d1758f2817bb345d438854346f9105404d1d170bea7"
+    },
+    {
+      "path": "benchmarks/n06-evidence-storage/finalization.mjs",
+      "sha256": "e6c25073472114777fcf9c32db0054b33fbae29ab9dfbc5df3c86157d62f443e"
+    },
+    {
+      "path": "benchmarks/n06-evidence-storage/stop-scope.mjs",
+      "sha256": "8768d4a17a384baf964fee8fbcab2122293c14caf6ba4de1ef22a15c288e0e72"
+    }
+  ],
+  "b03Pair03SourcesReadOnly": true,
+  "b03Pair04Untouched": true,
+  "newIdentityFields": "NULL",
+  "rootQualification": "PENDING",
+  "r5OrAppCutover": false
+}

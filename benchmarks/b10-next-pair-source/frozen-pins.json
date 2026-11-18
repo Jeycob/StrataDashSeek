@@ -1,0 +1,100 @@
+{
+  "frozenManifestSha256": "42fd252df7390ea830b9225b08e0d3f48b49b5358b94dfc7dee4f262d02e832f",
+  "frozenAt": "2026-11-16T20:19:35.001Z",
+  "scenario": {
+    "id": "B10",
+    "title": "Oprava existující aplikace",
+    "seconds": 600,
+    "repairSeconds": 300,
+    "order": [
+      "DS",
+      "HomeAI"
+    ],
+    "ui": [
+      "Pomalé save500ms: po kliknutí během čekání dopsat text; novější draft zůstává, další save jej uloží.",
+      "q=\"  ZLUTY  \" najde Žlutý kůň, q=\"PRILIS\" najde Příliš…; prázdný filtr vrátí všechny.",
+      "Souběžný PATCH má jediného vítěze, konflikt v UI zachová draft a nabídne explicitní reload; původní CRUD a testy projdou."
+    ],
+    "expectedVariants": 2
+  },
+  "files": [
+    {
+      "path": "specs.mjs",
+      "bytes": 15165,
+      "sha256": "bfee00bb6f0a7725afffe612b6dddde07aafe287b634b0f07714ac9ec89aca95"
+    },
+    {
+      "path": "api-acceptance.mjs",
+      "bytes": 17173,
+      "sha256": "2961d30d21b132d946a40dbdea8a1ec622fbbac71f98ab9602a5c9adaa86a378"
+    },
+    {
+      "path": "browser-acceptance.mjs",
+      "bytes": 9268,
+      "sha256": "192277ea3d3c0140829a6cff91f769587a01540db8194c63d6604025e6aadb29"
+    },
+    {
+      "path": "fixtures/B10/app.js",
+      "bytes": 1573,
+      "sha256": "bed8cc23cdd88eea544c4e1c77248440af205476058981e5f765f43964b135dd"
+    },
+    {
+      "path": "fixtures/B10/core.mjs",
+      "bytes": 264,
+      "sha256": "5a753bc12a6b755d2a45cc8457f73379d76d3f3c43b9b7c2e0978e05c12851a3"
+    },
+    {
+      "path": "fixtures/B10/index.html",
+      "bytes": 1018,
+      "sha256": "4f044d8349af7e5c583d537ca33388eab5d1acfbd6df0532b8217228a98232bf"
+    },
+    {
+      "path": "fixtures/B10/package.json",
+      "bytes": 141,
+      "sha256": "fa2cfa68756703f61b2f423fe649b0ddd095bf9bd4e93723daf041481c5261a8"
+    },
+    {
+      "path": "fixtures/B10/server.mjs",
+      "bytes": 2915,
+      "sha256": "a4311b237dc8c0fddd3af164c09ae92abb27d06e2c790b2fdbf7140cfbb2fb4c"
+    },
+    {
+      "path": "fixtures/B10/test/original.test.mjs",
+      "bytes": 563,
+      "sha256": "3ec38ac55ee913e6d3d80ff4102d631ca71b1432fbf231f2083f3cacddab3f3f"
+    },
+    {
+      "path": "prompts/B10.txt",
+      "bytes": 2922,
+      "sha256": "e4dc252381e867be2d9c55845c1054fed70b8c15575fc0d0d02bee8888349224"
+    }
+  ],
+  "productQa": {
+    "sha256": "af396effeccd67a4dd1e54b8a42fa4e67278ece2bffd168c625530b67e0c237f",
+    "path": "work/homeai-control/benchmarks/PRODUCT_QA.md"
+  },
+  "operatorProducerCommit": "04b631bd64e4b1681c2a8ee1fd6ffcc48199ff05",
+  "serviceCommit": "266196e9427db575609cbbe5c8c6fb7c814f27ff",
+  "canonical": [
+    {
+      "path": "benchmarks/n06-evidence-storage/adapter.mjs",
+      "sha256": "3dc9dae4b47fd6e0846bf34dbf0fab102a1eebbf55781269dbfe67f779d2bb16"
+    },
+    {
+      "path": "benchmarks/n06-evidence-storage/runner.mjs",
+      "sha256": "3d4840bd0f5e31778bef9b5be60ece8295899a11f930fb66145dd786e5a39dd8"
+    },
+    {
+      "path": "benchmarks/n06-evidence-storage/lifecycle.mjs",
+      "sha256": "21d75d10d59bba22564a9d1758f2817bb345d438854346f9105404d1d170bea7"
+    },
+    {
+      "path": "benchmarks/n06-evidence-storage/finalization.mjs",
+      "sha256": "e6c25073472114777fcf9c32db0054b33fbae29ab9dfbc5df3c86157d62f443e"
+    },
+    {
+      "path": "benchmarks/n06-evidence-storage/stop-scope.mjs",
+      "sha256": "8768d4a17a384baf964fee8fbcab2122293c14caf6ba4de1ef22a15c288e0e72"
+    }
+  ]
+}

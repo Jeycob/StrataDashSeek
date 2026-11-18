@@ -1,0 +1,91 @@
+{
+  "recordVersion": 1,
+  "isTemplate": true,
+  "recordKind": "model_benchmark_attempt",
+  "status": "NOT RUN",
+  "statusReason": "SOURCEONLY; Root must bind fresh target and actual final priors before use",
+  "scenario": "B10",
+  "variant": "HomeAI",
+  "pairId": "B10-next-source-20261118",
+  "runId": "b10-next-homeai-20261118",
+  "attemptId": "b10-next-homeai-primary-20261118",
+  "baselineAttemptId": null,
+  "operatorProducerCommit": "04b631bd64e4b1681c2a8ee1fd6ffcc48199ff05",
+  "identity": {
+    "sessionId": null,
+    "workspaceId": null,
+    "projectId": null,
+    "sessionUrl": null,
+    "sourceCommit": "266196e9427db575609cbbe5c8c6fb7c814f27ff",
+    "runtimeCommit": "266196e9427db575609cbbe5c8c6fb7c814f27ff",
+    "promptSha256": "e4dc252381e867be2d9c55845c1054fed70b8c15575fc0d0d02bee8888349224",
+    "manifestSha256": "42fd252df7390ea830b9225b08e0d3f48b49b5358b94dfc7dee4f262d02e832f",
+    "acceptanceVersion": "paired-20261116 v1 + product-qa supplement v1",
+    "requestedModel": {
+      "provider": "strata-vast",
+      "model": "strata",
+      "reasoningEffort": "medium"
+    },
+    "fixtureFiles": [
+      {
+        "path": "fixtures/B10/app.js",
+        "bytes": 1573,
+        "sha256": "bed8cc23cdd88eea544c4e1c77248440af205476058981e5f765f43964b135dd"
+      },
+      {
+        "path": "fixtures/B10/core.mjs",
+        "bytes": 264,
+        "sha256": "5a753bc12a6b755d2a45cc8457f73379d76d3f3c43b9b7c2e0978e05c12851a3"
+      },
+      {
+        "path": "fixtures/B10/index.html",
+        "bytes": 1018,
+        "sha256": "4f044d8349af7e5c583d537ca33388eab5d1acfbd6df0532b8217228a98232bf"
+      },
+      {
+        "path": "fixtures/B10/package.json",
+        "bytes": 141,
+        "sha256": "fa2cfa68756703f61b2f423fe649b0ddd095bf9bd4e93723daf041481c5261a8"
+      },
+      {
+        "path": "fixtures/B10/server.mjs",
+        "bytes": 2915,
+        "sha256": "a4311b237dc8c0fddd3af164c09ae92abb27d06e2c790b2fdbf7140cfbb2fb4c"
+      },
+      {
+        "path": "fixtures/B10/test/original.test.mjs",
+        "bytes": 563,
+        "sha256": "3ec38ac55ee913e6d3d80ff4102d631ca71b1432fbf231f2083f3cacddab3f3f"
+      }
+    ]
+  },
+  "limits": {
+    "mainSeconds": 600,
+    "repairSeconds": 300,
+    "maxRepairs": 1
+  },
+  "comparison": {
+    "orderPosition": 4
+  },
+  "timestampsUtc": {
+    "runSubmittedAt": null,
+    "submittedAt": null,
+    "firstOutputAt": null,
+    "implementationReadyAt": null,
+    "validationStartedAt": null,
+    "acceptedAt": null,
+    "limitReachedAt": null,
+    "stopRequestedAt": null,
+    "finishedAt": null,
+    "settledAt": null
+  },
+  "stopReason": null,
+  "timingMs": {},
+  "counts": {},
+  "quality": {
+    "accepted": null,
+    "checks": []
+  },
+  "settledEvidence": {},
+  "missingDataReasons": []
+}
