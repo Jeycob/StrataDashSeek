@@ -215,7 +215,7 @@ test('published generic modules are byte-pinned; historical eight-source closure
  for(const[name,sha]of Object.entries(historical))assert.equal(hash(await fs.readFile(new URL('../n06-finalization/'+name,import.meta.url))),sha,name);
 });
 test('CI requires all three portable source suites and preserves historical benchmark exclusion',()=>{
- for(const[name,count]of [['checkpoint',10],['lifecycle',5],['composition',4]]){
+ for(const[name,count]of [['checkpoint',10],['lifecycle',5],['composition',10]]){
   const row=classify('benchmarks/n06-evidence-storage/'+name+'.test.mjs');assert.equal(row.required,true);assert.equal(row.kind,'node');assert.equal(row.lane,'portable');assert.equal(row.minTests,count);
  }
  assert.equal(classify('benchmarks/n06-finalization/finalization.test.mjs').minTests,13);
