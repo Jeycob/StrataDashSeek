@@ -31,6 +31,7 @@ test('stale pidfile after real owned close remains held, never permits automatic
  const f=fixture();await f.worker.start();f.exit();f.close();assert.notEqual(f.worker.phase,'asleep');await assert.rejects(f.worker.start(),{code:'APPS_VM_RECONCILIATION_REQUIRED'});assert.equal(f.events.filter(x=>x==='spawn').length,1);
 });
 test('legacy or pending restart without a pidfile is UNKNOWN, not evidence of absence',async()=>{
+ assert.throws(()=>fixture({stateReadError:true}),{code:'APPS_VM_RECONCILIATION_REQUIRED'});
  for(const savedState of[{initialized:true},{initialized:false},{initialized:false,workerProcess:{version:1,state:'starting'}},{workerProcess:{version:99,state:'absent'}}]){const f=fixture({savedState});assert.equal(f.worker.phase,'quarantined');await assert.rejects(f.worker.start(),{code:'APPS_VM_RECONCILIATION_REQUIRED'});assert.deepEqual(f.events,[]);}
 });
 test('start intent precedes dispatch and cannot be reused as absence after controller restart',async()=>{

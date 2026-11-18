@@ -172,8 +172,9 @@ class DockerVM {
   this.cfg=cfg; this.engine=engine; this.root=cfg.vm.root; this.stateFile=path.join(cfg.stateDir,'vm.json');
   const manifestBytes=fs.readFileSync(path.join(this.root,'manifest.json'));this.manifestSha256=crypto.createHash('sha256').update(manifestBytes).digest('hex');
   this.manifest=JSON.parse(manifestBytes);validateWorkerShape(this.manifest);
-  const hasSavedState=fs.existsSync(this.stateFile);
-  this.saved=hasSavedState?JSON.parse(fs.readFileSync(this.stateFile)):{initialized:false,resumeIds:[],containers:[]};
+  let hasSavedState=true;
+  try{this.saved=JSON.parse(fs.readFileSync(this.stateFile));}
+  catch(error){if(error.code!=='ENOENT')throw ownershipError();hasSavedState=false;this.saved={initialized:false,resumeIds:[],containers:[]};}
   this.phase='asleep'; this.error=null; this.serial=null; this.pending=null; this.lastUsed=Date.now(); this.stopping=false; this.buffer='';
   ownedProcesses.set(this,{fresh:!hasSavedState,child:null,closed:true});
   const observed=processObservation(this),unknown=observed.kind==='UNKNOWN',disabled=cfg.enabled!==true||cfg.vm.enabled!==true;
