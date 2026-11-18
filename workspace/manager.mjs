@@ -314,7 +314,7 @@ export class WorkspaceManager {
   async toolResult(exec, result, verificationKind, receipt) {
     const id=exec.agent?.id,record = this.data.sessions[id]; if (!record) return;
     const automatic=this.budgets.get(id)?.automatic;
-    if(exec.name==='verify_project'&&automatic?.accountedCallId===exec.callId)return;
+    if(exec.name==='verify_project'&&typeof exec.callId==='string'&&exec.callId.length>0&&automatic?.accountedCallId===exec.callId)return;
     if(!receipt&&automaticReceipt(this,exec,result)){
       record.budget=this.budgets.get(id);await this.save();
       if(exec.signal?.aborted||automatic.uncertain||automatic.operation.rangeRequired&&(!automatic.operation.rangeQualified||!automatic.operation.rangeSettled))return;

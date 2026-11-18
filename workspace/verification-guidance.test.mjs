@@ -45,7 +45,7 @@ test('concurrent verification, unavailable tracking and cancellation never creat
   await assert.rejects(guideFirstCheck(manager, { id: 'one' }, {}, { steps: 8, checks: {} }, controller.signal), /cancelled/);
 });
 
-test('approaching stage limit is announced once without extending the actual hard stop', async () => {
+test('legacy stage advisory is emitted once and cannot reinstate a fixed step gate', async () => {
   const manager = fixture(), record = {}, budget = new RepairBudget({ stage: 4, steps: 49, checks: { test: { bestScore: 0 } } });
   assert.equal(await warnStageBudget(manager, { id: 'one' }, record, budget, 60), false);
   budget.step(60); const before = JSON.stringify(budget);
@@ -55,7 +55,7 @@ test('approaching stage limit is announced once without extending the actual har
   assert.match(message, /10 steps remain in stage 4 \(50\/60\)/); assert.match(message, /quality\/README.md/); assert.ok(message.length < 1000);
   assert.equal(await warnStageBudget(manager, { id: 'one' }, record, budget, 60), false);
   for (let i = 0; i < 11; i++) budget.step(60);
-  assert.equal(budget.blocked.code, 'STAGE_BUDGET'); assert.equal(budget.stage, 4);
+  assert.equal(budget.blocked, null); assert.equal(budget.steps, 61); assert.equal(budget.stage, 4);
   assert.equal(await warnStageBudget(manager, { id: 'one' }, record, budget, 60), false);
 });
 

@@ -7,6 +7,7 @@ import path from 'node:path';
 import { WorkspaceManager } from './manager.mjs';
 import { RepairBudget } from './policy.mjs';
 import { sourceManifest } from './storage.mjs';
+import { prepareAutomaticRequest } from './automatic-review.mjs';
 
 async function fixture(t) {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-results-'));
@@ -30,6 +31,22 @@ test('verify_project enters the same final-result budget exactly once and reject
   const config = { passed: false, complete: false, code: 'INVALID_CONTRACT', checks: [] };
   m.observeToolResult({ ...exec('verify_project'), arguments: {} }, result(JSON.stringify(config), config, false));
   await m.drainToolResults('one'); assert.equal(m.budgets.get('one').stalled, 0); assert.equal(m.data.sessions.one.lastDiagnostic.category, 'configuration');
+});
+test('automatic result deduplication requires a real nonempty matching call ID',async t=>{
+  const {manager:m,exec,result}=await fixture(t),budget=m.budgets.get('one');
+  prepareAutomaticRequest(m.data.sessions.one,budget,{owner:true,turn:1,messages:[{id:'original-human',role:'user',source:{kind:'user'}}]},60);
+  const config={passed:false,complete:false,code:'INVALID_CONTRACT',checks:[]},outcome=result(JSON.stringify(config),config,false);
+  const failures=()=>Object.values(budget.errors).reduce((sum,count)=>sum+count,0);
+  m.observeToolResult({...exec('verify_project'),arguments:{kind:'all'}},outcome);await m.drainToolResults('one');
+  assert.equal(failures(),1);assert.equal(m.data.sessions.one.lastDiagnostic.category,'configuration');
+  budget.automatic.accountedCallId='';
+  m.observeToolResult({...exec('verify_project'),arguments:{kind:'all'},callId:''},outcome);await m.drainToolResults('one');
+  assert.equal(failures(),2);assert.equal(budget.blocked,null);
+  budget.automatic.accountedCallId='previously-accounted-call';
+  m.observeToolResult({...exec('verify_project'),arguments:{kind:'all'},callId:'previously-accounted-call'},outcome);await m.drainToolResults('one');
+  assert.equal(failures(),2,'only the actual previously accounted identity is deduplicated');
+  m.observeToolResult({...exec('verify_project'),arguments:{kind:'all'},callId:'different-call'},outcome);await m.drainToolResults('one');
+  assert.equal(failures(),3);assert.equal(budget.blocked.code,'REPEATED_TOOL_ERROR');assert.equal(budget.stalled,0);assert.equal(budget.stage,1);assert.equal(budget.automatic.proofSerial,0);assert.equal(budget.automatic.taskSteps,0);assert.equal(budget.automatic.checks,0);
 });
 
 test('a background acknowledgement cannot pass or fail a verification stage', async t => {
