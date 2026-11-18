@@ -46,6 +46,14 @@ U každého blockeru nejbližšího milníku uveď pozorovaný dopad, vlastníka
 
 Po opravě známých překážek ověř dotčené chování a skutečné propojení, potom proveď první autorizovaný pilot. Nový obalový skript nebo další kontrolu přidávej kvůli konkrétnímu chybějícímu chování; dokončený smoke bez změny neopakuj. Při úpravě ukončování běhů použij část „Řízení prvního běhu“ workflow nebo `docs/homeai-delivery.md`: uzavřené preview nemusí znamenat ukončený proces a timeout pozorovatele nemusí zastavit operaci.
 
+## Udržuj navazující práci
+
+V týmovém režimu má každý implementátor jeden aktivní a jeden připravený nezávislý úkol ze schváleného backlogu. V existující matici uveď vlastníka, soubory, nejbližší výstup, přijetí a konkrétní blokující událost. Po předání změny nebo při čekání na CI či live slot autor pokračuje připraveným úkolem; druhou závislou změnu nerozpracovává. Koordinátor ověří skutečné převzetí, protože odeslaná zpráva není běžící práce.
+
+Koordinátor deleguje vymezenou diagnostiku a implementaci, drží integraci a je jediným operátorem změn sdíleného runtime. Rozpracované soubory předává s výslovným převodem vlastnictví. QA dostane přesnou verzi artefaktu či session, způsob spuštění a očekávaný výsledek; lokální ověření oddělí od živého přijetí. Předání obsahuje stručný výsledek, SHA, relevantní kontroly a další krok. Nezávislé hotové bloky nečekají na celý backlog.
+
+Udržuj krátký současný stav; staré zápisy zachovej v označené historii. Aktuální dostupnost a čekání eviduj v existujících registrech, nezakládej další reporting. Podrobnosti jsou v části „Plynulé předávání práce“ workflow nebo v `docs/homeai-delivery.md`. Souběžná práce nesmí měnit zátěž měřeného prostředí ani zmrazené podmínky benchmarku.
+
 ## Použij podrobnosti podle činnosti
 
 - **Nasazení:** použij aktuální staging rozhodnutí a postup návratu. V existujícím předání uveď konkrétní lidskou autorizaci, povolený účinek a cíl pro push, nasazení či přenos souborů. Již povolenou akci neschvaluj znovu jen kvůli postupu. Pomocné kroky připrav před maintenance oknem. Zachovej fungující nástroje, ověř podávanou verzi a skutečnou uživatelskou cestu; dočasné provozní nastavení obnov i po selhání.
