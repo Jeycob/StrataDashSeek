@@ -38,6 +38,8 @@ export function classify(name) {
   if (helpers.has(name)) return {file: name, kind: 'helper', lane: 'outside-ci', required: false, reason: helpers.get(name)};
   if (hostFixtures.has(name)) return {file: name, kind: 'existing-host-fixture', lane: 'outside-ci', required: false, outcome: 'unrunnable', reason: hostFixtures.get(name)};
   if (name === 'development/device-workerd-check.mjs') return {file: name, kind: 'workerd', lane: 'local-engine', required: true, timeoutMs: 120000};
+  if (name === 'workspace/automatic-consumed-recovery.test.mjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:17};
+  if (name === 'workspace/automatic-consumed-sdk.test.mjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:2};
   if (name === 'workspace/automatic-continuation-sdk.test.mjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:2};
   if (name === 'workspace/runtime-admission-native.test.cjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:180000,minTests:2};
   if (name === 'development/native-isolated-profile.test.mjs') return {file:name,kind:'node',lane:'portable',required:true,timeoutMs:120000,minTests:12};

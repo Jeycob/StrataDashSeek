@@ -61,3 +61,26 @@ Stop, normal completion, confirmed admission or plugin disposal.
 These changes do not alter frozen benchmark limits or external Codex approvals.
 Source regression results are not deployment, live Doom recovery or application
 acceptance; those remain separate operator qualifications.
+
+Session.seq is the next append offset. A matching durable insertion at exactly
+the saved baseline is included in admission evidence. Re-observing an existing
+accepted message never dispatches it again and never implies that its agent is
+currently running.
+
+The explicit owner operation `automatic-resume-consumed` handles one narrow
+recovery: the recorded internal message was durably accepted, claimed, and ended
+at the known continuation guard before any model step. It requires complete
+matching history, the same task/root/source/final receipt, unchanged source,
+empty inboxes and independently observed idle owned resources. It preserves the
+old intent and failure proof, then permits one new internal recovery intent per
+receipt under the same owner singleflight. Unknown dispatch is observed without
+resubmission. This operation does not create a new human request, reset task
+accounting, or renew verification limits. SDK maintenance protects admission
+against concurrent Stop; only its exact new owned queued message may be removed
+on cancellation. An earlier idle Stop is not inferred from an absent log event;
+the explicit owner operation provides the new recovery intent.
+
+Registry snapshots are serialized and published with file fsync and, on Linux,
+parent-directory fsync. A failed persistence acknowledgement cannot authorize
+continuation dispatch. The explicit recovery shares one absolute owner-action
+expiry with its shorter queue-proof bound; waiting does not renew that expiry.
