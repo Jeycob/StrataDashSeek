@@ -14,6 +14,16 @@ const quote=x=>"'"+String(x).replaceAll("'","'\\''")+"'";
 const inspector=fileURLToPath(new URL('./browser-server-inspect.mjs',import.meta.url));
 const production={supported:previewSupported,backend:sameHostCustodyBackend,connector:createOwnPeerConnector,uid:()=>process.getuid()};
 
+export function browserServerSocketPath(projectRoot,nonce,platform=process.platform){
+  need(typeof nonce==='string'&&/^[a-f0-9]{64}$/.test(nonce),'BROWSER_SERVER_CHANNEL_INVALID');
+  if(platform==='win32')return'\\\\.\\pipe\\homeai-quality-'+nonce;
+  need(typeof projectRoot==='string'&&path.posix.isAbsolute(projectRoot)&&path.posix.normalize(projectRoot)===projectRoot,'BROWSER_SERVER_CHANNEL_INVALID');
+  // Keep the endpoint inside the existing private project directory. Socket
+  // filename entropy is independent of the full 256-bit authentication nonce.
+  const value=path.posix.join(projectRoot,'.harness','q'+nonce.slice(0,12));
+  need(Buffer.byteLength(value)<104,'BROWSER_SERVER_CHANNEL_UNAVAILABLE');return value;
+}
+
 // Private source composition only. No config, model tool or HTTP surface may
 // supply these factories, an execution, a command, a port or a producer handle.
 export async function createBrowserServerChannel(ctx,manager,run,{execution,projectRoot,sourceHash,kind,deadline},trusted=production){
@@ -29,8 +39,7 @@ export async function createBrowserServerChannel(ctx,manager,run,{execution,proj
   };
   need(record&&Number.isSafeInteger(deadline)&&deadline>Date.now()&&deadline<=Date.now()+110000,'BROWSER_SERVER_CHANNEL_INVALID');check();
   const directory=await confined(projectRoot,'.harness',{missing:true});await fs.mkdir(directory,{recursive:true,mode:0o700});
-  const socketPath=process.platform==='win32'?'\\\\.\\pipe\\homeai-quality-'+nonce:path.join(directory,'q-'+nonce.slice(0,16)+'.sock');
-  need(process.platform==='win32'||Buffer.byteLength(socketPath)<104,'BROWSER_SERVER_CHANNEL_UNAVAILABLE');
+  const socketPath=browserServerSocketPath(projectRoot,nonce);
   const sockets=new Set(),attempted=new Set();let authenticated,active,chain=Promise.resolve(),closed=false,closing,outer;
   const settleActive=async()=>{const entry=active;if(!entry)return;entry.stopping=true;if(entry.operation){entry.finish();await entry.operation.catch(()=>{});}else{entry.abort.abort();try{await run.stopOwned(entry.jobId,execution.agent.id);}catch{}}await entry.capture.done;if(active===entry)active=undefined;};
   async function handle(message){

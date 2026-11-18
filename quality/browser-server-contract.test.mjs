@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {validateBrowserServer,browserServerDeadlines,withBrowserServer} from './browser-server-contract.mjs';
+import {browserServerSocketPath} from './browser-server-host.mjs';
 
 test('optional browser server has one direct producer and no public custody or port authority',()=>{
   assert.equal(validateBrowserServer(undefined),undefined);
@@ -11,6 +12,17 @@ test('optional browser server has one direct producer and no public custody or p
   for(const command of [[],[''],['node','bad\0arg'],['node',...Array(64).fill('a')]])assert.throws(()=>validateBrowserServer({command}),{code:'INVALID_BROWSER_SERVER'});
   assert.throws(()=>validateBrowserServer({command:['bash','-c','node server.mjs']}),{code:'SHELL_REFUSED'});
   for(const readinessTimeoutMs of [0,99,30001,Infinity,'100'])assert.throws(()=>validateBrowserServer({command:['node','server.mjs'],readinessTimeoutMs}),{code:'INVALID_BROWSER_SERVER'});
+});
+
+test('project-local UNIX socket fits actual production root and enforces UTF8 byte boundary',()=>{
+  const root='/data/harness/workspaces/projects/session-00000000-0000-4000-8000-000000000000',nonce='a'.repeat(64);
+  const previous=root+'/.harness/q-'+nonce.slice(0,16)+'.sock';assert.equal(Buffer.byteLength(previous),111);
+  const actual=browserServerSocketPath(root,nonce,'linux');assert.equal(Buffer.byteLength(actual),101);assert(actual.startsWith(root+'/.harness/'));
+  const boundary=browserServerSocketPath(root+'ž',nonce,'linux');assert.equal(Buffer.byteLength(boundary),103);
+  assert.throws(()=>browserServerSocketPath(root+'ža',nonce,'linux'),{code:'BROWSER_SERVER_CHANNEL_UNAVAILABLE'});
+  assert.throws(()=>browserServerSocketPath(root+'漢',nonce,'linux'),{code:'BROWSER_SERVER_CHANNEL_UNAVAILABLE'});
+  assert.notEqual(browserServerSocketPath(root,'b'.repeat(64),'linux'),actual);
+  assert.throws(()=>browserServerSocketPath(root,'a'.repeat(12),'linux'),{code:'BROWSER_SERVER_CHANNEL_INVALID'});
 });
 
 test('readiness and browser spend the same original absolute operation deadline',()=>{
