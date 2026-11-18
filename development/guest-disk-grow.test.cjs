@@ -1,13 +1,19 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {validatePlan,assessCapacity,sha256,runGrowth}=require('./guest-disk-grow.cjs');
+const {validatePlan,assessCapacity,sha256,canonical,runGrowth}=require('./guest-disk-grow.cjs');
 const {validateCapacity}=require('../vast/apps-worker-growth-policy.cjs');
+const {qualifyReadOnlyFsck}=require('./guest-disk-fsck.cjs');
 const GiB=1024**3,MiB=1024**2,copy=value=>JSON.parse(JSON.stringify(value));
+const tool={path:'/usr/sbin/e2fsck',sha256:'f'.repeat(64),dev:'1',ino:'99',size:'128',uid:0,gid:0,mode:0o100755,mtimeNs:'100',ctimeNs:'100'};
+function fsckProof(fs,warning=''){
+ const stdout=Buffer.from('Pass 1: Checking inodes, blocks, and sizes\nPass 2: Checking directory structure\nPass 3: Checking directory connectivity\nPass 4: Checking reference counts\nPass 5: Checking group summary information\n'+warning+'fixture: '+(fs.inodeCount-fs.freeInodes)+'/'+fs.inodeCount+' files (0.0% non-contiguous), '+(fs.blockCount-fs.freeBlocks)+'/'+fs.blockCount+' blocks\n');
+ return qualifyReadOnlyFsck({stdout,stderr:Buffer.from('e2fsck 1.47.2 (1-Jan-2025)\n'),code:0,closed:true,tool});
+}
 function fixture(){
  const manifest={version:1,volumeId:'a'.repeat(32),diskBytes:3*GiB,vcpus:1,memoryMiB:2048,alpineSHA256:'f'.repeat(64)},fs={uuid:'b'.repeat(32),blockSize:4096,blockCount:786432,freeBlocks:4104,inodeCount:196608,freeInodes:128809};
  const plan={version:1,kind:'raw-ext4-grow-v1',migrationId:'c'.repeat(32),installationRoot:'/data/harness',workerRoot:'/data/harness/docker-worker',appsStateDir:'/data/harness/state/applications',serviceUid:1001,serviceGid:1001,coldFence:{epoch:'11111111-2222-3333-4444-555555555555',sourceCommit:'e'.repeat(40)},source:{volumeId:manifest.volumeId,manifestSha256:sha256(manifest),dev:1,ino:2,uid:1001,gid:1001,bytes:3*GiB,allocatedBytes:3*GiB+4096,fs},targetBytes:4*GiB,capacity:{reserveBytes:2*GiB,guestReserveBytes:512*MiB,guestReserveInodes:16384,guestNewBytes:128*MiB,guestNewInodes:4000,additionalHostBytes:GiB,workBytes:64*MiB,copyUpBytes:3*GiB,metadataGrowthBytes:128*MiB,evidenceSha256:'d'.repeat(64)},toolTimeoutMs:30000};
  const observation={raw:{dev:1,ino:2,uid:1001,gid:1001,bytes:3*GiB,allocatedBytes:3*GiB+4096,links:1,mode:0o600},fs:{...fs,clean:true},manifest:copy(manifest),manifestSha256:sha256(manifest),host:{availableBytes:16*GiB,availableInodes:100000,backing:'overlay'}},calls=[],journals=[];let journal,guard;
- const ops={assertCold:async()=>{calls.push('cold');},assertConsumer:async()=>{calls.push('consumer');},readJournal:async()=>journal,readGuard:async()=>guard,inspect:async()=>copy(observation),writeJournal:async value=>{calls.push('journal:'+value.phase);journal=copy(value);journals.push(copy(value));},writeGuard:async value=>{calls.push('guard:'+value.phase);guard=copy(value);},fsck:async()=>{calls.push('fsck');return{code:0,outputSha256:'e'.repeat(64)};},allocate:async delta=>{calls.push('allocate');observation.raw.allocatedBytes+=delta;observation.host.availableBytes-=delta;},extend:async bytes=>{calls.push('extend');observation.raw.bytes=bytes;},resize:async blocks=>{calls.push('resize');observation.fs.blockCount=blocks;observation.fs.freeBlocks+=(plan.targetBytes-plan.source.bytes-plan.capacity.metadataGrowthBytes)/4096;},sealAllocation:async bytes=>{calls.push('sealAllocation');observation.raw.allocatedBytes=Math.max(observation.raw.allocatedBytes,bytes);},writeManifest:async value=>{calls.push('manifest');observation.manifest=copy(value);observation.manifestSha256=sha256(value);}};
+ const ops={assertCold:async()=>{calls.push('cold');},assertConsumer:async()=>{calls.push('consumer');},readJournal:async()=>journal,readGuard:async()=>guard,inspect:async()=>copy(observation),writeJournal:async value=>{calls.push('journal:'+value.phase);journal=JSON.parse(canonical(value));journals.push(copy(value));},writeGuard:async value=>{calls.push('guard:'+value.phase);guard=copy(value);},fsck:async()=>{calls.push('fsck');return fsckProof(observation.fs);},allocate:async delta=>{calls.push('allocate');observation.raw.allocatedBytes+=delta;observation.host.availableBytes-=delta;},extend:async bytes=>{calls.push('extend');observation.raw.bytes=bytes;},resize:async blocks=>{calls.push('resize');observation.fs.blockCount=blocks;observation.fs.freeBlocks+=(plan.targetBytes-plan.source.bytes-plan.capacity.metadataGrowthBytes)/4096;},sealAllocation:async bytes=>{calls.push('sealAllocation');observation.raw.allocatedBytes=Math.max(observation.raw.allocatedBytes,bytes);},writeManifest:async value=>{calls.push('manifest');observation.manifest=copy(value);observation.manifestSha256=sha256(value);}};
  return{plan,ops,observation,calls,journals,get journal(){return journal;},get guard(){return guard;},setJournal:value=>{journal=value;},setGuard:value=>{guard=value;}};
 }
 test('explicit complete inputs are mandatory; no target, artifact, metadata or copy-up defaults',()=>{
@@ -24,6 +30,7 @@ test('physical headroom includes delta, complete overlay copy-up, work, future a
 });
 test('intents and pending gate precede raw writes; manifest publishes only after both fsck checks and exact proof',async()=>{
  const f=fixture(),record=await runGrowth(f.plan,f.ops);assert.equal(record.phase,'complete');
+ assert(Buffer.byteLength(canonical(f.journal))<16384,'two complete sanitized witnesses fit the existing bounded journal reader');
  for(const [intent,action]of [['guard:running','allocate'],['journal:allocation_intent','allocate'],['journal:length_intent','extend'],['journal:resize_intent','resize'],['journal:physical_finalize_intent','sealAllocation'],['journal:manifest_intent','manifest']])assert(f.calls.indexOf(intent)<f.calls.indexOf(action));
  assert.equal(f.calls.filter(value=>value==='fsck').length,2);assert(f.calls.lastIndexOf('fsck')<f.calls.indexOf('manifest'));assert.equal(f.observation.manifest.volumeId,f.plan.source.volumeId);assert.equal(f.observation.manifest.version,2);assert.equal(f.guard.phase,'approved');
  assert.equal(validateCapacity({guard:f.guard,manifest:f.observation.manifest,manifestSha256:f.observation.manifestSha256,raw:f.observation.raw,workerRoot:f.plan.workerRoot}).allowed,true);
@@ -66,4 +73,33 @@ test('approved status binds the exact manifest, plan, volume, physical identity 
 test('a metadata hole from resize2fs is physically resealed, never accepted as sparse budget',async()=>{
  const f=fixture(),resize=f.ops.resize;f.ops.resize=async(...args)=>{await resize(...args);f.observation.raw.allocatedBytes=f.plan.targetBytes-4096;};await runGrowth(f.plan,f.ops);assert.equal(f.observation.raw.allocatedBytes,f.plan.targetBytes);assert(f.calls.indexOf('sealAllocation')>f.calls.indexOf('resize'));
  const bad=fixture();bad.ops.sealAllocation=async()=>{bad.observation.raw.allocatedBytes=bad.plan.targetBytes-4096;};await assert.rejects(runGrowth(bad.plan,bad.ops),{code:'GROW_RECOVERY_REQUIRED'});assert(!bad.calls.includes('manifest'));
+});
+
+test('exit0 filesystem warning before grow is not an fsck proof',async()=>{
+ const f=fixture();f.ops.fsck=async()=>fsckProof(f.observation.fs,'Free blocks count wrong (620672, counted=453338).\nFix? no\n');
+ await assert.rejects(runGrowth(f.plan,f.ops),{code:'GROW_RECOVERY_REQUIRED'});assert(!f.calls.includes('allocate'));assert.equal(f.guard.phase,'recovery_required');
+});
+
+test('exit0 filesystem warning after resize never publishes the manifest',async()=>{
+ const f=fixture(),clean=f.ops.fsck;let checks=0;f.ops.fsck=async(...args)=>++checks===1?clean(...args):fsckProof(f.observation.fs,'Free inodes count wrong (172758, counted=164190).\nFix? no\n');
+ await assert.rejects(runGrowth(f.plan,f.ops),{code:'GROW_RECOVERY_REQUIRED'});assert(f.calls.includes('resize'));assert(!f.calls.includes('manifest'));assert.equal(f.guard.phase,'recovery_required');
+});
+
+test('unknown incomplete timeout and unsafe tool receipts stop at each fsck boundary',async()=>{
+ for(const phase of ['before','after'])for(const change of [p=>p.clipped=true,p=>p.expired=true,p=>p.streamError=true,p=>p.toolStable=false,p=>p.inputStable=false,p=>p.tool.path='/usr/sbin/resize2fs',p=>p.stdout.text+='\n[REDACTED_LINE sha256='+'a'.repeat(64)+']']){
+  const f=fixture(),clean=f.ops.fsck;let n=0;f.ops.fsck=async()=>{const p=await clean();if(++n===(phase==='before'?1:2))change(p);return p;};
+  await assert.rejects(runGrowth(f.plan,f.ops),{code:'GROW_RECOVERY_REQUIRED'});assert.equal(f.guard.phase,'recovery_required');assert(!f.calls.includes('manifest'));if(phase==='before')assert(!f.calls.includes('allocate'));
+ }
+});
+
+test('late filesystem or proof changes are rechecked before allocation and manifest publication',async()=>{
+ for(const where of ['allocation_intent','manifest_intent','proof']){
+  const f=fixture(),write=f.ops.writeJournal;f.ops.writeJournal=async value=>{await write(value);if(value.phase===(where==='allocation_intent'?'allocation_intent':'manifest_intent')){if(where==='proof')value.afterFsck.warningFree=false;else f.observation.fs.freeInodes--;}};
+  await assert.rejects(runGrowth(f.plan,f.ops),{code:'GROW_RECOVERY_REQUIRED'});assert(!f.calls.includes('manifest'));if(where==='allocation_intent')assert(!f.calls.includes('allocate'));assert.equal(f.guard.phase,'recovery_required');
+ }
+});
+
+test('legacy completed exit0/hash-only journal is not silently upgraded or replayed',async()=>{
+ const f=fixture();await runGrowth(f.plan,f.ops);f.setJournal({...f.journal,beforeFsck:{code:0,outputSha256:'a'.repeat(64)}});const start=f.calls.length;
+ await assert.rejects(runGrowth(f.plan,f.ops),{code:'GROW_RECOVERY_REQUIRED'});assert(f.calls.slice(start).every(x=>['cold','consumer'].includes(x)));
 });

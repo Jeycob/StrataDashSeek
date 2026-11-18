@@ -1,6 +1,7 @@
 'use strict';
 // Explicit operator migration only. No startup hook, default target or CLI.
 const crypto=require('node:crypto'),path=require('node:path');
+const {retainWitness,assertWitness}=require('./guest-disk-fsck.cjs');
 const GiB=1024**3,MiB=1024**2,CONTRACT='raw-ext4-grow-v1';
 const fail=code=>Object.assign(Error(code),{code});
 const integer=(value,min=0)=>Number.isSafeInteger(value)&&value>=min;
@@ -61,6 +62,8 @@ async function runGrowth(input,ops){
  if(prior){
   if(prior.version!==1||prior.planSha256!==planSha256||prior.phase!=='complete')throw fail('GROW_RECOVERY_REQUIRED');
   const observation=await ops.inspect();assertIdentity(plan,observation,{target:true,manifestHash:prior.manifestSha256});
+  // Old exit0/hash-only journals are not retroactively upgraded to a witness.
+  try{assertWitness(prior.beforeFsck,plan.source.fs);assertWitness(prior.afterFsck,observation.fs);}catch{throw fail('GROW_RECOVERY_REQUIRED');}
   if(canonical(await ops.readGuard())!==canonical(approvedGuard(plan,prior)))throw fail('GROW_RECOVERY_REQUIRED');
   return{...prior,observedOnly:true};
  }
@@ -77,10 +80,12 @@ async function runGrowth(input,ops){
  await ops.writeJournal(record);
  try{
   await ops.writeGuard(guard());
-  await stage('fsck_before');const beforeFsck=await ops.fsck(plan.toolTimeoutMs);if(beforeFsck?.code!==0||!hex(beforeFsck.outputSha256,64))throw fail('GROW_FSCK_PROOF_REQUIRED');record={...record,beforeFsck};assertIdentity(plan,await ops.inspect());
+  await stage('fsck_before');const beforeFsck=retainWitness(await ops.fsck(plan.toolTimeoutMs));record={...record,beforeFsck};
+  const checkedBefore=await ops.inspect();assertIdentity(plan,checkedBefore);assertWitness(beforeFsck,checkedBefore.fs);
   // Consumer support and physical/copy-up budgets must hold before write-open.
   await ops.assertConsumer(CONTRACT);assessCapacity(plan,(await ops.inspect()).host);
-  await stage('allocation_intent');await ops.allocate(budget.deltaBytes,plan.toolTimeoutMs);await reserve();await stage('allocated',true);
+  await stage('allocation_intent');const allocation=await ops.inspect();assertIdentity(plan,allocation);assertWitness(record.beforeFsck,allocation.fs);assessCapacity(plan,allocation.host);
+  await ops.allocate(budget.deltaBytes,plan.toolTimeoutMs);await reserve();await stage('allocated',true);
   await stage('length_intent');await ops.extend(plan.targetBytes);await stage('extended',true);
   await stage('resize_intent');await ops.resize(plan.targetBytes/plan.source.fs.blockSize,plan.toolTimeoutMs);await stage('resized',true);
   // resize2fs can punch zeroed metadata blocks in regular files. Do not accept
@@ -88,13 +93,16 @@ async function runGrowth(input,ops){
   const resized=await ops.inspect(),holes=Math.max(0,plan.targetBytes-resized.raw.allocatedBytes);
   if(!integer(resized.host?.availableBytes)||resized.host.availableBytes<plan.capacity.reserveBytes+plan.capacity.additionalHostBytes+plan.capacity.workBytes+holes)throw fail('GROW_POST_RESERVE');
   await stage('physical_finalize_intent');await ops.sealAllocation(plan.targetBytes,plan.toolTimeoutMs);await stage('physically_sealed',true);
-  await stage('fsck_after');const afterFsck=await ops.fsck(plan.toolTimeoutMs);if(afterFsck?.code!==0||!hex(afterFsck.outputSha256,64))throw fail('GROW_FSCK_PROOF_REQUIRED');
+  await stage('fsck_after');const afterFsck=retainWitness(await ops.fsck(plan.toolTimeoutMs));record={...record,afterFsck};
   const grown=await ops.inspect();assertIdentity(plan,grown,{target:true});
+  assertWitness(afterFsck,grown.fs);
   if(grown.fs.clean!==true||grown.fs.freeBlocks*grown.fs.blockSize<plan.capacity.guestReserveBytes+plan.capacity.guestNewBytes||grown.fs.freeInodes<plan.capacity.guestReserveInodes+plan.capacity.guestNewInodes)throw fail('GROW_POST_FILESYSTEM');
   record={...record,afterFsck,verifiedFilesystem:grown.fs,verifiedRaw:grown.raw,verifiedHost:grown.host,coldFence:plan.coldFence};
   await reserve();await ops.assertConsumer(CONTRACT);await stage('verified',true);
-  await stage('manifest_intent');await ops.writeManifest(manifest);
-  assertIdentity(plan,await ops.inspect(),{target:true,manifestHash:manifestSha256});
+  await stage('manifest_intent');const publication=await ops.inspect();assertIdentity(plan,publication,{target:true});
+  assertWitness(record.beforeFsck,plan.source.fs);assertWitness(record.afterFsck,publication.fs);
+  await ops.writeManifest(manifest);
+  const published=await ops.inspect();assertIdentity(plan,published,{target:true,manifestHash:manifestSha256});assertWitness(record.afterFsck,published.fs);
   await stage('complete',true);await ops.writeGuard(approvedGuard(plan,record));
   return record;
  }catch(error){

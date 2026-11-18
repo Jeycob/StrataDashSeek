@@ -1,6 +1,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process');
 const {validatePlan,canonical,sha256,CONTRACT}=require('./guest-disk-grow.cjs');
+const {runFsck,retainWitness}=require('./guest-disk-fsck.cjs');
 const fail=code=>Object.assign(Error(code),{code});
 const F=fs.constants,MAX=16384,OVERLAY=0x794c7630;
 function boundedFile(file,{owner=0,optional=false}={}){
@@ -30,6 +31,17 @@ async function command(exe,args,{fds=[],uid,gid,timeoutMs=1000,stdoutLimit=1024*
  if(spawnError||expired||clipped||code!==0)throw fail(expired?'GROW_TOOL_TIMEOUT':clipped?'GROW_TOOL_OUTPUT_LIMIT':'GROW_TOOL_FAILED');return{code,outputSha256:sha256(Buffer.concat(chunks))};
 }
 function trustedTool(file){rootParents(file);const s=fs.lstatSync(file);if(!s.isFile()||s.isSymbolicLink()||s.uid!==0||s.mode&0o022||!(s.mode&0o111))throw fail('GROW_TOOL_UNSAFE');return file;}
+const stableStat=(a,b)=>['dev','ino','uid','gid','mode','nlink','size','blocks','mtimeNs','ctimeNs'].every(k=>a[k]===b[k]);
+function fsckToolIdentity(file){
+ trustedTool(file);let fd;
+ try{
+  const before=fs.lstatSync(file,{bigint:true});if(before.size<1n||before.size>8n*1024n**2n)throw fail('GROW_TOOL_UNSAFE');
+  fd=fs.openSync(file,F.O_RDONLY|F.O_NOFOLLOW|F.O_NONBLOCK);if(!stableStat(before,fs.fstatSync(fd,{bigint:true})))throw fail('GROW_TOOL_UNSAFE');
+  const bytes=Buffer.alloc(Number(before.size)+1),n=fs.readSync(fd,bytes,0,bytes.length,0);
+  if(n!==Number(before.size)||!stableStat(before,fs.fstatSync(fd,{bigint:true}))||!stableStat(before,fs.lstatSync(file,{bigint:true})))throw fail('GROW_TOOL_UNSAFE');
+  return{path:file,sha256:sha256(bytes.subarray(0,n)),dev:String(before.dev),ino:String(before.ino),size:String(before.size),uid:Number(before.uid),gid:Number(before.gid),mode:Number(before.mode),mtimeNs:String(before.mtimeNs),ctimeNs:String(before.ctimeNs)};
+ }finally{if(fd!==undefined)fs.closeSync(fd);}
+}
 function scanCold(plan,raw,ownPid=process.pid){
  const pids=fs.readdirSync('/proc').filter(name=>/^[1-9][0-9]*$/.test(name));if(pids.length>4096)throw fail('GROW_PROCESS_SCAN_UNKNOWN');let fds=0;
  for(const pid of pids){if(Number(pid)===ownPid)continue;try{
@@ -72,8 +84,21 @@ async function makeOperations(planFile,{expectedPlanSha256,fixture=false}={}){
    const profile=path.join(root,'releases',commit,'vast/apps-worker-profile.cjs');rootParents(profile);boundedFile(profile);
    const installed=require(profile);if(installed.CAPACITY_MIGRATION_CONTRACT!==contract)throw fail('GROW_RUNTIME_CONSUMER_REQUIRED');
   }
+  async function checkFilesystem(timeoutMs){
+   // After copy-up/grow the original read descriptor may still refer to the
+   // lower file. Pin the CURRENT named image on a new read-only descriptor.
+   const fd=fs.openSync(rawFile,F.O_RDONLY|F.O_NOFOLLOW|F.O_NONBLOCK);
+   try{
+    const before=fs.fstatSync(fd,{bigint:true});
+    if(!stableStat(before,fs.fstatSync(current(),{bigint:true}))||!stableStat(before,fs.lstatSync(rawFile,{bigint:true})))throw fail('GROW_IDENTITY_CHANGED');
+    const tool=fsckToolIdentity(tools.e2fsck),proof=await runFsck({setpriv:tools.setpriv,e2fsck:tools.e2fsck,uid:plan.serviceUid,gid:plan.serviceGid,fd,timeoutMs,tool});
+    try{proof.toolStable=canonical(tool)===canonical(fsckToolIdentity(tools.e2fsck));}catch{proof.toolStable=false;}
+    try{proof.inputStable=stableStat(before,fs.fstatSync(fd,{bigint:true}))&&stableStat(before,fs.fstatSync(current(),{bigint:true}))&&stableStat(before,fs.lstatSync(rawFile,{bigint:true}));}catch{proof.inputStable=false;}
+    proof.warningFree=proof.warningFree&&proof.toolStable&&proof.inputStable;return retainWitness(proof);
+   }finally{fs.closeSync(fd);}
+  }
   const ops={fixture,assertCold,assertConsumer,inspect,readJournal:()=>{const b=boundedFile(journalFile,{optional:true});return b?JSON.parse(b.toString('utf8')):null;},readGuard:()=>{const b=boundedFile(guardFile,{optional:true});return b?JSON.parse(b.toString('utf8')):undefined;},writeJournal:value=>atomic(journalFile,value),writeGuard:value=>atomic(guardFile,value,{mode:0o644}),
-   fsck:timeoutMs=>command(tools.setpriv,['--reuid',String(plan.serviceUid),'--regid',String(plan.serviceGid),'--clear-groups','--no-new-privs','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--',tools.e2fsck,'-f','-n','/proc/self/fd/3'],{fds:[current()],timeoutMs}),
+   fsck:checkFilesystem,
    async allocate(delta,timeoutMs){writeFd=fs.openSync(rawFile,F.O_RDWR|F.O_NOFOLLOW|F.O_NONBLOCK);const s=rawInfo();if(s.dev!==plan.source.dev||s.ino!==plan.source.ino||s.bytes!==plan.source.bytes)throw fail('GROW_IDENTITY_CHANGED');await command(tools.fallocate,['--keep-size','--offset',String(plan.source.bytes),'--length',String(delta),'/proc/self/fd/3'],{fds:[writeFd],timeoutMs});fs.fsyncSync(writeFd);if(rawInfo().allocatedBytes<plan.targetBytes)throw fail('GROW_PHYSICAL_ALLOCATION_UNPROVEN');},
    extend:bytes=>{if(writeFd===undefined||bytes!==plan.targetBytes||rawInfo().bytes!==plan.source.bytes)throw fail('GROW_LENGTH_UNCERTAIN');fs.ftruncateSync(writeFd,bytes);fs.fsyncSync(writeFd);},
    resize:(blocks,timeoutMs)=>command(tools.setpriv,['--reuid',String(plan.serviceUid),'--regid',String(plan.serviceGid),'--clear-groups','--no-new-privs','--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--',tools.resize2fs,'/proc/self/fd/3',String(blocks)],{fds:[current()],timeoutMs}),
