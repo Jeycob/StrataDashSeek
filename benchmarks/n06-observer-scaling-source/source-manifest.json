@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "status": "SOURCE_CANDIDATE_NOT_SELECTED_BY_EXISTING_PRODUCER",
+  "baseCommit": "8c20a4681fbfee5f138d0568333f07ff74f893c3",
+  "production": [
+    {
+      "path": "benchmarks/n06-observer-scaling-source/bindings.mjs",
+      "bytes": 8401,
+      "sha256": "268f1833d4a7bd407d269a66ec092b9579610806e9ab9389d792827d4479a4c7"
+    },
+    {
+      "path": "benchmarks/n06-observer-scaling-source/lifecycle.mjs",
+      "bytes": 19544,
+      "sha256": "2b799b53a098dd9f781b45affae5f414a9f78698734c6da7050965f35ece03ae"
+    },
+    {
+      "path": "benchmarks/n06-observer-scaling-source/runner.mjs",
+      "bytes": 31860,
+      "sha256": "5231aa3ce65d2486bb3807438dd1b11a95f8a70a3a26e18e9e293938f009de7b"
+    }
+  ],
+  "sharedDependencies": [
+    {
+      "path": "benchmarks/n06-evidence-storage/native-transport.mjs",
+      "bytes": 9399,
+      "sha256": "11375282950bf54dfdaaf7a148d602a20c52453653ddc2f4debbf5aafb5fe026"
+    }
+  ],
+  "closureSha256": "aa746b61cafefa5416558acae47a440397ab7aea877e4427d41e88b91d2ea8e7",
+  "preservedAcceptedSources": [
+    {
+      "path": "benchmarks/n06-evidence-storage/runner.mjs",
+      "bytes": 27785,
+      "sha256": "3d4840bd0f5e31778bef9b5be60ece8295899a11f930fb66145dd786e5a39dd8"
+    },
+    {
+      "path": "benchmarks/n06-evidence-storage/lifecycle.mjs",
+      "bytes": 14307,
+      "sha256": "21d75d10d59bba22564a9d1758f2817bb345d438854346f9105404d1d170bea7"
+    },
+    {
+      "path": "benchmarks/n06-finalization/frozen/n06-root-bindings-20261117/bindings.mjs",
+      "bytes": 7549,
+      "sha256": "17a49477afe215a730ef17c06f0a5b6851151f3bab8625d45658ec7752771d3a"
+    }
+  ],
+  "files": [
+    {
+      "path": "benchmarks/n06-observer-scaling-source/README.md",
+      "bytes": 8070,
+      "sha256": "47951c11e0d426da0f34e90ef516afbd3ed4d529a17b28fd3eb4f2ab9f7f3c30"
+    },
+    {
+      "path": "benchmarks/n06-observer-scaling-source/bindings.mjs",
+      "bytes": 8401,
+      "sha256": "268f1833d4a7bd407d269a66ec092b9579610806e9ab9389d792827d4479a4c7"
+    },
+    {
+      "path": "benchmarks/n06-observer-scaling-source/lifecycle.mjs",
+      "bytes": 19544,
+      "sha256": "2b799b53a098dd9f781b45affae5f414a9f78698734c6da7050965f35ece03ae"
+    },
+    {
+      "path": "benchmarks/n06-observer-scaling-source/runner.mjs",
+      "bytes": 31860,
+      "sha256": "5231aa3ce65d2486bb3807438dd1b11a95f8a70a3a26e18e9e293938f009de7b"
+    },
+    {
+      "path": "benchmarks/n06-observer-scaling-source/lifecycle.test.mjs",
+      "bytes": 20727,
+      "sha256": "f34c0a61f7f05742b77fe02915a9d5de17c6b1dd413f368f7ff68c2810e75eb0"
+    },
+    {
+      "path": "benchmarks/n06-observer-scaling-source/diagnostics.test.mjs",
+      "bytes": 13440,
+      "sha256": "d0849fbbaa3207c7fc79570450bb220e5237987c390f27038f66eb9c5c696d22"
+    }
+  ],
+  "ciRows": [
+    {
+      "file": "benchmarks/n06-observer-scaling-source/lifecycle.test.mjs",
+      "kind": "node",
+      "lane": "portable",
+      "required": true,
+      "timeoutMs": 120000,
+      "minTests": 16
+    },
+    {
+      "file": "benchmarks/n06-observer-scaling-source/diagnostics.test.mjs",
+      "kind": "node",
+      "lane": "portable",
+      "required": true,
+      "timeoutMs": 120000,
+      "minTests": 9
+    }
+  ],
+  "localValidation": {
+    "status": "PASS",
+    "tests": 25,
+    "fail": 0,
+    "skip": 0,
+    "modelPrompts": 0,
+    "liveOperations": 0,
+    "testEvidenceSha256": "de574b07f6c668b433595da528a3872dd12ab0088592e17bda9e33d854e1e341"
+  },
+  "performanceQualification": {
+    "candidate": "NOT RUN",
+    "originalFailureExactCause": null,
+    "baselineReadOnlyTraceSha256": "9a28fb6ddd045bc49b196f16a69c94547bcd39fac8f0a2ca6bb3401038ebec40",
+    "baselineCurrentIdlePassMs": 3812,
+    "originalObservationBudgetMs": 4000
+  },
+  "sdkContractSource": {
+    "subprocessPackageVersion": "0.2.2-rc.2",
+    "files": [
+      {
+        "path": "dsh-subprocess-local/src/spawn.ts",
+        "bytes": 19484,
+        "sha256": "24eb14b542c24308c4299d487b2c41de7ecb03bab424f3f07716238f696e84d9"
+      },
+      {
+        "path": "dsh-subprocess-local/src/linux-scope.ts",
+        "bytes": 28258,
+        "sha256": "2c5ab2c17ba1c0be3137fc4dcad4ad96f56d0109b1d8ff6049f267574bde95b9"
+      },
+      {
+        "path": "dsh-bash-local/src/index.ts",
+        "bytes": 18524,
+        "sha256": "03f7d8c0a6162aec6c71c719c937ab8b6b7fa011b7fcdc386e513c4d0aeab353"
+      },
+      {
+        "path": "dsh-tool-bash/src/index.ts",
+        "bytes": 27928,
+        "sha256": "da8b6a9a84a85ffa74ca4e8c6bbcaa45e2c16c7aefb30cdfe9671b4512421724"
+      }
+    ]
+  },
+  "limitsUnchanged": {
+    "primaryMs": 600000,
+    "observationMs": 4000,
+    "maxCleanupMs": 120000,
+    "newForegroundProofLimit": 4
+  }
+}

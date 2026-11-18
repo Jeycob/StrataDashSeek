@@ -38,6 +38,8 @@ export function classify(name) {
   if (name === 'benchmarks/n06-evidence-storage/checkpoint.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 10};
   if (name === 'benchmarks/n06-evidence-storage/lifecycle.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 5};
   if (name === 'benchmarks/n06-evidence-storage/composition.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 10};
+  if (name === 'benchmarks/n06-observer-scaling-source/lifecycle.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 16};
+  if (name === 'benchmarks/n06-observer-scaling-source/diagnostics.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 9};
   if (name === 'benchmarks/b10-next-pair-source/composition.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 7};
   if (name === 'benchmarks/b10-next-pair-source/contracts.test.mjs') return {file: name, kind: 'node', lane: 'portable', required: true, timeoutMs: 120000, minTests: 10};
   if (name.startsWith('benchmarks/')) return {file: name, kind: 'historical', lane: 'outside-ci', required: false, reason: 'Historical challenge/dataset fixture, explicitly outside the production infrastructure gate.'};
