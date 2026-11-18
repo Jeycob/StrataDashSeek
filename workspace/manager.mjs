@@ -230,10 +230,15 @@ export class WorkspaceManager {
     // Do not replace a request's accounting while one of its child steps is
     // still completing a verification through the owner-scoped observer.
     const pendingReview = this.automaticReviews.get(agent.id);
-    if (pendingReview) { try { await pendingReview; } catch (error) { if (signal?.aborted) throw error; } }
+    if (pendingReview) await pendingReview;
     signal?.throwIfAborted(); this.execution.assertUnchanged();
     await this.reconcileAutomatic(agent.id);
-    if(['dispatching','unknown'].includes(budget.automatic?.continuation?.state)&&budget.automatic.recovery?.canContinue!==true)throw new WorkbenchError('AUTOMATIC_CONTINUATION_UNCONFIRMED','The recorded continuation has no confirmed durable acceptance. It will not be submitted again.');
+    if(budget.automatic?.operation?.cancelledByCaller){
+      const task=budget.automatic.operation.task,human=Array.isArray(messages)?messages.findLast(message=>message?.role==='user'&&message.source?.kind==='user'):undefined;
+      const explicit=initiator===agent.id&&typeof human?.id==='string'&&human.id.trim()&&human.id!==task?.messageId&&Number.isSafeInteger(turn)&&turn>(task?.turn??0);
+      if(!explicit)throw new WorkbenchError('AUTOMATIC_CANCELLED','The previous task was explicitly stopped. Its automatic continuation remains cancelled.');
+    }
+    if(!budget.automatic?.operation?.cancelledByCaller&&['dispatching','unknown'].includes(budget.automatic?.continuation?.state)&&budget.automatic.recovery?.canContinue!==true)throw new WorkbenchError('AUTOMATIC_CONTINUATION_UNCONFIRMED','The recorded continuation has no confirmed durable acceptance. It will not be submitted again.');
     const effective = { ...DEFAULTS, ...settings }, freshHuman = prepareAutomaticRequest(record, budget, { turn, messages, owner: initiator === agent.id }, effective.maxStageSteps);
     if (initiator === agent.id && beginUserRequest(record, budget, { turn, messages })) {
       delete record.stageBudgetWarningStage; delete record.stageBudgetWarningInspection;

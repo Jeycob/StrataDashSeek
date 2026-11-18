@@ -81,6 +81,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   }, { global: true });
   ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
   ctx.on('workspace-runtime/verification-process', value=>manager.retainAutomaticProcess(value));
+  ctx.effect(()=>()=>{for(const entry of [...manager.automaticCancellations?.values()??[]])entry.dispose();});
   ctx.on('workspace-runtime/review', async ({ sessionId,execution:actual }, next) => {execution.assertUnchanged();const owner=actual?manager.ownerAgent(actual.agent)?.id:sessionId;if(!owner)return next();const value=await manager.review(owner);execution.assertUnchanged();return value?{...value,sessionId:owner}:next();});
   ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.reconcileAutomatic(session.id).then(()=>manager.releaseIfIdle(session.id)).then(cleanupCaches).catch(() => {}), 0); });
   ctx.on('agent/disposed', ({ agent }) => { managedShell.remove(agent); manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); manager.pendingDiagnostics.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });

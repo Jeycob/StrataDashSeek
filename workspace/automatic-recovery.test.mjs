@@ -10,6 +10,7 @@ import {acknowledgeAutomatic,retainAutomaticProcess} from './automatic-recovery.
 import {registerOwnedRangeProvider} from './owned-range-state.mjs';
 import {sourceManifest} from './storage.mjs';
 import {hostExecutionBinding} from './fixtures/execution-binding.mjs';
+import {watchAutomaticCancellation} from './automatic-cancellation.mjs';
 
 async function fixture(t){
  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'automatic-recovery-')),root=path.join(directory,'project');await fs.mkdir(root);await fs.writeFile(path.join(root,'app.mjs'),'export const value=1;\n');
@@ -110,6 +111,14 @@ test('changed task identity after late completion never resumes the previous use
 test('explicit caller cancellation settles owned evidence without automatically restarting the task',async t=>{
  const f=await fixture(t),sent=acceptFollowup(f);f.a.operation.cancelledByCaller=true;await f.terminal({isError:true});await acknowledgeAutomatic(f.manager,'owner',f.callId);
  assert.equal(sent(),0);assert.equal(f.a.phase,'cancelled');assert.equal(f.a.recovery.canContinue,false);assert.equal(f.a.recovery.code,'AUTOMATIC_CANCELLED');assert.equal(f.a.proofSerial,0);
+});
+test('real caller Stop while continuation intent is saving fences the followup effect',async t=>{
+ const f=await fixture(t),sent=acceptFollowup(f),caller=new AbortController(),save=f.manager.save.bind(f.manager);let stopped=false;
+ watchAutomaticCancellation(f.manager,'owner',f.record,f.budget,f.a.operation,caller.signal);
+ f.manager.save=async()=>{await save();if(!stopped&&f.a.continuation?.state==='dispatching'){stopped=true;caller.abort(Error('Stop while the followup intent is saving'));}};
+ await f.terminal();await acknowledgeAutomatic(f.manager,'owner',f.callId);await f.manager.persistQueue;
+ assert.equal(stopped,true);assert.equal(sent(),0);assert.equal(f.a.operation.cancelledByCaller,true);assert.equal(f.a.recovery.code,'AUTOMATIC_CANCELLED');assert.equal(f.a.recovery.canContinue,false);assert.equal(f.manager.automaticCancellations.size,0);
+ const persisted=JSON.parse(await fs.readFile(f.manager.file,'utf8')).sessions.owner.budget.automatic;assert.equal(persisted.operation.cancellation.callId,f.callId);assert.equal(persisted.operation.cancellation.sourceHash,f.sourceHash);
 });
 
 function legacy(f){

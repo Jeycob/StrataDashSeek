@@ -2,6 +2,7 @@ import {hasOwnedRangeProvider} from './owned-range-state.mjs';
 import {continueAutomaticTask} from './automatic-continuation.mjs';
 import {reconcileLegacyAutomatic} from './automatic-legacy.mjs';
 import {automaticBound as pauseUntil} from './automatic-bounds.mjs';
+import {releaseAutomaticCancellation} from './automatic-cancellation.mjs';
 
 export const AUTOMATIC_CLEANUP_MS=10000;
 const own=(manager,id,a)=>!!manager.data.sessions[id]&&manager.budgets.get(id)?.automatic===a
@@ -110,7 +111,9 @@ export async function reconcileAutomatic(manager,id){
   recoveryState(a,budget.blocked?'blocked':'recovered',budget.blocked?.code??(receipt.isError?'AUTOMATIC_RECOVERED_WITHOUT_PASS':'AUTOMATIC_RESULT_RECONCILED'),!budget.blocked);
   if(operation.cancelledByCaller){a.phase='cancelled';recoveryState(a,'recovered','AUTOMATIC_CANCELLED',false);}
   if(manager.automaticProcesses?.get(id)?.callId===callId)manager.automaticProcesses.delete(id);
-  record.budget=budget;if(!await pauseUntil(manager.save(),Date.now()+4000))return pending(a,'AUTOMATIC_RECOVERY_PERSISTENCE_UNCONFIRMED','blocked');return continueAutomaticTask(manager,id);
+  record.budget=budget;if(!await pauseUntil(manager.save(),Date.now()+4000))return pending(a,'AUTOMATIC_RECOVERY_PERSISTENCE_UNCONFIRMED','blocked');
+  if(operation.cancelledByCaller||budget.blocked)releaseAutomaticCancellation(manager,id,operation);
+  return continueAutomaticTask(manager,id);
  })();
  manager.automaticReconciliations.set(id,work);
  try{return await work;}finally{if(manager.automaticReconciliations.get(id)===work)manager.automaticReconciliations.delete(id);}

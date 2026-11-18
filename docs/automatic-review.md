@@ -52,7 +52,11 @@ message history after a successful `SessionStore.flush`. An ambiguous write is
 held without resubmission; a later read may confirm the existing message. The
 pre-step fence prevents inference while acceptance is unknown. Admission does not
 mean the model is currently running. Explicit caller cancellation does not create
-an automatic continuation.
+an automatic continuation. Its original signal remains observed after timeout
+through late terminal reconciliation and pending queue admission. A matching
+Stop is persisted with the task/call/source, survives restart, and is checked
+again after each asynchronous continuation boundary; its listener is removed on
+Stop, normal completion, confirmed admission or plugin disposal.
 
 These changes do not alter frozen benchmark limits or external Codex approvals.
 Source regression results are not deployment, live Doom recovery or application

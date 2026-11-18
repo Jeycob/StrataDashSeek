@@ -12,6 +12,7 @@ import { sourceManifest } from './storage.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {registerOwnedRangeProvider} from './owned-range-state.mjs';
+import {getEventListeners} from 'node:events';
 
 const human = id => ({id, role:'user', source:{kind:'user'}});
 const success = () => ({passed:true, complete:true, stale:false, checks:[{id:'real-fixture',kind:'test',passed:true,checksTotal:1,checksPassed:1}]});
@@ -38,6 +39,40 @@ async function fixture(t, options={}) {
 
 test('soft limit automatically dispatches guarded verification and continues the same task without a user message',async t=>{
  const f=await fixture(t);await f.step(11);assert.equal(f.calls.length,1);assert.equal(f.budget.blocked,null);assert.equal(f.budget.stage,2);assert.equal(f.budget.steps,1);assert.equal(f.budget.automatic.taskSteps,11);assert.equal(f.budget.automatic.checks,1);assert.equal(f.budget.automatic.phase,'working');assert.match(f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW'),/verified progress/);
+});
+test('pre-dispatch source IO rejection records a concrete diagnostic without creating an operation or charging a check',async t=>{
+ const f=await fixture(t);f.manager.review=async()=>{throw Object.assign(Error('Synthetic source read failure'),{code:'SOURCE_MANIFEST_IO'});};
+ await assert.rejects(f.step(11),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');
+ assert.equal(f.calls.length,0);assert.equal(f.budget.automatic.checks,0);assert.equal(f.budget.automatic.taskSteps,10);assert.equal(f.budget.steps,10);assert.equal(f.budget.stage,1);
+ assert.equal(f.budget.automatic.activeCallId,undefined);assert.equal(f.budget.automatic.operation,undefined);assert.equal(f.budget.automatic.receipt,undefined);assert.notEqual(f.budget.automatic.phase,'checking');assert.notEqual(f.budget.automatic.uncertain,true);
+ assert.match(f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW'),/SOURCE_MANIFEST_IO/);
+ const saved=JSON.parse(await fs.readFile(f.manager.file,'utf8')).sessions.owner.budget;assert.equal(saved.blocked.code,'AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(saved.automatic.checks,0);assert.equal(saved.automatic.activeCallId,undefined);
+});
+test('pre-dispatch source binding requires the exact root and a real manifest hash',async t=>{
+ for(const binding of [{root:'/other-project',sourceHash:'a'.repeat(64)},{sourceHash:'a'.repeat(64)},null]){
+  const f=await fixture(t);f.manager.review=async()=>binding;
+  await assert.rejects(f.step(11),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(f.calls.length,0);assert.equal(f.budget.automatic.checks,0);assert.equal(f.budget.automatic.activeCallId,undefined);assert.equal(f.budget.automatic.operation,undefined);
+ }
+ const f=await fixture(t);f.manager.review=async()=>({root:f.root,sourceHash:'not-a-manifest'});await assert.rejects(f.step(11),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(f.calls.length,0);assert.equal(f.budget.automatic.checks,0);
+});
+test('pre-dispatch source await cannot bind a replacement owner task or mutate its accounting',async t=>{
+ const f=await fixture(t);let release,entered;const waiting=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
+ f.manager.review=async()=>{entered();await gate;return{root:f.root,sourceHash:'a'.repeat(64)};};
+ const pending=f.step(11);pending.catch(()=>{});await waiting;
+ const replacement={...f.record},replacementBudget=new RepairBudget({steps:7});replacement.budget=replacementBudget;f.manager.data.sessions.owner=replacement;f.manager.budgets.set('owner',replacementBudget);
+ release();await assert.rejects(pending,e=>e.code==='AUTOMATIC_SOURCE_BINDING_CHANGED');assert.equal(f.calls.length,0);assert.equal(f.budget.automatic.checks,0);assert.equal(f.budget.automatic.activeCallId,undefined);assert.equal(replacementBudget.steps,7);assert.equal(replacementBudget.blocked,null);assert.equal(replacementBudget.automatic,undefined);
+});
+test('pre-dispatch source failure in the pending owner review propagates rather than being swallowed',async t=>{
+ const f=await fixture(t),failure=Object.assign(Error('The pending source binding changed'),{code:'AUTOMATIC_SOURCE_BINDING_CHANGED'}),pending=Promise.reject(failure);pending.catch(()=>{});f.manager.automaticReviews.set('owner',pending);
+ await assert.rejects(f.step(11),error=>error===failure);assert.equal(f.calls.length,0);assert.equal(f.budget.steps,10);assert.equal(f.budget.automatic,undefined);
+});
+test('caller Stop during admission persistence leaves no unstarted active check or listener',async t=>{
+ const f=await fixture(t),caller=new AbortController(),save=f.manager.save.bind(f.manager);let stopped=false;
+ f.manager.save=async()=>{await save();if(!stopped&&f.budget.automatic?.operation){stopped=true;caller.abort(Error('Stop before SDK dispatch'));}};
+ await assert.rejects(f.manager.preStep({...f.input,signal:caller.signal}),/Stop before SDK dispatch/);await f.manager.persistQueue;
+ assert.equal(f.calls.length,0);assert.equal(f.budget.automatic.checks,0);assert.equal(f.budget.automatic.activeCallId,undefined);assert.equal(f.budget.automatic.receipt,undefined);assert.equal(f.budget.automatic.operation.admissionOutcome,'NOT_DISPATCHED');assert.equal(f.budget.automatic.operation.cancelledByCaller,true);assert.equal(f.budget.automatic.recovery.canContinue,false);assert.equal(getEventListeners(caller.signal,'abort').length,0);assert.equal(f.manager.automaticCancellations.size,0);
+ await assert.rejects(f.step(12),error=>error.code==='AUTOMATIC_CANCELLED');assert.equal(f.calls.length,0);
+ await f.manager.preStep({...f.input,turn:2,step:1,messages:[human('explicit-new-owner-request')]});assert.equal(f.budget.automatic.taskSteps,1);assert.equal(f.budget.automatic.checks,0);assert.equal(f.calls.length,0);
 });
 test('normal qualified verifier completion releases its exact handle before the next automatic check',async t=>{
  const f=await fixture(t),execute=f.ctx.tools.execute;f.ctx.subprocess={};registerOwnedRangeProvider(f.ctx.subprocess);let retained=0;
@@ -158,7 +193,7 @@ test('actual pinned SDK executor runs its guard and single final observer for co
  const dispatch=new pipeline.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>pipeline.executeToolBatch(input,dispatch,()=>1)});
  // The verifier must not create application source after its admission hash.
  await fs.writeFile(path.join(f.root,'behavior.test.cjs'),"require('node:test')('retained fixture behavior',()=>require('node:assert/strict').equal(2+2,4));");
- try{await f.step(11);}catch(error){assert.fail(JSON.stringify({code:error.code,guarded,observed,executed,lastOutcome}));}assert.equal(executed,1);assert.equal(guarded,1);assert.equal(observed,1);assert.equal(f.budget.stage,2);assert.equal(f.budget.automatic.taskSteps,11);
+ try{await f.step(11);}catch(error){assert.fail(JSON.stringify({code:error.code,guarded,observed,executed,lastOutcome}));}assert.equal(executed,1);assert.equal(guarded,1);assert.equal(observed,1);assert.equal(f.budget.stage,2);assert.equal(f.budget.automatic.taskSteps,11);assert.equal(f.manager.automaticCancellations.size,0);assert.equal(getEventListeners(f.input.signal,'abort').length,0);
  for(let n=12;n<=20;n++)await f.step(n);allow=false;await assert.rejects(f.step(21),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(executed,1);assert.equal(guarded,2);assert.equal(observed,2);assert.equal(f.budget.stage,2);assert.equal(f.budget.automatic.taskSteps,20);
  // A real SDK body that ignores AbortSignal must not hold preStep forever.
  // Release only this synthetic fixture after proving bounded fencing; product
@@ -175,4 +210,27 @@ test('actual pinned SDK executor runs its guard and single final observer for co
   await assert.rejects(f.manager.preStep({...f.input,turn:3,step:1,messages:[human('fresh-after-timeout')]}),e=>e.code==='AUTOMATIC_VERIFICATION_UNCERTAIN');assert.equal(executed,2);
  }finally{timer.mock.restore();f.agent.status='running';releaseHang?.();if(execution)await execution;await new Promise(r=>setImmediate(r));await f.manager.persistQueue;}
  await f.manager.reconcileAutomatic('owner');assert.equal(f.manager.automaticInFlight.has('owner'),false);assert.equal(f.budget.automatic.terminalAcknowledged,true);assert.equal(f.budget.automatic.uncertain,undefined);assert.equal(f.budget.automatic.recovery.state,'recovered');assert.equal(f.budget.stage,2);assert.equal(f.budget.automatic.taskSteps,10);
+ // A second real SDK dispatch times out while its original caller is still
+ // alive. A later explicit Stop must remain authoritative through late drain.
+ for(let n=12;n<=31;n++)await advance(n);
+ const caller=new AbortController(),events=[];let followups=0,stopDeadline,stoppedExecution;
+ f.agent.session.seq=0;f.agent.inbox={nextTurn:[],nextStep:[]};
+ f.agent.followup=message=>{followups++;f.agent.inbox.nextTurn.push(message);events.push({seq:++f.agent.session.seq,type:'agent/inbox/spliced',data:{inserted:[message]}});};
+ ctx.provide('sessions',{flush:async()=>true});ctx.provide('sessionQuery',{readSession:async()=>({events})});
+ releaseHang=undefined;
+ const stopTimer=t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>{if(ms>=110000&&ms<=120000){stopDeadline=()=>fn(...args);return{unref(){}};}return originalTimer(fn,ms,...args);});
+ try{
+  const pending=f.manager.preStep({...f.input,turn:2,step:32,messages:[human('next-request')],signal:caller.signal});pending.catch(()=>{});
+  const until=Date.now()+2500;while(!releaseHang||!stopDeadline){if(Date.now()>until)throw Error('Second synthetic SDK body did not start');await new Promise(r=>setImmediate(r));}
+  stoppedExecution=f.manager.automaticInFlight.get('owner');assert(stoppedExecution);stopDeadline();
+  await assert.rejects(pending,e=>e.code==='AUTOMATIC_VERIFICATION_UNCERTAIN');assert.equal(caller.signal.aborted,false);
+  const operation=f.budget.automatic.operation;assert.notEqual(operation.cancelledByCaller,true);
+  f.agent.status='idle';caller.abort(Error('Explicit user Stop after verification timeout'));await f.manager.persistQueue;
+  const persisted=JSON.parse(await fs.readFile(f.manager.file,'utf8')).sessions.owner.budget.automatic;
+  assert.equal(persisted.operation.cancelledByCaller,true);assert.equal(persisted.operation.cancellation.callId,operation.callId);assert.equal(persisted.operation.cancellation.sourceHash,operation.sourceHash);assert.deepEqual(persisted.operation.cancellation.task,operation.task);
+  releaseHang();await stoppedExecution;await f.manager.drainToolResults('owner');await f.manager.reconcileAutomatic('owner');await f.manager.persistQueue;
+  assert.equal(followups,0);assert.equal(f.budget.automatic.recovery.canContinue,false);assert.equal(f.budget.automatic.recovery.code,'AUTOMATIC_CANCELLED');assert.equal(getEventListeners(caller.signal,'abort').length,0);
+  const saved=JSON.parse(await fs.readFile(f.manager.file,'utf8'));f.manager.data=saved;const reloaded=new RepairBudget(saved.sessions.owner.budget);f.manager.budgets.set('owner',reloaded);
+  await f.manager.reconcileAutomatic('owner');assert.equal(reloaded.automatic.operation.cancelledByCaller,true);assert.equal(reloaded.automatic.continuationNeeded,false);assert.equal(followups,0);
+ }finally{stopTimer.mock.restore();releaseHang?.();if(stoppedExecution)await stoppedExecution;await f.manager.reconcileAutomatic('owner');await f.manager.persistQueue;}
 });

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { changedApplicationCode } from './verification-guidance.mjs';
 import {acknowledgeAutomatic,recoveryState} from './automatic-recovery.mjs';
+import {watchAutomaticCancellation,releaseAutomaticCancellation} from './automatic-cancellation.mjs';
 
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 export const AUTOMATIC_REVIEW_DEFAULTS = Object.freeze({ maxTaskSteps: 240, maxAutomaticChecks: 3 });
@@ -99,22 +100,54 @@ export async function automaticReview(manager, input, record, budget, settings, 
     return;
   }
   if (typeof manager.ctx.tools?.execute !== 'function') { stop(budget, 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'The verification executor is unavailable. Files are retained; no replacement executor was installed.'); return; }
+  // Source I/O is preparation, not an admitted verification. It may reject or
+  // outlive a task/project replacement without creating an in-flight fence.
+  const root=record.root,request=record.automaticRequest??record.budgetRequest;
+  const task=request?{turn:request.turn,messageId:request.messageId}:undefined;
+  const current=()=>manager.data.sessions[id]===record&&manager.budgets.get(id)===budget&&budget.automatic===a
+    &&record.root===root&&!manager.data.trash[id]
+    &&(record.automaticRequest??record.budgetRequest)?.turn===task?.turn
+    &&(record.automaticRequest??record.budgetRequest)?.messageId===task?.messageId
+    &&(!manager.ctx.agents||manager.ctx.agents.get(id)===input.agent);
+  const changed=()=>Object.assign(Error('The automatic verification target changed before dispatch. No verification was started.'),{code:'AUTOMATIC_SOURCE_BINDING_CHANGED'});
+  let sourceHash;
+  try{
+    const binding=await manager.review(id);
+    input.signal?.throwIfAborted();manager.execution.assertUnchanged();
+    if(!current())throw changed();
+    if(binding?.root!==root||typeof binding.sourceHash!=='string'||!/^[a-f0-9]{64}$/.test(binding.sourceHash))throw Object.assign(Error('The project source binding is unavailable.'),{code:'AUTOMATIC_SOURCE_BINDING_INVALID'});
+    sourceHash=binding.sourceHash;
+  }catch(error){
+    if(input.signal?.aborted)throw error;
+    if(!current())throw changed();
+    if(!budget.blocked)stop(budget,'AUTOMATIC_VERIFICATION_UNAVAILABLE','The project source binding could not be established before dispatch. No verification was started; files and accounting are retained.');
+    const code=/^[A-Z0-9_]{1,80}$/.test(error.code??'')?error.code:'SOURCE_BINDING_UNAVAILABLE';
+    diagnostics(manager,id,'[Harness: verification not started] Source binding failed before dispatch: '+code+'. No check was charged and no active operation or passing result was created.');
+    return;
+  }
+  if(budget.blocked||a.taskSteps<a.nextCheckAt)return;
   const callId = 'automatic-review-' + crypto.randomUUID();
   a.phase = 'checking'; a.checks++; a.activeCallId = callId; delete a.lastAutomaticOutcome;delete a.receipt;
   if(a.continuation){a.previousContinuation={callId:a.continuation.callId,messageId:a.continuation.message?.id,state:a.continuation.state};delete a.continuation;}a.continuationNeeded=false;
-  const sourceHash=(await manager.review(id)).sourceHash,startedAt=Date.now();
-  a.terminalAcknowledged=false;a.operation={callId,ownerId:id,root:record.root,sourceHash,task:structuredClone(record.automaticRequest??record.budgetRequest),startedAt,deadlineAt:startedAt+VERIFICATION_TIMEOUT_MS};
+  const startedAt=Date.now();
+  a.terminalAcknowledged=false;a.operation={callId,ownerId:id,root,sourceHash,task,startedAt,deadlineAt:startedAt+VERIFICATION_TIMEOUT_MS};
+  const operation=a.operation;
+  watchAutomaticCancellation(manager,id,record,budget,operation,input.signal);
   if(a.legacyRecovery?.verificationState==='required'){a.legacyRecovery.verificationState='started';a.legacyRecovery.verificationCallId=callId;a.continuationNeeded=true;}
-  recoveryState(a,'pending','AUTOMATIC_VERIFICATION_RUNNING');record.budget = budget; await manager.save();
+  recoveryState(a,'pending','AUTOMATIC_VERIFICATION_RUNNING');record.budget = budget;
   const deadline = new AbortController();
-  const timer = setTimeout(() => deadline.abort(Object.assign(Error('Automatic verification deadline exceeded.'), { code: 'AUTOMATIC_VERIFICATION_TIMEOUT' })), Math.max(0,a.operation.deadlineAt-Date.now())); timer.unref?.();
   const verificationSignal = AbortSignal.any([...(input.signal ? [input.signal] : []), deadline.signal]);
-  let executionSettled = false, execution, abort;
+  let executionSettled = false, execution, abort,timer,dispatchStarted=false;
   try {
-    input.signal?.throwIfAborted();
+    await manager.save();
+    const remaining=operation.deadlineAt-Date.now();
+    const expired=()=>deadline.abort(Object.assign(Error('Automatic verification deadline exceeded.'),{code:'AUTOMATIC_VERIFICATION_TIMEOUT'}));
+    if(remaining<=0)expired();else{timer=setTimeout(expired,remaining);timer.unref?.();}
+    verificationSignal.throwIfAborted();
     // The normal SDK executor owns admission, sandbox, policy, final results
     // and the single result observer. Never call a verifier implementation or
     // budget.observe directly from this controller.
+    dispatchStarted=true;
     execution = Promise.resolve(manager.ctx.tools.execute({ agent: input.executionAgent ?? input.agent, signal: verificationSignal,
       maxParallelToolCalls: 1, calls: [{ type: 'tool-call', id: callId, name: 'verify_project', arguments: '{"kind":"all"}' }] }));
     manager.automaticInFlight ??= new Map(); manager.automaticInFlight.set(id, execution);
@@ -164,9 +197,26 @@ export async function automaticReview(manager, input, record, budget, settings, 
         + ' Do not repeat an unchanged passing check, weaken assertions, raise limits or expand scope.\nActual verification summary: ' + outcome);
     }
   } catch (error) {
-    if (execution && (!executionSettled||deadline.signal.aborted)) { a.operation.cancelledByCaller=input.signal?.aborted===true;uncertain(budget); return; }
+    if (dispatchStarted && (!executionSettled||deadline.signal.aborted)) { uncertain(budget); return; }
     if (input.signal?.aborted) { a.phase = 'cancelled'; throw error; }
     stop(budget, deadline.signal.aborted ? 'AUTOMATIC_VERIFICATION_TIMEOUT' : 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'Verification could not finish within its permissions and time allowance. Files are retained. Inspect the executor diagnostic before continuing.');
     manager.ctx.logger?.warn('Automatic verification unavailable: ' + (/^[A-Z0-9_]{1,80}$/.test(error.code ?? '') ? error.code : 'EXECUTOR_FAILURE'));
-  } finally { clearTimeout(timer); if (abort) verificationSignal.removeEventListener('abort', abort); if (executionSettled && !a.uncertain && a.activeCallId === callId) { a.reconciledCallId=callId;delete a.activeCallId;if(manager.automaticProcesses?.get(id)?.callId===callId&&a.operation.rangeSettled)manager.automaticProcesses.delete(id);if(a.legacyRecovery?.verificationCallId===callId)a.legacyRecovery.verificationState='settled';recoveryState(a,budget.blocked?'blocked':'recovered',budget.blocked?.code??'AUTOMATIC_RESULT_RECONCILED',!budget.blocked); } record.budget = budget; await manager.save(); if(a.uncertain)void manager.reconcileAutomatic(id).catch(()=>manager.ctx.logger?.warn('Automatic owned cleanup remains unconfirmed.')); }
+  } finally {
+    clearTimeout(timer);if(abort)verificationSignal.removeEventListener('abort',abort);
+    if(!dispatchStarted&&a.activeCallId===callId){
+      a.checks--;delete a.activeCallId;operation.admissionOutcome='NOT_DISPATCHED';a.continuationNeeded=false;
+      if(a.legacyRecovery?.verificationCallId===callId)a.legacyRecovery.verificationState='not-dispatched';
+      releaseAutomaticCancellation(manager,id,operation);
+      recoveryState(a,budget.blocked?'blocked':'recovered',operation.cancelledByCaller?'AUTOMATIC_CANCELLED':budget.blocked?.code??'AUTOMATIC_NOT_DISPATCHED',false);
+    }else if(executionSettled&&!a.uncertain&&a.activeCallId===callId){
+      a.reconciledCallId=callId;delete a.activeCallId;
+      if(manager.automaticProcesses?.get(id)?.callId===callId&&operation.rangeSettled)manager.automaticProcesses.delete(id);
+      if(a.legacyRecovery?.verificationCallId===callId)a.legacyRecovery.verificationState='settled';
+      recoveryState(a,budget.blocked?'blocked':'recovered',budget.blocked?.code??'AUTOMATIC_RESULT_RECONCILED',!budget.blocked);
+      if(operation.cancelledByCaller){a.phase='cancelled';a.continuationNeeded=false;recoveryState(a,'recovered','AUTOMATIC_CANCELLED',false);}
+      if(!a.continuationNeeded||budget.blocked)releaseAutomaticCancellation(manager,id,operation);
+    }
+    record.budget=budget;await manager.save();
+    if(a.uncertain)void manager.reconcileAutomatic(id).catch(()=>manager.ctx.logger?.warn('Automatic owned cleanup remains unconfirmed.'));
+  }
 }

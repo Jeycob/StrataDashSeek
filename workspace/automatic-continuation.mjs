@@ -1,5 +1,6 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {automaticBound} from './automatic-bounds.mjs';
+import {releaseAutomaticCancellation} from './automatic-cancellation.mjs';
 const sha=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const matches=(message,intent)=>message?.id===intent.message.id&&sha(message)===intent.messageSha256;
 const evidence=async(manager,agent,intent)=>{
@@ -13,6 +14,8 @@ const evidence=async(manager,agent,intent)=>{
 // durable dispatch intent; an uncertain queue write is observed, never retried.
 export async function continueAutomaticTask(manager,id){
  const budget=manager.budgets.get(id),a=budget?.automatic,record=manager.data.sessions[id];
+ const cancelled=()=>{a.continuationNeeded=false;a.phase='cancelled';a.recovery={state:'recovered',code:'AUTOMATIC_CANCELLED',canContinue:false};releaseAutomaticCancellation(manager,id,a.operation);return false;};
+ if(a?.operation?.cancelledByCaller)return cancelled();
  if(!a?.continuationNeeded||budget.blocked)return a?.continuation?.state==='accepted';
  const agent=manager.ctx.agents?.get(id);
  const observingUnknown=['dispatching','unknown'].includes(a.continuation?.state)&&a.recovery?.code==='AUTOMATIC_CONTINUATION_UNCONFIRMED';
@@ -24,11 +27,11 @@ export async function continueAutomaticTask(manager,id){
  const task=record.automaticRequest??record.budgetRequest,operation=a.operation;
  if(!task||task.messageId!==operation.task?.messageId||task.turn!==operation.task?.turn)return block('AUTOMATIC_ORIGINAL_TASK_CHANGED');
  let intent=a.continuation;
- const current=()=>manager.data.sessions[id]===record&&manager.budgets.get(id)===budget&&a.operation===operation&&record.root===operation.root&&(record.automaticRequest??record.budgetRequest)?.messageId===task.messageId;
+ const current=()=>manager.data.sessions[id]===record&&manager.budgets.get(id)===budget&&a.operation===operation&&!operation.cancelledByCaller&&record.root===operation.root&&(record.automaticRequest??record.budgetRequest)?.messageId===task.messageId;
  if(intent&&intent.state!=='intent'){
   if(typeof manager.ctx.sessions?.flush!=='function'||typeof manager.ctx.sessionQuery?.readSession!=='function')return block('AUTOMATIC_CONTINUATION_PROOF_UNAVAILABLE');
   if(intent.callId!==a.receipt.callId||intent.root!==record.root||intent.receiptSha256!==sha(a.receipt))return block('AUTOMATIC_CONTINUATION_IDENTITY_CHANGED');
-  try{let accepted=false;if(await automaticBound(evidence(manager,agent,intent).then(value=>accepted=value),deadline)&&accepted){intent.state='accepted';a.continuationNeeded=false;a.recovery={state:'recovered',code:'AUTOMATIC_CONTINUATION_ACCEPTED',canContinue:true};return await save();}}catch{}
+  try{let accepted=false;if(await automaticBound(evidence(manager,agent,intent).then(value=>accepted=value),deadline)&&accepted){if(operation.cancelledByCaller)return cancelled();intent.state='accepted';a.continuationNeeded=false;a.recovery={state:'recovered',code:'AUTOMATIC_CONTINUATION_ACCEPTED',canContinue:true};const saved=await save();if(operation.cancelledByCaller)return cancelled();if(saved)releaseAutomaticCancellation(manager,id,operation);return saved;}}catch{}
   return block('AUTOMATIC_CONTINUATION_UNCONFIRMED');
  }
  if(agent.status!=='idle')return false;
@@ -41,18 +44,21 @@ export async function continueAutomaticTask(manager,id){
   if(!Number.isSafeInteger(intent.baselineSeq))return block('AUTOMATIC_HISTORY_CURSOR_UNAVAILABLE');
   if(!await save())return block('AUTOMATIC_CONTINUATION_PERSISTENCE_UNCONFIRMED');
  }
+ if(operation.cancelledByCaller)return cancelled();
  if(!current()||agent.status!=='idle'||agent.inbox.nextTurn.length||agent.inbox.nextStep.length)return false;
  // Persist BEFORE the only effect. Crash between this write and dispatch is
  // deliberately unknown; a reconnect may find the matching event, never resend.
  intent.state='dispatching';if(!await save())return block('AUTOMATIC_CONTINUATION_PERSISTENCE_UNCONFIRMED');
  if(Date.now()>=deadline)return block('AUTOMATIC_CONTINUATION_PERSISTENCE_UNCONFIRMED');
+ if(operation.cancelledByCaller)return cancelled();
  if(!current())return block('AUTOMATIC_CONTINUATION_IDENTITY_CHANGED');
  if(agent.status!=='idle'||agent.inbox.nextTurn.length||agent.inbox.nextStep.length){intent.state='intent';await manager.save();return false;}
  try{
   agent.followup(intent.message);
   let accepted=false;
   if(await automaticBound(evidence(manager,agent,intent).then(value=>accepted=value),deadline)&&accepted){
-   intent.state='accepted';a.continuationNeeded=false;a.recovery.code='AUTOMATIC_CONTINUATION_ACCEPTED';return await save();
+   if(operation.cancelledByCaller)return cancelled();
+   intent.state='accepted';a.continuationNeeded=false;a.recovery.code='AUTOMATIC_CONTINUATION_ACCEPTED';const saved=await save();if(operation.cancelledByCaller)return cancelled();if(saved)releaseAutomaticCancellation(manager,id,operation);return saved;
   }
  }catch{}
  intent.state='unknown';block('AUTOMATIC_CONTINUATION_UNCONFIRMED');await save();return false;
