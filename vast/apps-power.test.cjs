@@ -3,6 +3,7 @@ const {hostExecutionBinding}=require('./fixtures/execution-binding.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path'),os=require('node:os'),http=require('node:http');
 const {AppsManager}=require('./apps-manager.cjs');
 const {DockerVM,bootstrap}=require('./apps-vm.cjs');
+const {fixture:ownedFixture}=require('./fixtures/vm-ownership.cjs');
 const {LABEL}=require('./apps-engine.cjs');
 
 test('offline user stop durably cancels only its owned published resume intent without waking',async t=>{
@@ -30,19 +31,23 @@ for(const failedStep of [null,'owned','vault'])test('log phase flip during raw r
  if(failedStep)await assert.rejects(m.logs(id),new RegExp(failedStep+' lookup failed'));else{const result=await m.logs(id);assert.match(result,/owned diagnostic/);assert(!result.includes(secret));}assert.equal(ownedReads,1);assert.equal(vaultReads,failedStep==='owned'?0:1);assert.equal(w.wakeCount,0);
 });
 test('worker capacity samples bytes and inodes with the same fresh nonce',async()=>{
- const vm={execution:hostExecutionBinding(),buffer:'HARNESS_FREE_aaaaaaaaaaaaaaaa=999999\n',serial:{destroyed:false,write(command){const nonce=command.match(/HARNESS_FREE_([a-f0-9]{16})/)[1];assert.match(command,/df -Pi \/var\/lib\/harness/);vm.buffer+='\nHARNESS_FREE_'+nonce+'=524288\nHARNESS_INODES_'+nonce+'=20000\n';}}};
- const before=Date.now();assert.equal(await DockerVM.prototype.diskFree.call(vm),512*1024**2);assert.equal(vm.freeInodes,20000);assert.ok(vm.diskCheckedAt>=before);
+ const f=ownedFixture(),vm=f.worker;await vm.start();vm.diskFree=Object.getPrototypeOf(vm).diskFree;vm.buffer='HARNESS_FREE_aaaaaaaaaaaaaaaa=999999\n';vm.serial.write=command=>{const nonce=command.match(/HARNESS_FREE_([a-f0-9]{16})/)[1];assert.match(command,/df -Pi \/var\/lib\/harness/);vm.buffer+='\nHARNESS_FREE_'+nonce+'=524288\nHARNESS_INODES_'+nonce+'=20000\n';};
+ const before=Date.now();assert.equal(await vm.diskFree(),512*1024**2);assert.equal(vm.freeInodes,20000);assert.ok(vm.diskCheckedAt>=before);f.setRecord(null);f.exit();f.close();
 });
 test('an available Docker API cannot restore containers before fresh bootstrap and isolation proof',async()=>{
- const calls=[],volumeId='a'.repeat(32),vm={execution:hostExecutionBinding(),requireCapacity(){},phase:'recovering',saved:{initialized:true,resumeIds:['b'.repeat(64)]},manifest:{volumeId},buffer:'',serial:{destroyed:false,write(){}},pid:()=>123,save(){},touch(){},diskFree:async()=>1024,startManagedContainer:async id=>{await vm.engine.owned(id);await vm.engine.request('POST','/containers/'+id+'/start');},validateResume:async ids=>{assert.deepEqual(ids,['b'.repeat(64)]);calls.push('validate-published');},engine:{json:async()=>{calls.push('info');return{CgroupVersion:'2',Labels:['io.stratadashseek.worker='+volumeId]};},owned:async()=>calls.push('owned'),request:async()=>calls.push('start')}};
- const pending=DockerVM.prototype.start.call(vm);await new Promise(r=>setTimeout(r,40));assert.deepEqual(calls,[]);assert.equal(vm.phase,'starting');vm.scriptSent=true;vm.buffer='HARNESS_READY_'+vm.nonce+'\nHARNESS_BOOT_EXIT_'+vm.nonce+'=0\n';await pending;assert.deepEqual(calls,['info','validate-published','owned','start']);assert.equal(vm.phase,'ready');assert.equal(vm.saved.controlIsolationVersion,1);
+ const calls=[],f=ownedFixture({savedState:{initialized:true,workerProcess:{version:1,state:'absent'},resumeIds:['b'.repeat(64)]}}),vm=f.worker;
+ Object.assign(vm,{startManagedContainer:async id=>{await vm.engine.owned(id);await vm.engine.request('POST','/containers/'+id+'/start');},validateResume:async ids=>{assert.deepEqual(Array.from(ids),['b'.repeat(64)]);calls.push('validate-published');}});
+ const json=vm.engine.json;vm.engine.json=async()=>{calls.push('info');return json();};vm.engine.owned=async()=>calls.push('owned');vm.engine.request=async()=>calls.push('start');
+ await vm.start();assert.deepEqual(calls,['info','validate-published','owned','start']);assert.equal(vm.phase,'ready');assert.equal(vm.saved.controlIsolationVersion,1);f.setRecord(null);f.exit();f.close();
 });
 test('failed guest isolation never becomes ready even when the Docker API is reachable',async()=>{
- let contacted=false;const vm={execution:hostExecutionBinding(),requireCapacity(){},phase:'recovering',saved:{initialized:true},manifest:{volumeId:'a'.repeat(32)},buffer:'',serial:{destroyed:false,write(){}},pid:()=>123,engine:{json:async()=>{contacted=true;return{};}}};const pending=DockerVM.prototype.start.call(vm);await new Promise(r=>setTimeout(r,40));vm.scriptSent=true;vm.buffer='HARNESS_BOOT_EXIT_'+vm.nonce+'=1\n';await assert.rejects(pending,/Guest setup failed/);assert.equal(contacted,false);assert.equal(vm.phase,'error');
+ let contacted=false;const f=ownedFixture(),vm=f.worker;vm.engine.json=async()=>{contacted=true;return{};};vm.connectSerial=async()=>{vm.serial={destroyed:false,destroy(){this.destroyed=true;}};vm.scriptSent=true;vm.buffer='HARNESS_BOOT_EXIT_'+vm.nonce+'=1\n';};
+ await assert.rejects(vm.start(),/Guest setup failed/);assert.equal(contacted,false);assert.equal(vm.phase,'error');f.setRecord(null);f.exit();f.close();
 });
 const {createPreview}=require('./apps-preview.cjs');
 test('VM shutdown inspects all owners first and awaits every stop before reporting a failure',async()=>{
- const inspected=new Set();let secondFinished=false;const vm={execution:hostExecutionBinding(),phase:'ready',pending:null,stopping:false,pid:()=>123,saved:{resumeIds:['first','second']},remember:async()=>{},engine:{owned:async id=>{if(id==='second')await new Promise(r=>setTimeout(r,10));inspected.add(id);},request:async(method,route,options)=>{assert.equal(inspected.size,2);assert.ok(options.timeout>15000);if(route.includes('first'))throw Error('First stop failed');await new Promise(r=>setTimeout(r,30));secondFinished=true;}}};await assert.rejects(DockerVM.prototype.stop.call(vm),/First stop failed/);assert.equal(secondFinished,true);assert.equal(vm.phase,'error');assert.equal(vm.stopping,false);
+ const inspected=new Set();let secondFinished=false;const f=ownedFixture(),vm=f.worker;await vm.start();vm.saved.resumeIds=['first','second'];vm.saved.containers=undefined;vm.remember=async()=>{};vm.engine={owned:async id=>{if(id==='second')await new Promise(r=>setTimeout(r,10));inspected.add(id);},request:async(method,route,options)=>{assert.equal(inspected.size,2);assert.ok(options.timeout>15000);if(route.includes('first'))throw Error('First stop failed');await new Promise(r=>setTimeout(r,30));secondFinished=true;}};
+ await assert.rejects(vm.stop(),/First stop failed/);assert.equal(secondFinished,true);assert.equal(vm.phase,'error');assert.equal(vm.stopping,false);f.setRecord(null);f.exit();f.close();
 });
 const id='a'.repeat(64);
 async function fixture(t){
@@ -61,7 +66,7 @@ test('a passive VM naps after ten minutes without resetting actual user activity
 test('busy work and awake lease prevent a VM nap',async t=>{const{manager:m,worker:w}=await fixture(t);w.phase='ready';w.lastUsed=0;m.busy='build';await m.tick();assert.equal(w.sleepCount,0);m.busy=null;m.hold(15);w.lastUsed=0;await m.tick();assert.equal(w.sleepCount,0);});
 test('failed VM poweroff cancels whole-instance sleep preparation',async t=>{const{manager:m,worker:w}=await fixture(t);w.phase='ready';w.stop=async()=>{throw Error('flush failed')};await assert.rejects(m.prepareSleep(),/flush failed/);assert.equal(m.sleepToken(),undefined);});
 test('bootstrap refuses to reformat an initialized volume or fetch replacement packages',()=>{const manifest={volumeId:'a'.repeat(32)},nonce='b'.repeat(16);const initial=bootstrap(manifest,true,nonce),resume=bootstrap(manifest,false,nonce);assert.match(initial,/mkfs\.ext4/);assert.match(initial,/test -n "\$\(blkid/);assert.doesNotMatch(resume,/mkfs\.ext4|apk --cache-dir .* update/);assert.match(resume,/REFUSE_REFORMAT_PERSISTENT_VOLUME/);assert.match(resume,/OFFLINE_PACKAGE_CACHE_UNAVAILABLE/);});
-test('simultaneous wake requests share one worker startup',async()=>{const w=Object.create(DockerVM.prototype);w.execution=hostExecutionBinding();w.stopping=false;w.requireCapacity=()=>{};w.touch=()=>{};let starts=0;w.start=async()=>{starts++;await new Promise(r=>setTimeout(r,10));};await Promise.all([w.ensure(),w.ensure(),w.ensure()]);assert.equal(starts,1);});
+test('simultaneous wake requests share one worker startup',async()=>{const {worker:w}=ownedFixture();let starts=0;w.start=async()=>{starts++;await new Promise(r=>setTimeout(r,10));};await Promise.all([w.ensure(),w.ensure(),w.ensure()]);assert.equal(starts,1);});
 test('application proxy rejects the Harness hostname before waking or forwarding cookies',async t=>{
  let requests=0,releases=0;const app=http.createServer((req,res)=>{requests++;assert.equal(req.headers.cookie,'application=fixture');assert.equal(req.headers['tailscale-user-login'],undefined);res.end('DEPLOYED');});await new Promise(r=>app.listen(0,'127.0.0.1',r));
  const manager={cfg:{applicationHost:'100.122.37.80'},async beginPreview(){return()=>{releases++;};}};const proxy=createPreview(manager,app.address().port);await new Promise(r=>proxy.listen(0,'127.0.0.1',r));t.after(async()=>{for(const s of [proxy,app])await new Promise(r=>s.close(r));});

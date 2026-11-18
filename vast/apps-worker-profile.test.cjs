@@ -18,8 +18,8 @@ test('observed driver requires actual measured metadata and is distinguished fro
  for(const driver of ['secret-token',{},undefined]){const unknown=workerProfile(manifest,{driver,at:1234,ready:true});assert.equal(unknown.observedStorageDriver,null);assert.equal(unknown.storageObservedAt,null);assert.equal(unknown.observedInRunningBoot,false);}
  assert.equal(workerProfile(manifest,{driver:'vfs',at:1234,ready:false}).observedInRunningBoot,false);
 });
-test('passive VM status reports profile without waking, reading files or treating stale observations as current',()=>{
- const vm={execution:hostExecutionBinding(),phase:'asleep',manifest,cfg:{vm:{idleSeconds:600}},saved:{initialized:true,controlIsolationVersion:1},pid:()=>null,capacityStatus:()=>({allowed:true,phase:'legacy',diskBytes:manifest.diskBytes}),observedStorageDriver:'vfs',storageObservedAt:1234,ensure(){throw Error('must not wake');}};
- const s=DockerVM.prototype.status.call(vm);assert.equal(s.profile.diskBytes,manifest.diskBytes);assert.equal(s.profile.observedInRunningBoot,false);assert.equal(s.controlIsolation.verified,false);
- vm.phase='ready';assert.equal(DockerVM.prototype.status.call(vm).profile.observedInRunningBoot,true);
+test('passive VM status reports profile without waking or treating stale observations as current',async()=>{
+ const {fixture}=require('./fixtures/vm-ownership.cjs'),f=fixture(),vm=f.worker;vm.observedStorageDriver='vfs';vm.storageObservedAt=1234;
+ const before=f.events.length,s=vm.status();assert.equal(s.profile.diskBytes,manifest.diskBytes);assert.equal(s.profile.observedInRunningBoot,false);assert.equal(s.controlIsolation.verified,false);assert.equal(f.events.length,before);
+ await vm.start();assert.equal(vm.status().profile.observedInRunningBoot,true);f.setRecord(null);f.exit();f.close();
 });

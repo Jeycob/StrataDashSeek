@@ -3,12 +3,13 @@ const test=require('node:test'),assert=require('node:assert/strict'),fs=require(
 const {DockerVM,bootstrap}=require('./apps-vm.cjs');
 const {LABEL}=require('./apps-engine.cjs');
 const {hostExecutionBinding,executionBindingFixture}=require('./fixtures/execution-binding.cjs');
+const {fixture:ownedFixture}=require('./fixtures/vm-ownership.cjs');
 
 // Evaluate the actual controller with inert process/filesystem adapters. A
 // spawn attempt records its exact argv then throws; it never creates a child.
 function fixture({mode='host-compat',enabled=true,execution=executionBindingFixture(mode)}={}){
  const events=[],manifest={version:1,vcpus:1,memoryMiB:2048,diskBytes:3*1024**3,volumeId:'a'.repeat(32)},manifestSha256=crypto.createHash('sha256').update(JSON.stringify(manifest)).digest('hex');
- const exported={projects:{fd:31},transport:{fd:32},toolchain:{fd:33}},saved={initialized:true,resumeIds:[],containers:[],controlIsolationVersion:1,resourceBootstrapVersion:2};
+ const exported={projects:{fd:31},transport:{fd:32},toolchain:{fd:33}},saved={workerProcess:{version:1,state:'absent'},initialized:true,resumeIds:[],containers:[],controlIsolationVersion:1,resourceBootstrapVersion:2};
  let afterStat,afterExports,prepareHook,spawned;
  const project=require('./apps-project-vm.cjs'),projectAdapter={...project,
   forwards(){events.push('forwards');return project.forwards();},
@@ -17,7 +18,7 @@ function fixture({mode='host-compat',enabled=true,execution=executionBindingFixt
   closeExports(value){if(value)events.push('close-exports');},
  };
  for(const method of ['prepare','health','prepareEgress','egressHealth'])projectAdapter[method]=async()=>{events.push(method);prepareHook?.();return {method};};
- const fakeFS={existsSync:()=>true,readFileSync(file){const name=String(file).replaceAll('\\','/');if(name.endsWith('/manifest.json'))return Buffer.from(JSON.stringify(manifest));if(name.endsWith('/vm.json'))return JSON.stringify(saved);throw Object.assign(Error('absent'),{code:'ENOENT'});},unlinkSync(){events.push('remove-stale-ipc');},statfsSync(){afterStat?.();return{bavail:16*1024**3,bsize:1};},openSync(){events.push('log');return 20;},closeSync(){events.push('close-log');}};
+ const fakeFS={lstatSync(){throw Object.assign(Error('absent'),{code:'ENOENT'});},existsSync:()=>true,readFileSync(file){const name=String(file).replaceAll('\\','/');if(name.endsWith('/manifest.json'))return Buffer.from(JSON.stringify(manifest));if(name.endsWith('/vm.json'))return JSON.stringify(saved);throw Object.assign(Error('absent'),{code:'ENOENT'});},unlinkSync(){events.push('remove-stale-ipc');},statfsSync(){afterStat?.();return{bavail:16*1024**3,bsize:1};},openSync(){events.push('log');return 20;},closeSync(){events.push('close-log');}};
  const module={exports:{}};
  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'apps-vm.cjs'),'utf8'),{module,exports:module.exports,process:{getuid:()=>1001},Buffer,Date,setTimeout,clearTimeout,structuredClone,console,require(name){
   if(name==='node:fs')return fakeFS;
@@ -67,13 +68,14 @@ test('stale execution status stays readable for settlement while retaining scope
 });
 
 test('owned shutdown remains available after execution closes and stops ephemeral containers without saving their resume IDs',async()=>{
- const execution=executionBindingFixture('isolated-guest'),ids=['a'.repeat(64),'b'.repeat(64),'c'.repeat(64)],events=[];let live=73;
- const worker=Object.create(DockerVM.prototype);Object.assign(worker,{execution:execution.binding,cfg:{enabled:true,vm:{enabled:true}},phase:'ready',saved:{},pid:()=>live,save(){events.push('save');},serial:{destroyed:false,destroy(){this.destroyed=true;},write(command){assert.match(command,/sync; poweroff/);events.push('poweroff');live=null;}},engine:{async list(){return[{Id:ids[0],State:'running',Labels:{[LABEL+'.role']:'application'}},{Id:ids[1],State:'running',Labels:{[LABEL+'.role']:'project-editor'}},{Id:ids[2],State:'running',Labels:{[LABEL+'.role']:'test'}}];},async owned(id){events.push('owned:'+id);},async request(method,route){assert.equal(events.filter(event=>event.startsWith('owned:')).length,2);events.push('stop:'+route);}}});
+ const execution=executionBindingFixture('isolated-guest'),ids=['a'.repeat(64),'b'.repeat(64),'c'.repeat(64)],events=[];
+ const f=ownedFixture({execution:execution.binding}),worker=f.worker;await worker.start();
+ Object.assign(worker,{save(){events.push('save');},serial:{destroyed:false,destroy(){this.destroyed=true;},write(command){assert.match(command,/sync; poweroff/);events.push('poweroff');f.setRecord(null);f.exit();f.close();}},engine:{async list(){return[{Id:ids[0],State:'running',Labels:{[LABEL+'.role']:'application'}},{Id:ids[1],State:'running',Labels:{[LABEL+'.role']:'project-editor'}},{Id:ids[2],State:'running',Labels:{[LABEL+'.role']:'test'}}];},async owned(id){events.push('owned:'+id);},async request(method,route){assert.equal(events.filter(event=>event.startsWith('owned:')).length,2);events.push('stop:'+route);}}});
  execution.fail();await worker.stop();assert.equal(worker.phase,'asleep');assert.deepEqual(worker.saved.resumeIds,[ids[0]]);assert.equal(worker.saved.containers.length,2);assert.equal(events.filter(event=>event.startsWith('stop:')).length,2);assert(events.includes('poweroff'));
 });
 
 test('an old ready worker cannot reuse its flag without unified cgroup proof',async()=>{
- const worker={execution:hostExecutionBinding(),requireCapacity(){},phase:'ready',saved:{initialized:true,controlIsolationVersion:1,resumeIds:['b'.repeat(64)]},manifest:{volumeId:'a'.repeat(32)},buffer:'',serial:{destroyed:false,write(){}},pid:()=>73,engine:{available:async()=>assert.fail('old ready flag cannot bypass proof'),json:async()=>({CgroupVersion:'1',Labels:['io.stratadashseek.worker='+'a'.repeat(32)]})},startManagedContainer:async()=>assert.fail('v1 never resumes')};
- const pending=DockerVM.prototype.start.call(worker);await new Promise(resolve=>setTimeout(resolve,10));worker.scriptSent=true;worker.buffer='HARNESS_READY_'+worker.nonce+'\nHARNESS_BOOT_EXIT_'+worker.nonce+'=0\n';await assert.rejects(pending,{code:'APPS_CGROUP_V2_REQUIRED'});assert.equal(worker.phase,'error');
+ const f=ownedFixture({cgroupVersion:'1'}),worker=f.worker;worker.phase='ready';worker.saved.controlIsolationVersion=1;worker.saved.resumeIds=['b'.repeat(64)];worker.engine.available=async()=>assert.fail('old ready flag cannot bypass proof');worker.startManagedContainer=async()=>assert.fail('v1 never resumes');
+ await assert.rejects(worker.start(),{code:'APPS_CGROUP_V2_REQUIRED'});assert.equal(worker.phase,'error');f.setRecord(null);f.exit();f.close();
  const script=bootstrap(worker.manifest,false,'b'.repeat(16));assert.match(script,/rc_cgroup_mode="unified"/);assert.match(script,/REFUSE_UNIFIED_COLD_BOOT_REQUIRED/);assert.match(script,/REFUSE_DAEMON_LEAF_COLD_BOOT_REQUIRED/);assert.match(script,/--cgroup-parent=\/homeai-containers/);assert.doesNotMatch(script,/umount.*cgroup|mount.*remount/);
 });
