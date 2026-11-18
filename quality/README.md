@@ -1,9 +1,10 @@
 # Verified project checks
 
 `verify_project` is an additive Harness tool for the managed workspace runtime.
-It does not change inference parameters, install packages, start application servers,
-or create a second repair loop. Native shell confinement and the shared repair budget
-remain authoritative. Declare the contract early and verify a thin working slice.
+It does not change inference parameters, install packages, or create a second repair
+loop. A browser check can explicitly declare a temporary server as described below.
+Native shell confinement and the shared repair budget remain authoritative.
+Declare the contract early and verify a thin working slice.
 Selecting one kind requires only that kind's browser plans to exist. Other declared
 plan paths remain confined and become required when their stage or `all` is selected.
 All declared source paths still need to exist. A partial pass leaves other required
@@ -31,12 +32,15 @@ Create `.harness-quality.json` in the project root (adapt commands and sources):
 ```json
 {
   "version": 1,
-  "sources": ["src", "tests", "package.json"],
+  "sources": ["src", "tests", "package.json", "server.mjs"],
   "requiredKinds": ["build", "test", "browser", "acceptance"],
   "checks": [
     {"id":"build","kind":"build","command":["npm","run","build"]},
     {"id":"unit","kind":"test","command":["node","--test","tests/unit.test.mjs"]},
-    {"id":"flows","kind":"browser","plan":".harness-browser.json","timeoutMs":60000},
+    {
+      "id":"flows","kind":"browser","plan":".harness-browser.json","timeoutMs":60000,
+      "server":{"command":["node","server.mjs"],"readinessTimeoutMs":5000}
+    },
     {"id":"business","kind":"acceptance","command":["node","--test","tests/acceptance.test.mjs"]}
   ]
 }
@@ -74,8 +78,36 @@ horizontal overflow and console/page errors. Unknown options fail to prevent sil
 assertion typos. Requests outside the application's origin are blocked; proxy API
 requests through the app. Use local assets for repeatable checks.
 
-Run the app through `project-run` before browser verification. Prepared Chromium is
-required; missing browser produces failure, never DOM-only replacement evidence.
+For managed browser verification, use the browser check's optional `server` object
+to start and verify the app within one admitted operation. Replace the illustrative
+`["node","server.mjs"]` with the project's actual entry point and include its source
+in `sources`. `command` is a direct argv array, not a shell command. Do not start a
+separate background `project-run` server first: it can hold the same execution slot
+that `verify_project` needs, leaving verification waiting behind its own server.
+
+The declared server uses the browser check's project-relative `cwd` and allowed
+`env`. Its browser plan must target exactly `127.0.0.1` and an assigned project port,
+as in `http://127.0.0.1:${PORT}` above; the actual server must listen on that port.
+Do not declare a port, project root, PID or executor inside `server`.
+`readinessTimeoutMs` is optional (default 5000; integer 100–30000 ms). It is an upper
+bound within the original deadline; existing connection limits may be shorter.
+Increasing it does not extend the operation or guarantee a longer startup window.
+
+Server startup, readiness and browser checks share the original operation deadline;
+the check's `timeoutMs` can shorten it. The browser receives only the time remaining
+after startup and readiness. Completion, failure, timeout or Stop terminates the
+server owned by this verification and waits for its process range, including
+children, to finish. Closing a preview or receiving a Stop acknowledgement alone
+does not prove termination; an unconfirmed process range remains pending, not passed.
+
+An explicit `server` requires the managed runtime capability. If it is unavailable,
+the check fails without running the browser; it does not fall back to an unmanaged
+server. Omitting `server` preserves external-server mode: verification starts no
+server and expects the configured endpoint to be available independently. Its
+existing assertions and evidence requirements still apply.
+
+Prepared Chromium is required; missing browser produces failure, never DOM-only
+replacement evidence.
 Limits: 4 viewports, 16 flows, 100 steps/flow, 120s native tool budget. Split large
 suites into stages. Output and actual PNGs live under `.harness/quality/`, excluded
 from source fingerprints. Do not list generated files among `sources`.
