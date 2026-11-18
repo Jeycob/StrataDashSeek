@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 import { changedApplicationCode } from './verification-guidance.mjs';
+import {acknowledgeAutomatic,recoveryState} from './automatic-recovery.mjs';
 
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 export const AUTOMATIC_REVIEW_DEFAULTS = Object.freeze({ maxTaskSteps: 240, maxAutomaticChecks: 3 });
 export const REPAIR_STEPS = 20;
 export const VERIFICATION_TIMEOUT_MS = 120000;
 export function automaticReviewView(value) {
-  return value ? Object.fromEntries(['version','taskSteps','checks','nextCheckAt','phase','proofSerial','lastVerified','lastCheck','reason'].filter(key => value[key] !== undefined).map(key => [key,value[key]])) : undefined;
+  return value ? {...Object.fromEntries(['version','taskSteps','checks','nextCheckAt','phase','proofSerial','lastVerified','lastCheck','reason','recovery'].filter(key => value[key] !== undefined).map(key => [key,value[key]])),terminalAcknowledged:value.terminalAcknowledged===true} : null;
 }
 const stop = (budget, code, message) => {
   budget.blocked = { code, message };
@@ -17,7 +18,8 @@ const stop = (budget, code, message) => {
 const uncertain = budget => {
   budget.automatic.uncertain = true;
   budget.automatic.terminalAcknowledged ??= false;
-  return stop(budget, 'AUTOMATIC_VERIFICATION_UNCERTAIN', 'A verification has no acknowledged completion. Files and its work allowance are retained. Operator review is required before any further work.');
+  recoveryState(budget.automatic,'pending','AUTOMATIC_TERMINAL_PENDING');
+  return stop(budget, 'AUTOMATIC_VERIFICATION_UNCERTAIN', 'Verification completion is being reconciled against its owned terminal evidence. Files and accounting are retained.');
 };
 
 // Only the server's actual human-message identity can begin a new allowance.
@@ -63,7 +65,7 @@ export function recordVerifiedProgress(budget, { kind, manifestHash }) {
 export function admitAutomaticStep(budget, settings) {
   const a = budget.automatic;
   if (budget.blocked) return false;
-  if (a.taskSteps >= settings.maxTaskSteps) return stop(budget, 'TASK_BUDGET', 'The work allowance is exhausted. Files are retained. A new user request is required for another bounded task.');
+  if (!Number.isSafeInteger(a.taskSteps+1)||!Number.isSafeInteger(budget.steps+1)) return stop(budget,'AUTOMATIC_STATE_INVALID','Step accounting cannot be represented safely. Files are retained.');
   a.taskSteps++; budget.steps++;
   return true;
 }
@@ -77,12 +79,10 @@ const diagnostics = (manager, id, text) => {
 
 export async function automaticReview(manager, input, record, budget, settings, freshHuman) {
   const a = budget.automatic, id = input.agent.id;
-  if (budget.blocked?.code === 'STAGE_BUDGET' && freshHuman && settings.maxAutomaticChecks > 0) { budget.blocked = null; a.nextCheckAt = a.taskSteps; }
+  if (['STAGE_BUDGET','TASK_BUDGET','AUTOMATIC_CHECK_LIMIT'].includes(budget.blocked?.code)&&!a.activeCallId&&!a.uncertain) { budget.blocked = null; a.nextCheckAt = a.taskSteps; }
   if (budget.blocked) return;
   if (a.phase === 'checking' || a.uncertain) { uncertain(budget); return; }
-  if (a.taskSteps >= settings.maxTaskSteps) { admitAutomaticStep(budget, settings); return; }
   if (a.taskSteps < a.nextCheckAt) return; // Main interval or bounded repair window, never a stage pass.
-  if (settings.maxAutomaticChecks === 0) { stop(budget, 'STAGE_BUDGET', 'The stage is ready for verification. Automatic checks are disabled in this workspace. Files are retained.'); return; }
   let mode, changes;
   try {
     mode = manager.ctx.sandboxPolicy.resolve({ session: (input.executionAgent ?? input.agent).session }).mode;
@@ -94,16 +94,20 @@ export async function automaticReview(manager, input, record, budget, settings, 
   if (mode === 'read-only' || record.legacy || !changedApplicationCode(changes?.files)) {
     // Read-only analysis and prose are not application verification. Do not
     // install a contract, borrow owner write permission or fabricate a pass.
-    a.phase = 'working'; a.nextCheckAt = Math.min(settings.maxTaskSteps, a.taskSteps + settings.maxStageSteps);
+    a.phase = 'working'; a.nextCheckAt = a.taskSteps + settings.maxStageSteps;
     diagnostics(manager, id, '[Harness: bounded analysis] No changed application code is available for automatic project verification, or this executing scope is read-only. Continue only within its existing permissions and total task allowance. Do not create a test contract or modify files merely to renew a stage.');
     return;
   }
-  if (a.checks >= settings.maxAutomaticChecks) { stop(budget, 'AUTOMATIC_CHECK_LIMIT', 'Automatic verification attempts are exhausted. Files and verification results are retained; no additional work was started.'); return; }
   if (typeof manager.ctx.tools?.execute !== 'function') { stop(budget, 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'The verification executor is unavailable. Files are retained; no replacement executor was installed.'); return; }
   const callId = 'automatic-review-' + crypto.randomUUID();
-  a.phase = 'checking'; a.checks++; a.activeCallId = callId; delete a.lastAutomaticOutcome; record.budget = budget; await manager.save();
+  a.phase = 'checking'; a.checks++; a.activeCallId = callId; delete a.lastAutomaticOutcome;delete a.receipt;
+  if(a.continuation){a.previousContinuation={callId:a.continuation.callId,messageId:a.continuation.message?.id,state:a.continuation.state};delete a.continuation;}a.continuationNeeded=false;
+  const sourceHash=(await manager.review(id)).sourceHash,startedAt=Date.now();
+  a.terminalAcknowledged=false;a.operation={callId,ownerId:id,root:record.root,sourceHash,task:structuredClone(record.automaticRequest??record.budgetRequest),startedAt,deadlineAt:startedAt+VERIFICATION_TIMEOUT_MS};
+  if(a.legacyRecovery?.verificationState==='required'){a.legacyRecovery.verificationState='started';a.legacyRecovery.verificationCallId=callId;a.continuationNeeded=true;}
+  recoveryState(a,'pending','AUTOMATIC_VERIFICATION_RUNNING');record.budget = budget; await manager.save();
   const deadline = new AbortController();
-  const timer = setTimeout(() => deadline.abort(Object.assign(Error('Automatic verification deadline exceeded.'), { code: 'AUTOMATIC_VERIFICATION_TIMEOUT' })), VERIFICATION_TIMEOUT_MS); timer.unref?.();
+  const timer = setTimeout(() => deadline.abort(Object.assign(Error('Automatic verification deadline exceeded.'), { code: 'AUTOMATIC_VERIFICATION_TIMEOUT' })), Math.max(0,a.operation.deadlineAt-Date.now())); timer.unref?.();
   const verificationSignal = AbortSignal.any([...(input.signal ? [input.signal] : []), deadline.signal]);
   let executionSettled = false, execution, abort;
   try {
@@ -117,10 +121,10 @@ export async function automaticReview(manager, input, record, budget, settings, 
     const drained = () => {
       executionSettled = true;
       if (manager.automaticInFlight.get(id) === execution) manager.automaticInFlight.delete(id);
-      if (a.uncertain) { a.terminalAcknowledged = true; record.budget = budget; void Promise.resolve().then(() => manager.save()).catch(() => manager.ctx.logger?.warn('Verification terminal acknowledgement could not be saved.')); }
+      acknowledgeAutomatic(manager,id,callId);
     };
-    // Always observe late settlement, but never credit it as an automatic
-    // continuation or clear the durable unknown fence after a timeout.
+    // A late batch drain triggers receipt reconciliation; it never fabricates
+    // a passing report or submits another prompt.
     execution.then(drained, drained);
     const interrupted = new Promise((resolve, reject) => {
       abort = () => reject(verificationSignal.reason ?? Error('Verification interrupted.'));
@@ -128,6 +132,7 @@ export async function automaticReview(manager, input, record, budget, settings, 
     });
     const batch = await Promise.race([execution, interrupted]);
     await manager.drainToolResults(id);
+    if(a.operation.rangeRequired&&(!a.operation.rangeQualified||!a.operation.rangeSettled)){uncertain(budget);return;}
     input.signal?.throwIfAborted();
     deadline.signal.throwIfAborted();
     for (const context of batch.additionalContexts ?? []) input.agent.inject?.(context);
@@ -140,6 +145,7 @@ export async function automaticReview(manager, input, record, budget, settings, 
       stop(budget, 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'The final verification outcome was not observed. Files are retained; no progress was inferred from another operation.'); return;
     }
     const report = settled.value;
+    a.recoveryFailures=0;
     a.lastCheck = { at: Date.now(), passed: report?.passed === true, stale: report?.stale === true,
       checks: Array.isArray(report?.checks) ? report.checks.slice(0,24).filter(check => check && typeof check.id === 'string').map(check => ({ id: check.id.slice(0,80), passed: check.passed === true })) : [] };
     const outcome = JSON.stringify({ passed: report?.passed, complete: report?.complete, stale: report?.stale,
@@ -151,16 +157,16 @@ export async function automaticReview(manager, input, record, budget, settings, 
       diagnostics(manager, id, '[Harness: verified progress] The automatic project check completed on the current source and recorded new evidence. Continue the existing task with a smaller verified milestone. A partial check is not full completion; inspect required kinds and real application behavior.\nActual verification summary: ' + outcome);
     } else {
       const repeatedPass = report?.passed === true && report?.stale === false && typeof report?.sourceHash === 'string' && budget.checks.all?.manifestHash === report.sourceHash;
-      a.phase = repeatedPass ? 'working' : 'repairing'; a.nextCheckAt = Math.min(settings.maxTaskSteps, a.taskSteps + REPAIR_STEPS);
+      a.phase = repeatedPass ? 'working' : 'repairing'; a.nextCheckAt = a.taskSteps + REPAIR_STEPS;
       diagnostics(manager, id, (repeatedPass
         ? '[Harness: repeated passing evidence] This current-source check passed, but repeats existing evidence and earns no stage or task-budget renewal. If the original request is satisfied, report the real result and finish. Otherwise implement only the next smaller remaining requirement; do not invent a repair for already passing behavior.'
-        : '[Harness: bounded repair] Verification did not establish new progress. Read the reported owned log/report paths, repair the specific failure or missing contract, and run a relevant foreground verify_project check within the next ' + Math.min(REPAIR_STEPS, settings.maxTaskSteps - a.taskSteps) + ' steps. Preserve current files and report a concrete blocker only when it requires an owner decision.')
+        : '[Harness: bounded repair] Verification did not establish new progress. Read the reported owned log/report paths, repair the specific failure or missing contract, and run a relevant foreground verify_project check within the next ' + REPAIR_STEPS + ' steps. Preserve current files and report a concrete blocker only when it requires an owner decision.')
         + ' Do not repeat an unchanged passing check, weaken assertions, raise limits or expand scope.\nActual verification summary: ' + outcome);
     }
   } catch (error) {
-    if (execution && !executionSettled) { uncertain(budget); return; }
+    if (execution && (!executionSettled||deadline.signal.aborted)) { a.operation.cancelledByCaller=input.signal?.aborted===true;uncertain(budget); return; }
     if (input.signal?.aborted) { a.phase = 'cancelled'; throw error; }
     stop(budget, deadline.signal.aborted ? 'AUTOMATIC_VERIFICATION_TIMEOUT' : 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'Verification could not finish within its permissions and time allowance. Files are retained. Inspect the executor diagnostic before continuing.');
     manager.ctx.logger?.warn('Automatic verification unavailable: ' + (/^[A-Z0-9_]{1,80}$/.test(error.code ?? '') ? error.code : 'EXECUTOR_FAILURE'));
-  } finally { clearTimeout(timer); if (abort) verificationSignal.removeEventListener('abort', abort); if (executionSettled && !a.uncertain && a.activeCallId === callId) delete a.activeCallId; record.budget = budget; await manager.save(); }
+  } finally { clearTimeout(timer); if (abort) verificationSignal.removeEventListener('abort', abort); if (executionSettled && !a.uncertain && a.activeCallId === callId) { a.reconciledCallId=callId;delete a.activeCallId;if(manager.automaticProcesses?.get(id)?.callId===callId&&a.operation.rangeSettled)manager.automaticProcesses.delete(id);if(a.legacyRecovery?.verificationCallId===callId)a.legacyRecovery.verificationState='settled';recoveryState(a,budget.blocked?'blocked':'recovered',budget.blocked?.code??'AUTOMATIC_RESULT_RECONCILED',!budget.blocked); } record.budget = budget; await manager.save(); if(a.uncertain)void manager.reconcileAutomatic(id).catch(()=>manager.ctx.logger?.warn('Automatic owned cleanup remains unconfirmed.')); }
 }

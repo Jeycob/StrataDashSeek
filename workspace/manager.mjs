@@ -9,10 +9,11 @@ import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, sa
 import { LiveChanges } from './changes.mjs';
 import { previewCheckpointRestore, restoreCheckpointTransaction, recoverCheckpointRestore, checkpointRecoveryStatus } from './checkpoint-restore.mjs';
 import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
-import { guideFirstCheck, warnStageBudget } from './verification-guidance.mjs';
+import { guideFirstCheck } from './verification-guidance.mjs';
 import { verificationStatusMayBeMasked } from './shell-status.mjs';
 import { beginUserRequest } from './turn-budget.mjs';
 import { prepareAutomaticRequest, automaticReview, admitAutomaticStep } from './automatic-review.mjs';
+import {automaticReceipt,reconcileAutomatic,retainAutomaticProcess} from './automatic-recovery.mjs';
 import { registeredSelection, validateWorkspaceModel } from './model-selection.mjs';
 import { createIndependentProject } from './project-repository.mjs';
 import { bindProjectExecution } from './execution-mode.mjs';
@@ -160,7 +161,7 @@ export class WorkspaceManager {
       // the user's project from starting when disk reserve is unavailable.
       try { await this.checked(() => this.changes.initialize(agent.id, record, { projectCreated: true, signal })); }
       catch (error) { this.execution.assertUnchanged(); this.ctx.logger?.warn('Change baseline unavailable: ' + (error.code ?? 'CHANGES_UNAVAILABLE')); }
-      this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec use the same confined foreground project executor and export PORT, API_PORT, DATABASE_URL and the prepared tool paths. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs; quality contract documentation: /data/harness/app/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Verification never renews the total task allowance. Repeated identical errors without progress or an exhausted allowance stop safely with retained files.`));
+      this.pendingNotices.set(agent.id, notice(`Project isolation is ready. Work only in ${JSON.stringify(root)}. ${baseCommit ? `Source commit: ${baseCommit}; source checkout and uncommitted files were not copied or changed.` : 'This independent task has a new empty project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec use the same confined foreground project executor and export PORT, API_PORT, DATABASE_URL and the prepared tool paths. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. Browser: /data/harness/dev/browser/node_modules/playwright; doctor: /data/harness/app/development/doctor.cjs; quality contract documentation: /data/harness/app/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Step and check counts record actual work and never require another approval by themselves. Repeated errors without progress stop with retained files and a concrete diagnostic.`));
       return record;
     });
   }
@@ -208,7 +209,7 @@ export class WorkspaceManager {
         this.grants.set(agent.id, this.ctx.sandboxPolicy.registerWritableRoot(agent.session, root));
         await this.checked(() => this.ctx.workingDirectory.set(agent, root, signal));
       }
-      this.pendingNotices.set(agent.id, notice(`Project files are prepared. Command and editor readiness are checked separately when requested. Work only in ${JSON.stringify(root)}. ${sourceCommit ? `Source commit: ${sourceCommit}; independent shallow Git baseline, with no borrowed object store. Source checkout and uncommitted files were not copied or changed.` : independentRepository ? 'This independent task has a new empty Git repository and an initial commit.' : 'This conversation retains its selected existing directory; commands require an independently enrolled project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec require the same isolated guest executor, where this project is mounted at /workspace and DATABASE_URL=file:/workspace/.harness/data/app.sqlite. PORT, API_PORT and TEST_PORT use the assigned values. If runtime admission or prepared tools are unavailable, report the diagnostic and retain the files. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. When the immutable guest toolchain is available, its quality contract documentation is /opt/homeai/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Verification never renews the total task allowance. Repeated identical errors without progress or an exhausted allowance stop safely with retained files.`));
+      this.pendingNotices.set(agent.id, notice(`Project files are prepared. Command and editor readiness are checked separately when requested. Work only in ${JSON.stringify(root)}. ${sourceCommit ? `Source commit: ${sourceCommit}; independent shallow Git baseline, with no borrowed object store. Source checkout and uncommitted files were not copied or changed.` : independentRepository ? 'This independent task has a new empty Git repository and an initial commit.' : 'This conversation retains its selected existing directory; commands require an independently enrolled project.'} App/API/test ports: ${ports.join(', ')}. Use the project-specific database ${JSON.stringify(databasePath)}; never reuse another project database. bash and project_exec require the same isolated guest executor, where this project is mounted at /workspace and DATABASE_URL=file:/workspace/.harness/data/app.sqlite. PORT, API_PORT and TEST_PORT use the assigned values. If runtime admission or prepared tools are unavailable, report the diagnostic and retain the files. Read-only permissions stay read-only. For a temporary server, use run_in_background:true and keep its registry-issued job ID; inspect it with job_output and stop only that owned job with job_kill. Do not use nohup, setsid, pkill or killall for project process management. Run milestone verification in the foreground so its real completion is recorded. When the immutable guest toolchain is available, its quality contract documentation is /opt/homeai/quality/README.md. Declare .harness-quality.json early and use verify_project for build/test/browser/acceptance milestones. Browser checks require navigation, positive UI assertions and screenshots. Passing unit tests alone is not completion. Work in small milestones. After ${settings.maxStageSteps} steps the controller automatically checks the declared project contract; ordinary failures receive a bounded repair window. Step and check counts record actual work and never require another approval by themselves. Repeated errors without progress stop with retained files and a concrete diagnostic.`));
       return record;
     });
   }
@@ -231,6 +232,8 @@ export class WorkspaceManager {
     const pendingReview = this.automaticReviews.get(agent.id);
     if (pendingReview) { try { await pendingReview; } catch (error) { if (signal?.aborted) throw error; } }
     signal?.throwIfAborted(); this.execution.assertUnchanged();
+    await this.reconcileAutomatic(agent.id);
+    if(['dispatching','unknown'].includes(budget.automatic?.continuation?.state)&&budget.automatic.recovery?.canContinue!==true)throw new WorkbenchError('AUTOMATIC_CONTINUATION_UNCONFIRMED','The recorded continuation has no confirmed durable acceptance. It will not be submitted again.');
     const effective = { ...DEFAULTS, ...settings }, freshHuman = prepareAutomaticRequest(record, budget, { turn, messages, owner: initiator === agent.id }, effective.maxStageSteps);
     if (initiator === agent.id && beginUserRequest(record, budget, { turn, messages })) {
       delete record.stageBudgetWarningStage; delete record.stageBudgetWarningInspection;
@@ -246,7 +249,6 @@ export class WorkspaceManager {
       if (!Object.hasOwn(budget.automatic.admitted, stepKey) && admitAutomaticStep(budget, effective)) { budget.automatic.admitted[stepKey] = true; record.lastStep = stepKey; }
     }
     await this.checked(() => guideFirstCheck(this, agent, record, budget, signal));
-    await this.checked(() => warnStageBudget(this, agent, record, budget, settings.maxStageSteps, signal, accessSession));
     record.budget = budget; await this.save();
     if (budget.blocked) throw new WorkbenchError(budget.blocked.code, budget.blocked.message + ' Files and verification results are retained. See Workspace → Run review for details.');
   }
@@ -304,8 +306,16 @@ export class WorkspaceManager {
     void work.then(() => { if (this.resultWork.get(id) === work) this.resultWork.delete(id); });
   }
   async drainToolResults(id) { await this.resultWork.get(id); }
-  async toolResult(exec, result, verificationKind) {
-    const record = this.data.sessions[exec.agent?.id]; if (!record || exec.signal?.aborted) return;
+  async toolResult(exec, result, verificationKind, receipt) {
+    const id=exec.agent?.id,record = this.data.sessions[id]; if (!record) return;
+    const automatic=this.budgets.get(id)?.automatic;
+    if(exec.name==='verify_project'&&automatic?.accountedCallId===exec.callId)return;
+    if(!receipt&&automaticReceipt(this,exec,result)){
+      record.budget=this.budgets.get(id);await this.save();
+      if(exec.signal?.aborted||automatic.uncertain||automatic.operation.rangeRequired&&(!automatic.operation.rangeQualified||!automatic.operation.rangeSettled))return;
+    }
+    if(exec.signal?.aborted)return;
+    if(receipt&&receipt!==automatic?.receipt)throw new WorkbenchError('AUTOMATIC_TERMINAL_RECEIPT_MISMATCH','Reconciliation requires the retained final observer receipt.');
     const structured = exec.name === 'verify_project', value = result.value;
     // A registry-issued acknowledgement means work is still running. It is
     // neither failed verification nor a stage pass; inspect the owned job and
@@ -363,7 +373,8 @@ export class WorkspaceManager {
     }
     let manifest;
     if (recovery.verification) try { manifest = await sourceManifest(record.root, { signal: exec.signal }); } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
-    const proofHash = structured ? value?.stale === false && value?.sourceHash === manifest?.sha256 ? manifest?.sha256 : undefined
+    if(exec.signal?.aborted)return;
+    const proofHash = structured ? value?.stale === false && value?.sourceHash === manifest?.sha256 && (!automatic?.activeCallId||automatic.activeCallId!==exec.callId||automatic.operation?.sourceHash===value.sourceHash) ? manifest?.sha256 : undefined
       : this.budgets.get(exec.agent.id)?.automatic ? undefined : manifest?.sha256;
     if (structured && record.lastVerification && !proofHash) record.lastVerification.accepted = false;
     const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, recovery, operationScope, manifestHash: proofHash }, this.settings(exec.agent.session).noProgressLimit);
@@ -372,7 +383,7 @@ export class WorkspaceManager {
       if (diagnostics.size < 4 || diagnostics.has('VERIFICATION_SOURCE_UNBOUND')) diagnostics.set('VERIFICATION_SOURCE_UNBOUND', '[Harness: source binding unavailable] The foreground check returned its actual success, but shell execution has no trusted before/after source proof. Its output is retained and no stage was renewed. Use source-bound verify_project for canonical stage verification.');
       this.pendingDiagnostics.set(exec.agent.id, diagnostics);
     }
-    if (budget.automatic && typeof exec.callId === 'string' && budget.automatic.activeCallId === exec.callId) budget.automatic.lastAutomaticOutcome = { callId: exec.callId, verifiedProgress: decision.verifiedProgress === true, failed: recovery.failed, sourceHash: proofHash };
+    if (budget.automatic && typeof exec.callId === 'string' && budget.automatic.activeCallId === exec.callId) {budget.automatic.lastAutomaticOutcome = { callId: exec.callId, verifiedProgress: decision.verifiedProgress === true, failed: recovery.failed, sourceHash: proofHash };budget.automatic.accountedCallId=exec.callId;}
     if (decision.improved && manifest && (!budget.automatic || proofHash)) {
       try {
         const saved = await saveCheckpoint(record.root, path.join(this.root, 'checkpoints', exec.agent.id, 'best'), manifest);
@@ -399,6 +410,25 @@ export class WorkspaceManager {
     const restoreRecovery = await this.checkpointRecovery(owner?.id ?? id); const manifest = restoreRecovery.pending ? null : await sourceManifest(record.root);
     return { root: record.root, legacy: Boolean(record.legacy), sourceHash: manifest?.sha256 ?? null, restoreRecovery, beforeRestore: record.beforeRestoreInfo ?? restoreRecovery.beforeRestore, budget: record.budget, checkpoints: record.checkpoints, ports: record.ports, databasePath: record.databasePath };
   }
+  reconcileAutomatic(id){return reconcileAutomatic(this,id);}
+  retainAutomaticProcess(value){return retainAutomaticProcess(this,value);}
+  async runRecoveryVerification(id){
+    const agent=this.ctx.agents.get(id),record=this.data.sessions[id],budget=this.budgets.get(id),a=budget?.automatic;
+    if(!agent||agent.status!=='idle'||this.ownerAgent(agent)!==agent||a?.legacyRecovery?.verificationState!=='required'||this.automaticInFlight?.has(id)||this.automaticReviews.has(id)||!Array.isArray(agent.inbox?.nextTurn)||!Array.isArray(agent.inbox?.nextStep)||agent.inbox.nextTurn.length||agent.inbox.nextStep.length)return;
+    if(!Number.isSafeInteger(a.nextCheckAt)||a.nextCheckAt>a.taskSteps){a.recovery={state:'blocked',code:'AUTOMATIC_LEGACY_CHECK_NOT_DUE',canContinue:false};return;}
+    await this.checked(()=>this.locks.acquire(record.root,id));
+    if(this.data.sessions[id]!==record||this.budgets.get(id)!==budget||agent.status!=='idle'||agent.inbox.nextTurn.length||agent.inbox.nextStep.length)return;
+    this.running.set(id,record.root);
+    const review=automaticReview(this,{agent,executionAgent:agent,signal:new AbortController().signal},record,budget,{...DEFAULTS,...this.settings(agent.session)},false);
+    this.automaticReviews.set(id,review);
+    try{await review;}finally{if(this.automaticReviews.get(id)===review)this.automaticReviews.delete(id);}
+  }
+  async automaticReconcile(id){
+    const agent=this.ctx.agents.get(id),record=this.data.sessions[id];
+    if(!agent||!record||this.ownerAgent(agent)!==agent||this.data.trash[id])throw new WorkbenchError('AUTOMATIC_OWNER_REQUIRED','A managed owner conversation is required.',409);
+    const continued=await this.reconcileAutomatic(id);
+    return {automatic:this.budgets.get(id)?.automatic,blocked:this.budgets.get(id)?.blocked??null,continued:continued===true};
+  }
   async reportVerification(report) {
     const agent = this.ctx.agents.get(report.sessionId); if (!agent) throw new WorkbenchError('SESSION_NOT_LIVE', 'A live conversation is required to record verification.');
     if (!['test', 'build', 'browser', 'acceptance', 'all'].includes(report.kind) || !Number.isInteger(report.exitCode)) throw new WorkbenchError('INVALID_VERIFICATION', 'Invalid structured verification result.', 400);
@@ -424,8 +454,6 @@ export class WorkspaceManager {
     const budget = this.budgets.get(id), settings = { ...DEFAULTS, ...this.settings(agent.session) };
     prepareAutomaticRequest(record, budget, {}, settings.maxStageSteps);
     if (budget.automatic.uncertain || this.automaticInFlight?.has(id)) throw new WorkbenchError('AUTOMATIC_VERIFICATION_UNCERTAIN', 'A verification has no reconciled completion. Review cannot clear its unknown-operation fence.');
-    if (budget.automatic.taskSteps >= settings.maxTaskSteps) throw new WorkbenchError('TASK_BUDGET', 'The allowance is exhausted. Send a new bounded task in the conversation.');
-    if (settings.maxAutomaticChecks > 0 && budget.automatic.checks >= settings.maxAutomaticChecks) throw new WorkbenchError('AUTOMATIC_CHECK_LIMIT', 'The automatic check allowance is exhausted. Send a new concrete task rather than retrying the same review.');
     budget.resume(strategy);
     if (settings.maxAutomaticChecks > 0) budget.automatic.nextCheckAt = budget.automatic.taskSteps;
     record.budget = budget; record.lastStep = null; await this.save();

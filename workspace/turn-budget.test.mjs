@@ -87,7 +87,7 @@ test('existing block never auto-resumes or clears consumed steps on new human re
 function managedFixture() {
   const { record, budget } = fixture(); record.firstCheckGuided = true; record.stageBudgetWarningStage = budget.stage;
   const owner = { id: 'owner', session: { id: 'owner', header: {} } }, child = { id: 'child', session: { id: 'child', header: {} } };
-  const manager = new WorkspaceManager({}, {}, hostExecutionBinding()); manager.ownerAgent = () => owner;
+  const manager = new WorkspaceManager({sandboxPolicy:{resolve:()=>({mode:'read-only'})}}, {}, hostExecutionBinding()); manager.ownerAgent = () => owner;
   manager.data = { sessions: { owner: record }, trash: {} }; manager.ensureProject = async () => record;
   manager.locks.acquire = async () => {}; manager.save = async () => {};
   manager.settings = () => ({ maxStageSteps: 60, maxAutomaticChecks: 0 }); manager.budgets.set(owner.id, budget);
@@ -102,7 +102,7 @@ test('manager scopes an owner request before charging its first step and charges
 test('manager child requests cannot renew the owner budget', async () => {
   const f = managedFixture(); await f.manager.preStep({ ...f.input, agent: f.child });
   assert.equal(f.budget.steps, 60); assert.equal(f.record.budgetRequest.messageId, 'first');
-  await assert.rejects(f.manager.preStep({ ...f.input, step: 2, agent: f.child }), e => e.code === 'STAGE_BUDGET');
+  await f.manager.preStep({ ...f.input, step: 2, agent: f.child });assert.equal(f.budget.steps,61);assert.equal(f.budget.automatic.taskSteps,61);assert.equal(f.budget.blocked,null);assert.equal(f.record.budgetRequest.messageId,'first');
 });
 test('a fresh explicit owner request can replan without a strategy form and preserves prior failure evidence', async () => {
   const f = managedFixture(); f.budget.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Review required' };

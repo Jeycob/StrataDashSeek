@@ -140,6 +140,20 @@ test('native tool definition uses a concurrency callback',()=>{
   let definition;apply({projectExecutionMode:hostMode(),tools:{register:tool=>{definition=tool;}}});
   assert.equal(definition.name,'verify_project');assert.equal(definition.isConcurrencySafe({}),false);
 });
+
+test('automatic verifier retains only its actual handle before awaiting foreground completion',async()=>{
+ const f=pluginContext();f.execution.callId='automatic-review-11111111-1111-4111-8111-111111111111';let release,registered=false,finished=false;
+ const done=new Promise(resolve=>release=resolve),handle={done,kill(){release();return true;},async result(){await done;finished=true;return{exitCode:0,stdout:{text:JSON.stringify({passed:true,complete:true,stale:false,checks:[{id:'unit',kind:'test',passed:true,checksPassed:1,checksTotal:1}]})}};}};
+ f.ctx.shell.execute=async()=>handle;
+ f.ctx.serial=async(name,value)=>{if(name==='workspace-runtime/verification-process'){assert.equal(value.process,handle);assert.equal(value.projectRoot,f.root);assert.equal(value.sourceHash,'original');assert.equal(value.execution,f.execution);assert.equal(finished,false);registered=true;release();}else f.events.push({name,value});};
+ const result=await executeVerification(f.ctx,{},f.execution);assert.equal(registered,true);assert.equal(finished,true);assert.equal(result.passed,true);assert.equal(f.events.length,1);
+});
+test('failed handle registration kills and drains only that verifier and cannot report a pass',async()=>{
+ const f=pluginContext();f.execution.callId='automatic-review-11111111-1111-4111-1111-111111111111';let release,killed=0,drained=false;
+ const done=new Promise(resolve=>release=resolve),handle={done,kill(){killed++;drained=true;release();return true;},async result(){await done;return{exitCode:1,stdout:{text:'{}'}};}};
+ f.ctx.shell.execute=async()=>handle;f.ctx.serial=async(name,value)=>{if(name==='workspace-runtime/verification-process')throw Error('Synthetic registration failure');f.events.push({name,value});};
+ const result=await executeVerification(f.ctx,{},f.execution);assert.equal(killed,1);assert.equal(drained,true);assert.equal(result.passed,false);assert.equal(result.code,'QUALITY_RUNNER_FAILED');
+});
 test('plugin invalidates changed source and nonzero native exits',async()=>{
   for(const options of [{stale:true},{exitCode:7}]) {const f=pluginContext(options);const r=await executeVerification(f.ctx,{},f.execution);assert.equal(r.passed,false);assert.equal(r.complete,false);assert.equal(f.events[0].value.exitCode,1);}
 });

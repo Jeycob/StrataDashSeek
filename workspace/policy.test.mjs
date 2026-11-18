@@ -29,7 +29,7 @@ test('a passed check does not prevent recognizing progress in subsequent failed 
   assert.equal(budget.stalled, 0);
 });
 
-test('a new failure series after a pass retains repeated-error and stage limits', () => {
+test('a new failure series after a pass retains repeated errors and truthful step accounting', () => {
   const budget = new RepairBudget();
   budget.observe({ kind: 'test', exitCode: 0, text: '# tests 4\n# pass 4\n# fail 0' });
   for (let i = 0; i < 3; i++) {
@@ -39,7 +39,7 @@ test('a new failure series after a pass retains repeated-error and stage limits'
   assert.equal(budget.blocked?.code, 'REPAIR_NO_PROGRESS'); assert.equal(budget.steps, 3);
   const limited = new RepairBudget(); limited.observe({ kind: 'test', exitCode: 0, text: 'passed' });
   for (let i = 0; i < 10; i++) limited.step(10);
-  assert.equal(limited.step(10), false); assert.equal(limited.blocked.code, 'STAGE_BUDGET');
+  assert.equal(limited.step(10), true); assert.equal(limited.blocked,null);assert.equal(limited.steps,11);
 });
 
 test('persisted zero minima recover comparisons without resuming a blocked run', () => {
@@ -53,7 +53,7 @@ test('persisted zero minima recover comparisons without resuming a blocked run',
   blocked.observe({ kind: 'test', exitCode: 0, text: 'passed' });
   assert.equal(blocked.blocked.code, 'REPAIR_NO_PROGRESS'); assert.equal(blocked.stage, 2);
 });
-test('stage step budget is enforced even without recognizable checks', () => { const b = new RepairBudget(); for (let i = 0; i < 10; i++) assert.equal(b.step(10), true); assert.equal(b.step(10), false); });
+test('stage interval accounts work without a manual approval gate', () => { const b = new RepairBudget(); for (let i = 0; i < 81; i++) assert.equal(b.step(10), true);assert.equal(b.steps,81);assert.equal(b.blocked,null); });
 test('setup errors are not combined into failed repairs before implementation', () => {
   const b = new RepairBudget(); b.step(60);
   b.observe({ isError: true, text: 'Use project_exec instead of bash' });
@@ -138,7 +138,7 @@ test('successful same-operation resolution clears only its scoped tool failures'
   assert.equal(budget.blocked, null); assert.deepEqual(Object.values(budget.errors), [2, 1]);
 });
 
-test('legacy error behavior and hard stage limits survive scoped operation counters', () => {
+test('legacy error behavior and step accounting survive scoped operation counters', () => {
   const legacy = new RepairBudget();
   for (let i = 0; i < 3; i++) legacy.observe({ isError: true, text: 'old_string not found' });
   assert.equal(legacy.blocked?.code, 'REPEATED_TOOL_ERROR');
@@ -149,7 +149,7 @@ test('legacy error behavior and hard stage limits survive scoped operation count
   assert.equal(loaded.blocked, null); assert.ok(!JSON.stringify(loaded.errors).includes('private raw operation scope'));
   const limited = new RepairBudget();
   for (let i = 0; i < 10; i++) { limited.step(10); limited.observe({ operationScope: String(i), isError: true, text: 'old_string not found' }); }
-  assert.equal(limited.blocked, null); assert.equal(limited.step(10), false); assert.equal(limited.blocked.code, 'STAGE_BUDGET');
+  assert.equal(limited.blocked, null); assert.equal(limited.step(10), true); assert.equal(limited.steps,11);
 });
 
 test('operation resolution preserves failed verification and unrelated scoped failures', () => {
@@ -180,13 +180,13 @@ test('recognized test setup, invocation, stale edits and timeouts do not consume
   assert.equal(budget.stalled, 1); assert.ok(budget.checks.test);
 });
 
-test('repeated setup failures still pause separately and cannot bypass the stage budget', () => {
+test('repeated setup failures still pause separately while distinct failures retain step accounting', () => {
   const budget = new RepairBudget();
   for (let i = 0; i < 3; i++) budget.observe({ kind: 'test', exitCode: 1, text: 'Cannot find module /project/test' });
   assert.equal(budget.blocked.code, 'REPEATED_TOOL_ERROR'); assert.equal(budget.stalled, 0); assert.deepEqual(budget.checks, {});
   const distinct = new RepairBudget();
   for (let i = 0; i < 10; i++) { distinct.step(10); distinct.observe({ kind: 'test', exitCode: 1, text: 'missing script: unique-' + i }); }
-  assert.equal(distinct.blocked, null); distinct.step(10); assert.equal(distinct.blocked.code, 'STAGE_BUDGET');
+  assert.equal(distinct.blocked, null); distinct.step(10); assert.equal(distinct.blocked,null);assert.equal(distinct.steps,11);
 });
 
 test('zero tests, missing status and masked assertion failures cannot reset a verification stage', () => {

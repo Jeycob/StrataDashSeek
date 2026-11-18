@@ -11,6 +11,7 @@ import { prepareAutomaticRequest, recordVerifiedProgress, automaticReviewView } 
 import { sourceManifest } from './storage.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import {registerOwnedRangeProvider} from './owned-range-state.mjs';
 
 const human = id => ({id, role:'user', source:{kind:'user'}});
 const success = () => ({passed:true, complete:true, stale:false, checks:[{id:'real-fixture',kind:'test',passed:true,checksTotal:1,checksPassed:1}]});
@@ -38,6 +39,11 @@ async function fixture(t, options={}) {
 test('soft limit automatically dispatches guarded verification and continues the same task without a user message',async t=>{
  const f=await fixture(t);await f.step(11);assert.equal(f.calls.length,1);assert.equal(f.budget.blocked,null);assert.equal(f.budget.stage,2);assert.equal(f.budget.steps,1);assert.equal(f.budget.automatic.taskSteps,11);assert.equal(f.budget.automatic.checks,1);assert.equal(f.budget.automatic.phase,'working');assert.match(f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW'),/verified progress/);
 });
+test('normal qualified verifier completion releases its exact handle before the next automatic check',async t=>{
+ const f=await fixture(t),execute=f.ctx.tools.execute;f.ctx.subprocess={};registerOwnedRangeProvider(f.ctx.subprocess);let retained=0;
+ f.ctx.tools.execute=async batch=>{retained++;await f.manager.retainAutomaticProcess({execution:{agent:f.agent,callId:batch.calls[0].id},projectRoot:f.root,sourceHash:(await sourceManifest(f.root)).sha256,process:{done:Promise.resolve(),kill(){throw Error('Finished verifier must not be killed');}}});return execute(batch);};
+ await f.step(11);assert.equal(f.manager.automaticProcesses.size,0);for(let n=12;n<=21;n++)await f.step(n);assert.equal(retained,2);assert.equal(f.manager.automaticProcesses.size,0);assert.equal(f.budget.blocked,null);
+});
 test('ordinary failed verification grants only a bounded repair window and preserves real failure history',async t=>{
  const f=await fixture(t,{report:failure});await f.step(11);assert.equal(f.budget.stage,1);assert.equal(f.budget.steps,11);assert.equal(f.budget.automatic.phase,'repairing');assert.equal(f.budget.automatic.nextCheckAt,30);assert.equal(f.budget.stalled,1);assert.equal(f.budget.blocked,null);
  for(let n=12;n<=30;n++)await f.step(n);assert.equal(f.calls.length,1);assert.equal(f.budget.automatic.taskSteps,30);
@@ -48,9 +54,9 @@ test('three identical failed checks stop rather than silently renewing repair co
 test('unchanged passing checks do not reset a stage or erase failed-round history',async t=>{
  const f=await fixture(t);await f.step(11);f.budget.stalled=2;const errors=f.budget.errors={kept:2};for(let n=12;n<=20;n++)await f.step(n);await f.step(21);assert.equal(f.calls.length,2);assert.equal(f.budget.stage,2);assert.equal(f.budget.steps,11);assert.equal(f.budget.stalled,2);assert.equal(f.budget.errors,errors);assert.equal(f.budget.automatic.phase,'working');assert.equal(f.budget.automatic.nextCheckAt,40);assert.match(f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW'),/do not invent a repair/);
 });
-test('hard task cap survives passing checks, manual review, reload and internal followups',async t=>{
- const f=await fixture(t,{steps:59,settings:{maxTaskSteps:60,maxAutomaticChecks:6,maxStageSteps:60}});await f.step(60);assert.equal(f.budget.automatic.taskSteps,60);await assert.rejects(f.step(61),e=>e.code==='TASK_BUDGET');assert.equal(f.calls.length,0);assert.throws(()=>f.budget.resume('Use a different approach and verify the current work.'),e=>e.code==='TASK_BUDGET');
- const reloaded=new RepairBudget(JSON.parse(JSON.stringify(f.budget)));assert.equal(reloaded.automatic.taskSteps,60);assert.equal(prepareAutomaticRequest(f.record,reloaded,{turn:2,messages:[human('first'),{role:'user',id:'internal',source:{kind:'workspace-runtime'}}]},60),false);assert.equal(reloaded.automatic.taskSteps,60);
+test('legacy task count is accounting rather than a manual gate, including reload and internal followups',async t=>{
+ const f=await fixture(t,{steps:59,settings:{maxTaskSteps:60,maxAutomaticChecks:6,maxStageSteps:60}});await f.step(60);assert.equal(f.budget.automatic.taskSteps,60);await f.step(61);assert.equal(f.budget.blocked,null);assert.equal(f.calls.length,1);
+ const reloaded=new RepairBudget(JSON.parse(JSON.stringify(f.budget)));assert.equal(reloaded.automatic.taskSteps,61);assert.equal(prepareAutomaticRequest(f.record,reloaded,{turn:2,messages:[human('first'),{role:'user',id:'internal',source:{kind:'workspace-runtime'}}]},60),false);assert.equal(reloaded.automatic.taskSteps,61);
  assert.equal(await fs.readFile(path.join(f.root,'app.mjs'),'utf8'),'export const value=1;\n');
 });
 test('only a new real human request renews the allowance; subagents cannot do so',async t=>{
@@ -79,8 +85,8 @@ test('a concurrent successful verifier cannot be mistaken for this failed automa
  await f.step(11);assert.equal(f.budget.stage,2,'only the other actual success earned its stage');assert.equal(f.budget.automatic.phase,'repairing');assert.equal(f.budget.automatic.lastAutomaticOutcome.verifiedProgress,false);assert.match(f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW'),/bounded repair/);
  const g=await fixture(t);g.ctx.tools.execute=async batch=>({results:[{callId:batch.calls[0].id,result:{isError:false,value:success()}}]});await assert.rejects(g.step(11),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(g.budget.stage,1);
 });
-test('check-count cap is durable and a crashed in-flight check is not blindly replayed',async t=>{
- const f=await fixture(t,{settings:{maxAutomaticChecks:1},report:failure});for(let n=11;n<=30;n++)await f.step(n);await assert.rejects(f.step(31),e=>e.code==='AUTOMATIC_CHECK_LIMIT');assert.equal(f.calls.length,1);
+test('legacy check count is not a gate; no-progress and crashed in-flight checks still stop safely',async t=>{
+ const f=await fixture(t,{settings:{maxAutomaticChecks:1},report:failure});for(let n=11;n<=50;n++)await f.step(n);await assert.rejects(f.step(51),e=>e.code==='REPAIR_NO_PROGRESS');assert.equal(f.calls.length,3);
  const g=await fixture(t);prepareAutomaticRequest(g.record,g.budget,g.input,10);g.budget.automatic.phase='checking';await assert.rejects(g.step(11),e=>e.code==='AUTOMATIC_VERIFICATION_UNCERTAIN');assert.equal(g.calls.length,0);
 });
 test('saved checking plus a new human turn remains durably fenced, including manual review and idle lease release',async t=>{
@@ -92,7 +98,7 @@ test('saved checking plus a new human turn remains durably fenced, including man
  f.agent.status='idle';await assert.rejects(f.manager.reviewResume('owner','Verify current work and retry one smaller repair.'),e=>e.code==='AUTOMATIC_VERIFICATION_UNCERTAIN');assert.throws(()=>reloaded.resume('Use another concrete approach before proceeding.'),e=>e.code==='AUTOMATIC_VERIFICATION_UNCERTAIN');let released=0;f.manager.locks.release=async()=>released++;await f.manager.releaseIfIdle('owner');assert.equal(released,0);
 });
 test('automatic verification has its own fixed deadline and a timeout never becomes progress',async t=>{
- const f=await fixture(t);let timerCreated=0;const timer=t.mock.method(globalThis,'setTimeout',(fn,ms)=>{assert.equal(ms,120000);timerCreated++;queueMicrotask(fn);return{unref(){}};});f.ctx.tools.execute=async({signal})=>{await Promise.resolve();signal.throwIfAborted();throw Error('Deadline was ignored');};
+ const f=await fixture(t);let timerCreated=0;const original=globalThis.setTimeout;const timer=t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>{if(ms>=110000&&ms<=120000){timerCreated++;queueMicrotask(fn);return{unref(){}};}return original(fn,ms,...args);});f.ctx.tools.execute=async({signal})=>{await Promise.resolve();signal.throwIfAborted();throw Error('Deadline was ignored');};
  try{await assert.rejects(f.step(11),e=>['AUTOMATIC_VERIFICATION_TIMEOUT','AUTOMATIC_VERIFICATION_UNCERTAIN'].includes(e.code));}finally{timer.mock.restore();}assert.equal(timerCreated,1);assert.equal(f.budget.stage,1);assert.equal(f.budget.automatic.taskSteps,10);assert.equal(f.budget.automatic.checks,1);
 });
 test('read-only scopes, unchanged code and prose never acquire a writable verifier or manufacture progress',async t=>{
@@ -103,11 +109,11 @@ test('read-only scopes, unchanged code and prose never acquire a writable verifi
 test('new source evidence advances a stage but never renews the actual task counter',async t=>{
  const f=await fixture(t);await f.step(11);await fs.appendFile(path.join(f.root,'app.mjs'),'export const next=2;\n');for(let n=12;n<=21;n++)await f.step(n);assert.equal(f.calls.length,2);assert.equal(f.budget.stage,3);assert.equal(f.budget.automatic.taskSteps,21);
 });
-test('repeated genuine progress cannot extend the hard cap and private accounting is absent from the client view',async t=>{
+test('long task crosses legacy task/check limits without consent while private accounting stays hidden',async t=>{
  const f=await fixture(t,{steps:0,settings:{maxTaskSteps:60,maxAutomaticChecks:6}});
- for(let n=1;n<=60;n++){if(n%10===0)await fs.appendFile(path.join(f.root,'app.mjs'),'// completed small change '+n+'\n');await f.step(n);}
- assert.equal(f.calls.length,5);assert.equal(f.budget.stage,6);assert.equal(f.budget.automatic.taskSteps,60);await assert.rejects(f.step(61),e=>e.code==='TASK_BUDGET');assert.equal(f.calls.length,5);
- const view=automaticReviewView(f.budget.automatic);assert.equal(view.taskSteps,60);assert.equal(view.admitted,undefined);assert.equal(view.proofs,undefined);
+ for(let n=1;n<=81;n++){if(n%10===0)await fs.appendFile(path.join(f.root,'app.mjs'),'// completed small change '+n+'\n');await f.step(n);}
+ assert.equal(f.calls.length,8);assert.equal(f.budget.stage,9);assert.equal(f.budget.automatic.taskSteps,81);assert.equal(f.budget.blocked,null);
+ const view=automaticReviewView(f.budget.automatic);assert.equal(view.taskSteps,81);assert.equal(view.admitted,undefined);assert.equal(view.proofs,undefined);
 });
 test('explicit one-click review schedules actual verification without inventing a stage or renewing counters',async t=>{
  const f=await fixture(t,{steps:2});await f.step(3);const before=f.budget.automatic.taskSteps,stage=f.budget.stage;f.budget.blocked={code:'REPAIR_NO_PROGRESS',message:'Fixture'};f.agent.status='idle';let followup;f.agent.followup=value=>followup=value;
@@ -150,6 +156,8 @@ test('actual pinned SDK executor runs its guard and single final observer for co
   return{...success(),sourceHash:(await sourceManifest(f.root)).sha256};
  }});
  const dispatch=new pipeline.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>pipeline.executeToolBatch(input,dispatch,()=>1)});
+ // The verifier must not create application source after its admission hash.
+ await fs.writeFile(path.join(f.root,'behavior.test.cjs'),"require('node:test')('retained fixture behavior',()=>require('node:assert/strict').equal(2+2,4));");
  try{await f.step(11);}catch(error){assert.fail(JSON.stringify({code:error.code,guarded,observed,executed,lastOutcome}));}assert.equal(executed,1);assert.equal(guarded,1);assert.equal(observed,1);assert.equal(f.budget.stage,2);assert.equal(f.budget.automatic.taskSteps,11);
  for(let n=12;n<=20;n++)await f.step(n);allow=false;await assert.rejects(f.step(21),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(executed,1);assert.equal(guarded,2);assert.equal(observed,2);assert.equal(f.budget.stage,2);assert.equal(f.budget.automatic.taskSteps,20);
  // A real SDK body that ignores AbortSignal must not hold preStep forever.
@@ -157,7 +165,7 @@ test('actual pinned SDK executor runs its guard and single final observer for co
  // code never kills, replaces or bypasses the SDK executor.
  allow=true;hang=true;const advance=step=>f.manager.preStep({...f.input,turn:2,step,messages:[human('next-request')]});for(let n=1;n<=10;n++)await advance(n);
  const originalTimer=globalThis.setTimeout;let fire,execution;
- const timer=t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>{if(ms===120000){fire=()=>fn(...args);return{unref(){}};}return originalTimer(fn,ms,...args);});
+ const timer=t.mock.method(globalThis,'setTimeout',(fn,ms,...args)=>{if(ms>=110000&&ms<=120000){fire=()=>fn(...args);return{unref(){}};}return originalTimer(fn,ms,...args);});
  try{
   const pending=advance(11);pending.catch(()=>{});const until=Date.now()+2500;while(!releaseHang||!fire){if(Date.now()>until)throw Error('Synthetic SDK body did not start');await new Promise(r=>setImmediate(r));}
   execution=f.manager.automaticInFlight.get('owner');assert(execution);fire();let deadline;
@@ -165,6 +173,6 @@ test('actual pinned SDK executor runs its guard and single final observer for co
   assert.equal(f.budget.automatic.uncertain,true);assert.equal(f.budget.automatic.taskSteps,10);assert.equal(f.budget.automatic.terminalAcknowledged,false);assert.equal(f.budget.stage,2);assert.equal(f.manager.automaticInFlight.has('owner'),true);
   f.agent.status='idle';let releases=0;f.manager.locks.release=async()=>releases++;await f.manager.releaseIfIdle('owner');assert.equal(releases,0);await assert.rejects(f.manager.reviewResume('owner','Verify the current work and retry a smaller stage.'),e=>e.code==='AUTOMATIC_VERIFICATION_UNCERTAIN');
   await assert.rejects(f.manager.preStep({...f.input,turn:3,step:1,messages:[human('fresh-after-timeout')]}),e=>e.code==='AUTOMATIC_VERIFICATION_UNCERTAIN');assert.equal(executed,2);
- }finally{timer.mock.restore();releaseHang?.();if(execution)await execution;await new Promise(r=>setImmediate(r));await f.manager.persistQueue;}
- assert.equal(f.manager.automaticInFlight.has('owner'),false);assert.equal(f.budget.automatic.terminalAcknowledged,true);assert.equal(f.budget.automatic.uncertain,true);assert.equal(f.budget.stage,2);assert.equal(f.budget.automatic.taskSteps,10);
+ }finally{timer.mock.restore();f.agent.status='running';releaseHang?.();if(execution)await execution;await new Promise(r=>setImmediate(r));await f.manager.persistQueue;}
+ await f.manager.reconcileAutomatic('owner');assert.equal(f.manager.automaticInFlight.has('owner'),false);assert.equal(f.budget.automatic.terminalAcknowledged,true);assert.equal(f.budget.automatic.uncertain,undefined);assert.equal(f.budget.automatic.recovery.state,'recovered');assert.equal(f.budget.stage,2);assert.equal(f.budget.automatic.taskSteps,10);
 });

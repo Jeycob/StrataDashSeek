@@ -76,10 +76,10 @@ export function checkScore(exitCode, text) {
   const matches = [...String(text).matchAll(/(?:\b(\d+)\s+(?:failed|failures?|errors?)\b|\bfail\s+(\d+)\b|\berrors?\s*:\s*(\d+))/giu)];
   return matches.length ? Math.max(1, ...matches.map(x => Number(x[1] ?? x[2] ?? x[3]))) : 1e9;
 }
-export const REPAIR_POLICY_VERSION = 4;
+export const REPAIR_POLICY_VERSION = 5;
 export class RepairBudget {
   constructor(saved = {}) { Object.assign(this, { stage: 1, steps: 0, stalled: 0, errors: {}, checks: {}, blocked: null }, saved); }
-  step(limit) { if (this.blocked) return false; if (++this.steps > limit) this.blocked = { code: 'STAGE_BUDGET', message: 'A verified stage is required before continuing.' }; return !this.blocked; }
+  step() { if (this.blocked) return false; if(!Number.isSafeInteger(this.steps+1)){this.blocked={code:'AUTOMATIC_STATE_INVALID',message:'Step accounting is unavailable.'};return false;}this.steps++;return true; }
   // The result observer calls this only for an authoritative completed success.
   // Clearing counters is not verification and never resumes a blocked run.
   resolveOperation(scope) {
@@ -124,9 +124,8 @@ export class RepairBudget {
     return { improved, score, key, verifiedProgress, blocked: this.blocked };
   }
   resume(strategy) {
-    if (this.automatic && (this.automatic.uncertain || this.automatic.activeCallId || this.automatic.phase === 'checking')) throw new WorkbenchError('AUTOMATIC_VERIFICATION_UNCERTAIN', 'The unresolved verification fence requires operator reconciliation before review can resume work.');
+    if (this.automatic && (this.automatic.uncertain || this.automatic.activeCallId || this.automatic.phase === 'checking')) throw new WorkbenchError('AUTOMATIC_VERIFICATION_UNCERTAIN', 'The unresolved verification is being reconciled against its actual terminal evidence.');
     if (typeof strategy !== 'string' || strategy.trim().length < 15 || strategy.length > 2000) throw new WorkbenchError('STRATEGY_REQUIRED', 'Describe a different approach before resuming.', 400);
-    if (this.blocked?.code === 'TASK_BUDGET') throw new WorkbenchError('TASK_BUDGET', 'Start another bounded task with a new user message; review cannot renew the work allowance.');
     this.blocked = null; this.steps = 0; this.stalled = 0; this.errors = {};
     if (this.automatic) { this.automatic.nextCheckAt = this.automatic.taskSteps + this.automatic.interval; this.automatic.phase = 'working'; delete this.automatic.reason; }
   }

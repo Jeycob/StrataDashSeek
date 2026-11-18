@@ -18,7 +18,7 @@ import { installModelSelection } from './model-selection.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
-export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'sandbox', 'subprocess', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt', 'sessionController', 'sessionQuery', 'projectExecutionMode'];
+export const inject = ['agents', 'sessions', 'sessionPersistence', 'workspaceRegistry', 'workingDirectory', 'sandboxPolicy', 'sandbox', 'subprocess', 'fs', 'llm', 'tools', 'connection', 'shellEnv', 'shell', 'worktrees', 'systemPrompt', 'sessionController', 'sessionQuery', 'jobs', 'projectExecutionMode'];
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const reply = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 export async function apply(ctx, config = {}) {
@@ -80,10 +80,11 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
     manager.observeToolResult(composition.managerExecution(exec), result);
   }, { global: true });
   ctx.on('workspace-runtime/verification', async report => { await manager.reportVerification(report); });
+  ctx.on('workspace-runtime/verification-process', value=>manager.retainAutomaticProcess(value));
   ctx.on('workspace-runtime/review', async ({ sessionId,execution:actual }, next) => {execution.assertUnchanged();const owner=actual?manager.ownerAgent(actual.agent)?.id:sessionId;if(!owner)return next();const value=await manager.review(owner);execution.assertUnchanged();return value?{...value,sessionId:owner}:next();});
-  ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.releaseIfIdle(session.id).then(cleanupCaches).catch(() => {}), 0); });
+  ctx.on('session/event', (session, event) => { if (event.type === 'turn/end') setTimeout(() => void manager.reconcileAutomatic(session.id).then(()=>manager.releaseIfIdle(session.id)).then(cleanupCaches).catch(() => {}), 0); });
   ctx.on('agent/disposed', ({ agent }) => { managedShell.remove(agent); manager.grants.get(agent.id)?.(); manager.grants.delete(agent.id); manager.frozenSettings.delete(agent.id); manager.pendingDiagnostics.delete(agent.id); void manager.releaseIfIdle(agent.id).catch(() => {}); });
-  const timer = setInterval(() => { for (const id of manager.running.keys()) void manager.releaseIfIdle(id).catch(() => {}); }, 10000); timer.unref();
+  const timer = setInterval(() => { for (const id of manager.running.keys()) void manager.reconcileAutomatic(id).then(()=>manager.releaseIfIdle(id)).catch(() => {}); }, 10000); timer.unref();
   ctx.effect(() => () => clearInterval(timer));
   const cleanupTimer = setInterval(() => void cleanupCaches(), 60000); cleanupTimer.unref();
   const initialCleanup = setTimeout(() => void cleanupCaches(), 2000); initialCleanup.unref();
@@ -119,6 +120,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
       if (data.op === 'trash') return reply(await manager.inOrder(() => manager.trashSession(id)));
       if (data.op === 'restore') return reply(await manager.inOrder(() => manager.restoreSession(id)));
       if (data.op === 'resume') { await manager.reviewResume(id, data.strategy); return reply({ resumed: true }); }
+      if (data.op === 'automatic-reconcile') { const value=await manager.automaticReconcile(id);return reply({...value,automatic:automaticReviewView(value.automatic)}); }
       const checkpoint = await checkpointOperation(manager, data, request.signal);
       if (checkpoint) return reply(checkpoint.value);
       throw new WorkbenchError('UNKNOWN_OPERATION', 'Unknown operation.', 400);

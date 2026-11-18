@@ -39,7 +39,19 @@ export async function executeVerification(ctx, args, execution, config = {}) {
       check();
       // Once started, await actual quiescence even if policy changes while
       // execute/result is pending; do not abandon an owned process handle.
-      result = await (await ctx.shell.execute(spec)).result();
+      const process=await ctx.shell.execute(spec),outcome=process.result();
+      void outcome.catch(()=>{});
+      // Private trusted event only: the controller can retain this exact owned
+      // verifier range for bounded cleanup. No model/HTTP handle or PID input.
+      try {
+        if(execution.callId?.startsWith('automatic-review-'))await ctx.serial('workspace-runtime/verification-process',{execution,projectRoot:root,sourceHash:review.sourceHash,process});
+        result=await outcome;
+      }catch(error){
+        if(typeof process.kill==='function')process.kill();
+        if(process.done)await process.done;
+        // Always observe the foreground projection, including hook failure.
+        await outcome.catch(()=>{});throw error;
+      }
       check();
     }
     if (execution.signal.aborted || result.aborted) throw execution.signal.reason ?? Error('Verification cancelled.');
