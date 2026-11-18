@@ -11,7 +11,8 @@ export function validateEditorProof(value,{sessionId,projectRoot,readOnly,genera
  return value;
 }
 export function createProjectEditorAdapter(manager,{appsConfig,callApps,receiptStore,socketDirectory,transportIdentity,bridgeFactory=createEditorBridge,now=Date.now},binding=manager.execution){
- const mode=bindProjectExecution(binding),check=()=>{if(mode.assertUnchanged().mode!=='isolated-guest')throw fail('PROJECT_EXECUTION_MODE_MISMATCH');};check();
+ let disposed=false,disposal;
+ const mode=bindProjectExecution(binding),check=()=>{if(disposed)throw fail('EDITOR_ADAPTER_CLOSED');if(mode.assertUnchanged().mode!=='isolated-guest')throw fail('PROJECT_EXECUTION_MODE_MISMATCH');};check();
  const entries=new Map(),queues=new Map();
  const rpc=(data,signal)=>callApps('/project-runtime',data,{...appsConfig,timeoutMs:125000,signal});
  function ordered(id,action){const next=(queues.get(id)??Promise.resolve()).catch(()=>{}).then(action);queues.set(id,next);void next.finally(()=>{if(queues.get(id)===next)queues.delete(id);}).catch(()=>{});return next;}
@@ -86,5 +87,13 @@ export function createProjectEditorAdapter(manager,{appsConfig,callApps,receiptS
    return publicValue(entry);
   }catch(error){await stopEditor(entry).catch(()=>{});throw error;}
  }
- return{beforeHeavy,ensureEditor:input=>ordered(input.sessionId,()=>ensureEditor(input)),touchEditor:input=>ordered(input.sessionId,()=>touchEditor(input)),stopEditor:input=>ordered(input.sessionId,()=>stopEditor(input)),async dispose(){await Promise.allSettled([...queues.values()]);await Promise.allSettled([...entries.values()].map(entry=>ordered(entry.sessionId,()=>stopEditor(entry))));}};
+ function dispose(){
+  if(disposal)return disposal;disposed=true;
+  // A replacement provider must reconcile these durable capabilities rather
+  // than mistake a disposed adapter for a live owner. Retire synchronously,
+  // before awaiting any old RPC; exact stop remains available below.
+  for(const entry of entries.values())entry.releaseClaim();
+  disposal=(async()=>{await Promise.allSettled([...queues.values()]);await Promise.allSettled([...entries.values()].map(entry=>ordered(entry.sessionId,()=>stopEditor(entry))));})();return disposal;
+ }
+ return{beforeHeavy,ensureEditor:input=>ordered(input.sessionId,()=>ensureEditor(input)),touchEditor:input=>ordered(input.sessionId,()=>touchEditor(input)),stopEditor:input=>ordered(input.sessionId,()=>stopEditor(input)),dispose};
 }

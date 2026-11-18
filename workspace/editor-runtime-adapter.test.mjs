@@ -2,18 +2,22 @@ import {executionBindingFixture} from './fixtures/execution-binding.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import {createProjectEditorAdapter,validateEditorProof} from './editor-runtime-adapter.mjs';
+import {createProjectRuntimeReceiptStore} from './project-runtime-receipts.mjs';
 function memoryReceipts(){
  const rows=new Map(),live=new Map();
- return{async list(){return [...rows.values()].map(r=>({...r}));},async save(row){rows.set(row.generation,{...row});},async remove(generation){rows.delete(generation);},claim(generation,{reconciling=false}={}){if(live.has(generation))throw Object.assign(Error('ALREADY_LIVE'),{code:'PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED'});live.set(generation,{reconciling});return()=>live.delete(generation);},isLive:generation=>live.has(generation)&&!live.get(generation).reconciling,simulateRestart(){live.clear();}};
+  return{async list(){return [...rows.values()].map(r=>({...r}));},async save(row){rows.set(row.generation,{...row});},async remove(generation){rows.delete(generation);},claim(generation,{reconciling=false}={}){if(live.has(generation))throw Object.assign(Error('ALREADY_LIVE'),{code:'PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED'});const identity={reconciling};live.set(generation,identity);return()=>{if(live.get(generation)===identity)live.delete(generation);};},isLive:generation=>live.has(generation)&&!live.get(generation).reconciling,simulateRestart(){live.clear();}};
 }
-function fixture({receiptStore=memoryReceipts()}={}){
- let clock=100000,failStop=false,failTouch=false,abortAfterEnsure,ensureFault,stopFault,identityHook;const source=executionBindingFixture('isolated-guest');
- const calls=[],bridges=[],proofs=new Map(),input={sessionId:'project-A',projectRoot:'/projects/A',readOnly:false},grants=[];
+function fixture({receiptStore=memoryReceipts(),source=executionBindingFixture('isolated-guest'),input={sessionId:'project-A',projectRoot:'/projects/A',readOnly:false}}={}){
+ let clock=100000,failStop=false,failTouch=false,abortAfterEnsure,ensureFault,stopFault,identityHook,stopHook;
+ const calls=[],bridges=[],proofs=new Map(),grants=[];
  const manager={execution:source.binding,async withProjectRuntimeAuthority(context,action){grants.push(context);return action('private-authority');}};
  const adapter=createProjectEditorAdapter(manager,{appsConfig:{enabled:true,vm:{enabled:true},projectRuntime:{enabled:true}},receiptStore,callApps:async(route,data)=>{
   assert.equal(route,'/project-runtime');calls.push(data);
-  if(data.op==='stop'){if(failStop)throw Error('OFFLINE');return{version:1,state:'stopped',sessionId:data.sessionId,generation:data.generation,operationId:'c'.repeat(32),...stopFault};}
+  if(data.op==='stop'){await stopHook?.(data);if(failStop)throw Error('OFFLINE');return{version:1,state:'stopped',sessionId:data.sessionId,generation:data.generation,operationId:'c'.repeat(32),...stopFault};}
   if(data.op==='touch'){if(failTouch)throw Error('POLICY_DENIED');const proof=proofs.get(data.generation);assert.equal(data.stopToken,proof.stopToken);return{...proof,expiresAt:Math.min(clock+300000,proof.hardDeadline)};}
   const scopeId=crypto.createHash('sha256').update(input.sessionId+'\0'+input.projectRoot).digest('hex').slice(0,32);
   assert.match(data.stopToken,/^[A-Za-z0-9_-]{43}$/);
@@ -21,7 +25,13 @@ function fixture({receiptStore=memoryReceipts()}={}){
   const proof={version:1,state:'ready',...input,generation:data.generation,scopeId,isolation:{enforced:true,...input},transport:{host:'127.0.0.1',guestAddress:'10.0.2.15',hostPort:19180,guestPort:19180,bootPid:42,mtls:true,serverName:scopeId+'.'+data.generation+'.editor.homeai.invalid'},containerIds:{editor:'a'.repeat(64),relay:'b'.repeat(64)},operationId:'c'.repeat(32),stopToken:data.stopToken,expiresAt:clock+300000,hardDeadline:clock+1800000};
   proofs.set(data.generation,proof);abortAfterEnsure?.abort(Error('CANCELLED'));if(ensureFault==='lost')throw Error('RESPONSE_LOST');return ensureFault==='swapped'?{...proof,stopToken:'x'.repeat(43)}:proof;
  },socketDirectory:'/private',transportIdentity:async({scopeId,generation})=>{await identityHook?.();return{serverName:scopeId+'.'+generation+'.editor.homeai.invalid'};},bridgeFactory:async()=>{const bridge={socketPath:'/private/fixture.sock',closed:false,async close(){this.closed=true;}};bridges.push(bridge);return bridge;},now:()=>clock});
- return{adapter,input,calls,bridges,proofs,grants,receiptStore,source,setIdentityHook:fn=>identityHook=fn,advance:ms=>clock+=ms,setFailStop:value=>failStop=value,setFailTouch:value=>failTouch=value,abortWith:controller=>abortAfterEnsure=controller,setEnsureFault:value=>ensureFault=value,setStopFault:value=>stopFault=value};
+ return{adapter,input,calls,bridges,proofs,grants,receiptStore,source,setIdentityHook:fn=>identityHook=fn,setStopHook:fn=>stopHook=fn,advance:ms=>clock+=ms,setFailStop:value=>failStop=value,setFailTouch:value=>failTouch=value,abortWith:controller=>abortAfterEnsure=controller,setEnsureFault:value=>ensureFault=value,setStopFault:value=>stopFault=value};
+}
+const deferred=()=>{let resolve;const promise=new Promise(done=>resolve=done);return{promise,resolve};};
+async function sharedStore(t){
+ const root=await fs.mkdtemp(path.join(os.tmpdir(),'homeai-editor-reload-')),source=executionBindingFixture('isolated-guest');
+ t.after(async()=>{const absolute=path.resolve(root);assert(absolute.startsWith(path.resolve(os.tmpdir())+path.sep)&&path.basename(absolute).startsWith('homeai-editor-reload-'));await fs.rm(absolute,{recursive:true,force:true});});
+ const receiptStore=createProjectRuntimeReceiptStore(root,{executionBinding:source.binding});assert.equal(createProjectRuntimeReceiptStore(root,{executionBinding:source.binding}),receiptStore);return{root,source,receiptStore};
 }
 test('a binding change during awaited transport identity stops the exact admitted editor before any bridge is constructed',async()=>{
  const f=fixture();f.setIdentityHook(async()=>f.source.fail());await assert.rejects(f.adapter.ensureEditor(f.input),/BINDING_CHANGED/);assert.deepEqual(f.calls.map(call=>call.op),['ensure','stop']);assert.equal(f.bridges.length,0);assert.deepEqual(await f.receiptStore.list(),[]);await f.adapter.dispose();
@@ -103,4 +113,47 @@ test('live editor claims survive unrelated heavy-admission reconciliation',async
  const f=fixture(),ready=await f.adapter.ensureEditor(f.input);
  await f.adapter.beforeHeavy();assert.deepEqual(f.calls.map(c=>c.op),['ensure']);
  assert.ok(f.receiptStore.isLive(ready.generation));await f.adapter.dispose();
+});
+
+test('same-process disposal hands an unknown editor to the actual shared-store reconciler',async t=>{
+ const shared=await sharedStore(t),old=fixture(shared),ready=await old.adapter.ensureEditor(old.input);old.setFailStop(true);await old.adapter.dispose();
+ const retained=(await shared.receiptStore.list())[0];assert.equal(retained.generation,ready.generation);assert.equal(shared.receiptStore.isLive(ready.generation),false,'a disposed provider is not a live owner');
+ const replacement=fixture({...shared,receiptStore:createProjectRuntimeReceiptStore(shared.root,{executionBinding:shared.source.binding})});replacement.setFailStop(true);
+ try{
+  await assert.rejects(replacement.adapter.ensureEditor(replacement.input),{code:'EDITOR_RECONCILIATION_REQUIRED'});assert.equal(replacement.calls.some(call=>call.op==='ensure'),false);
+  assert.equal(replacement.calls[0].generation,retained.generation);assert.equal(replacement.calls[0].stopToken,retained.stopToken);assert.equal((await shared.receiptStore.list()).length,1);
+  replacement.setFailStop(false);const next=await replacement.adapter.ensureEditor(replacement.input);assert.notEqual(next.generation,retained.generation);assert.deepEqual(replacement.calls.map(call=>call.op),['stop','stop','ensure']);
+ }finally{replacement.setFailStop(false);await replacement.adapter.dispose();}
+});
+
+test('disposal handoff fences a racing replacement and preserves its reconciling claim',async t=>{
+ const shared=await sharedStore(t),old=fixture(shared),ready=await old.adapter.ensureEditor(old.input),oldEntered=deferred(),oldRelease=deferred(),newEntered=deferred(),newRelease=deferred();
+ old.setFailStop(true);old.setStopHook(async()=>{oldEntered.resolve();await oldRelease.promise;});const disposing=old.adapter.dispose();let replacement;
+ try{
+  assert.equal(shared.receiptStore.isLive(ready.generation),false,'claim retires synchronously before awaited stop');await oldEntered.promise;
+  replacement=fixture(shared);replacement.setStopHook(async()=>{newEntered.resolve();await newRelease.promise;});
+  const reopening=replacement.adapter.ensureEditor(replacement.input);await newEntered.promise;
+  assert.equal(replacement.calls.some(call=>call.op==='ensure'),false);assert.throws(()=>shared.receiptStore.claim(ready.generation),{code:'PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED'});
+  oldRelease.resolve();await disposing;
+  // A later exact cleanup from the old object must not release the replacement
+  // reconciler's different private claim identity for the same generation.
+  old.setStopHook(null);old.setFailStop(false);await old.adapter.stopEditor({...old.input,generation:ready.generation});assert.throws(()=>shared.receiptStore.claim(ready.generation),{code:'PROJECT_RUNTIME_RECEIPT_ALREADY_OWNED'});
+  newRelease.resolve();const next=await reopening;assert.notEqual(next.generation,ready.generation);assert.deepEqual(replacement.calls.map(call=>call.op),['stop','ensure']);
+ }finally{oldRelease.resolve();newRelease.resolve();await disposing;if(replacement){replacement.setStopHook(null);replacement.setFailStop(false);await replacement.adapter.dispose();}}
+});
+
+test('dispose closes admission idempotently while leaving another live adapter untouched',async t=>{
+ const shared=await sharedStore(t),old=fixture(shared),other=fixture({...shared,input:{sessionId:'project-B',projectRoot:'/projects/B',readOnly:false}}),a=await old.adapter.ensureEditor(old.input),b=await other.adapter.ensureEditor(other.input);
+ old.setFailStop(true);await Promise.all([old.adapter.dispose(),old.adapter.dispose()]);
+ try{
+  assert.equal(old.calls.filter(call=>call.op==='stop').length,1);assert.equal(shared.receiptStore.isLive(a.generation),false);assert.equal(shared.receiptStore.isLive(b.generation),true);
+  await assert.rejects(old.adapter.ensureEditor(old.input),{code:'EDITOR_ADAPTER_CLOSED'});await assert.rejects(old.adapter.touchEditor({...old.input,generation:a.generation}),{code:'EDITOR_ADAPTER_CLOSED'});await assert.rejects(old.adapter.beforeHeavy(),{code:'EDITOR_ADAPTER_CLOSED'});
+  assert.equal(other.calls.filter(call=>call.op==='stop').length,0);
+ }finally{old.setFailStop(false);await old.adapter.stopEditor({...old.input,generation:a.generation});await other.adapter.dispose();}
+});
+
+test('dispose during an in-flight ensure cannot construct a bridge or publish ready',async()=>{
+ const f=fixture(),entered=deferred(),release=deferred();f.setIdentityHook(async()=>{entered.resolve();await release.promise;});const opening=f.adapter.ensureEditor(f.input);await entered.promise;const disposing=f.adapter.dispose();
+ try{release.resolve();await assert.rejects(opening,{code:'EDITOR_ADAPTER_CLOSED'});await disposing;assert.equal(f.bridges.length,0);assert.deepEqual(f.calls.map(call=>call.op),['ensure','stop']);assert.deepEqual(await f.receiptStore.list(),[]);}
+ finally{release.resolve();await disposing;}
 });

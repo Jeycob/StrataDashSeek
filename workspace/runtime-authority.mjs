@@ -13,7 +13,8 @@ export async function runtimeContext(ctx,manager,input){
  const {sessionId,op,kind,generation,accessSessionId}=input;
  if(Object.keys(input).some(k=>!['sessionId','op','kind','generation','accessSessionId'].includes(k))||!['ensure','execute'].includes(op)||!['editor','executor','relay'].includes(kind)||typeof sessionId!=='string'||!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)||!/^[a-f0-9]{32}$/.test(generation||''))throw fail('PROJECT_RUNTIME_REQUEST_INVALID');
  const record=manager.data.sessions[sessionId],project=await checked(()=>manager.projectFor(sessionId));
- if(!record||record.legacy||record.nativeWorktree||record.independentRepository!==true||manager.data.trash?.[sessionId]||ctx.workspaceRegistry.archivedSessionIds.has(sessionId)||!project.live||project.header.origin==='subagent')throw fail('PROJECT_RUNTIME_NOT_ISOLATED');
+ const archived=ctx.workspaceRegistry.archivedSessionIds;
+ if(!record||record.legacy||record.nativeWorktree||record.independentRepository!==true||manager.data.trash?.[sessionId]||(Array.isArray(archived)?archived.includes(sessionId):archived.has(sessionId))||!project.live||project.header.origin==='subagent')throw fail('PROJECT_RUNTIME_NOT_ISOLATED');
  const root=await checked(()=>fs.realpath(record.root)),base=await checked(()=>fs.realpath(manager.projectsRoot)),git=path.join(root,'.git');
  if(root!==record.root||root!==project.root||path.dirname(root)!==base)throw fail('PROJECT_RUNTIME_NOT_ISOLATED');
  for(const[id,other]of Object.entries(manager.data.sessions))if(id!==sessionId&&other.root&&(root===other.root||root.startsWith(other.root+path.sep)||other.root.startsWith(root+path.sep)))throw fail('PROJECT_RUNTIME_SHARED');

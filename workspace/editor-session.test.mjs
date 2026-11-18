@@ -8,7 +8,7 @@ import {createEditorSessions,installEditorSessions} from './editor-session.mjs';
 async function fixture(t){
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'editor-sessions-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));const projectsRoot=await fs.realpath(root),sessions={};
  for(const id of['A','B']){const dir=path.join(projectsRoot,id);await fs.mkdir(dir);sessions[id]={root:dir,independentRepository:true};}
- const calls=[],ctx={on:()=>{},workspaceRegistry:{archivedSessionIds:new Set()},sandboxPolicy:{resolve:()=>({mode:'workspace-write'})}},manager={execution:isolatedExecutionBinding(),projectsRoot,data:{sessions,trash:{}},async projectFor(id){if(!sessions[id])throw Error('no session');return{root:sessions[id].root,header:{},live:{id,header:{}}};}};
+ const calls=[],ctx={on:()=>{},workspaceRegistry:{archivedSessionIds:[]},sandboxPolicy:{resolve:()=>({mode:'workspace-write'})}},manager={execution:isolatedExecutionBinding(),projectsRoot,data:{sessions,trash:{}},async projectFor(id){if(!sessions[id])throw Error('no session');return{root:sessions[id].root,header:{},live:{id,header:{}}};}};
  const adapter={async ensureEditor(input){calls.push({op:'ensure',...input});return{ready:true,generation:'g-'+input.sessionId,socketPath:'/synthetic/'+input.sessionId+'.sock',readOnly:input.readOnly,isolation:{enforced:true,sessionId:input.sessionId,projectRoot:input.projectRoot,readOnly:input.readOnly}};},async stopEditor(input){calls.push({op:'stop',...input});}};
  const origins={allocate:id=>({origin:'https://owner.test:'+(id==='A'?19443:19444),listenerPort:id==='A'?29443:29444})},brokers=[];
  const options={adapter,origins,ownerOrigin:'https://owner.test',bind:async()=>{},brokerFactory:input=>{const broker={...input,closed:false,issue:()=>({version:1,sessionId:input.sessionId,generation:input.generation,state:'ready',url:input.origin+'/fixture#synthetic'}),close(){this.closed=true;}};brokers.push(broker);return broker;}};
@@ -24,7 +24,7 @@ test('revocation closes browser channels synchronously and prevents an in-flight
  const base=f.adapter.ensureEditor;f.adapter.ensureEditor=async input=>{const result=await base(input);f.api.revoke(input.sessionId);return result;};await assert.rejects(f.api.run({op:'open',sessionId:'B'}),{code:'EDITOR_ACCESS_CHANGED'});assert.equal(f.brokers.length,1);
 });
 test('archive, read-only changes during launch, shared roots and unproven OS isolation never issue an editor grant',async t=>{
- const f=await fixture(t);f.ctx.workspaceRegistry.archivedSessionIds.add('A');await assert.rejects(f.api.run({op:'open',sessionId:'A'}),{code:'EDITOR_PROJECT_NOT_ISOLATED'});assert.equal(f.calls.length,0);f.ctx.workspaceRegistry.archivedSessionIds.clear();
+ const f=await fixture(t);f.ctx.workspaceRegistry.archivedSessionIds.push('A');await assert.rejects(f.api.run({op:'open',sessionId:'A'}),{code:'EDITOR_PROJECT_NOT_ISOLATED'});assert.equal(f.calls.length,0);f.ctx.workspaceRegistry.archivedSessionIds.length=0;
  const base=f.adapter.ensureEditor;f.adapter.ensureEditor=async input=>{const result=await base(input);f.ctx.sandboxPolicy.resolve=()=>({mode:'read-only'});return result;};await assert.rejects(f.api.run({op:'open',sessionId:'A'}),{code:'EDITOR_ISOLATION_UNPROVEN'});assert.equal(f.brokers.length,0);
  f.adapter.ensureEditor=async input=>({...await base(input),isolation:{enforced:false}});await assert.rejects(f.api.run({op:'open',sessionId:'A'}),{code:'EDITOR_ISOLATION_UNPROVEN'});assert.equal(f.brokers.length,0);
  f.manager.data.sessions.B.root=f.manager.data.sessions.A.root;await assert.rejects(f.api.run({op:'open',sessionId:'A'}),{code:'EDITOR_PROJECT_SHARED'});
@@ -48,4 +48,28 @@ test('close aborts the in-flight adapter RPC without waiting for admission to fi
  f.adapter.ensureEditor=async({signal})=>{entered();return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(signal.reason),{once:true}));};
  const opening=f.api.run({op:'open',sessionId:'A'});await pending;const closing=f.api.run({op:'close',sessionId:'A'});
  await assert.rejects(opening,{code:'EDITOR_CLOSED'});assert.equal((await closing).state,'closed');assert.equal(f.brokers.length,0);
+});
+
+test('SDK archive arrays accept an active editor and refuse an archived one before admission',async t=>{
+ const f=await fixture(t);f.ctx.workspaceRegistry.archivedSessionIds=Object.freeze(['A']);await assert.rejects(f.api.run({op:'open',sessionId:'A'}),{code:'EDITOR_PROJECT_NOT_ISOLATED'});assert.equal(f.calls.length,0);
+ assert.equal((await f.api.run({op:'open',sessionId:'B'})).state,'ready');assert.deepEqual(f.ctx.workspaceRegistry.archivedSessionIds,['A']);
+});
+test('trusted Set archive compatibility remains fail-closed for an archived editor',async t=>{
+ const f=await fixture(t);f.ctx.workspaceRegistry.archivedSessionIds=new Set(['A']);await assert.rejects(f.api.run({op:'open',sessionId:'A'}),{code:'EDITOR_PROJECT_NOT_ISOLATED'});assert.equal((await f.api.run({op:'open',sessionId:'B'})).state,'ready');
+});
+
+test('editor session disposal retires its adapter before waiting for a queued opening',async t=>{
+ const f=await fixture(t);f.ctx.workspaceRegistry.archivedSessionIds=new Set();await f.api.run({op:'open',sessionId:'A'});let enter,release,finish,retired=false;
+ const entered=new Promise(resolve=>enter=resolve),waiting=new Promise(resolve=>release=resolve),stopping=new Promise(resolve=>finish=resolve),base=f.adapter.ensureEditor;
+ f.adapter.ensureEditor=async input=>{enter();await waiting;return base(input);};f.adapter.dispose=()=>{retired=true;return stopping;};const opening=f.api.run({op:'open',sessionId:'B'});await entered;const disposal=f.api.dispose();
+ try{assert.equal(retired,true,'retire before awaiting the opening queue');assert.equal(f.brokers[0].closed,true);release();await assert.rejects(opening,{code:'EDITOR_CLOSED'});finish();await disposal;}
+ finally{release();finish();await disposal;await opening.catch(()=>{});}
+});
+
+test('disposal during awaited broker bind closes the late broker without issuing a grant',async t=>{
+ const f=await fixture(t);let enter,release,issues=0;const entered=new Promise(resolve=>enter=resolve),waiting=new Promise(resolve=>release=resolve);
+ const api=createEditorSessions(f.ctx,f.manager,{...f.options,bind:async()=>{enter();await waiting;},brokerFactory:input=>{const broker=f.options.brokerFactory(input),issue=broker.issue;broker.issue=()=>{issues++;return issue();};return broker;}});
+ const opening=api.run({op:'open',sessionId:'A'});await entered;const disposal=api.dispose();
+ try{release();await assert.rejects(opening,{code:'EDITOR_CLOSED'});await disposal;assert.equal(issues,0);assert.equal(f.brokers[0].closed,true);assert(f.calls.some(call=>call.op==='stop'&&call.generation==='g-A'));}
+ finally{release();await opening.catch(()=>{});await disposal;}
 });

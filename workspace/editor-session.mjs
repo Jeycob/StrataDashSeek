@@ -10,7 +10,8 @@ const fail=code=>new WorkbenchError(code,'The isolated editor is unavailable for
 async function editorProject(ctx,manager,sessionId){
  const mode=bindProjectExecution(manager.execution??ctx.projectExecutionMode),check=()=>mode.assertUnchanged();check();
  const project=await manager.projectFor(sessionId);check();const record=manager.data.sessions[sessionId];
- if(!record||record.legacy||record.nativeWorktree||record.independentRepository!==true||manager.data.trash?.[sessionId]||ctx.workspaceRegistry.archivedSessionIds.has(sessionId)||project.header.origin==='subagent')throw fail('EDITOR_PROJECT_NOT_ISOLATED');
+ const archived=ctx.workspaceRegistry.archivedSessionIds;
+ if(!record||record.legacy||record.nativeWorktree||record.independentRepository!==true||manager.data.trash?.[sessionId]||(Array.isArray(archived)?archived.includes(sessionId):archived.has(sessionId))||project.header.origin==='subagent')throw fail('EDITOR_PROJECT_NOT_ISOLATED');
  const root=await fs.realpath(record.root);check();const base=await fs.realpath(manager.projectsRoot);check();
  if(root!==record.root||root!==project.root||root===base||!root.startsWith(base+path.sep))throw fail('EDITOR_PROJECT_NOT_ISOLATED');
  for(const[id,other]of Object.entries(manager.data.sessions))if(id!==sessionId&&other.root&&(root===other.root||root.startsWith(other.root+path.sep)||other.root.startsWith(root+path.sep)))throw fail('EDITOR_PROJECT_SHARED');
@@ -56,7 +57,7 @@ export function createEditorSessions(ctx,manager,{adapter,origins,ownerOrigin,br
    if(prior&&(prior.generation!==process.generation||prior.socketPath!==process.socketPath||prior.readOnly!==project.readOnly)){prior.broker.close();active.delete(sessionId);}
    let entry=active.get(sessionId);
    if(!entry){const broker=brokerFactory({sessionId,generation:process.generation,origin:endpoint.origin,ownerOrigin,socketPath:process.socketPath,runtimeDeadline:process.hardDeadline,onActivity:()=>activity(sessionId,process.generation)});try{await bind(broker,endpoint);}catch(error){broker.close();throw error;}entry={broker,generation:process.generation,socketPath:process.socketPath,readOnly:project.readOnly,epoch};active.set(sessionId,entry);}
-   check();return{...entry.broker.issue(),readOnly:project.readOnly};
+   check();signal.throwIfAborted();if(disposed)throw fail('EDITOR_CLOSED');return{...entry.broker.issue(),readOnly:project.readOnly};
   }catch(error){await close(sessionId).catch(()=>{});await adapter.stopEditor({sessionId,generation:process.generation}).catch(()=>{});throw error;}
   }finally{if(openings.get(sessionId)===controller)openings.delete(sessionId);}
  }
@@ -64,7 +65,13 @@ export function createEditorSessions(ctx,manager,{adapter,origins,ownerOrigin,br
   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!['op','sessionId'].includes(k))||!['open','close'].includes(input.op)||typeof input.sessionId!=='string'||!/^[a-zA-Z0-9_-]{1,128}$/.test(input.sessionId))return Promise.reject(fail('EDITOR_REQUEST_INVALID'));
   if(input.op==='close')openings.get(input.sessionId)?.abort(fail('EDITOR_CLOSED'));
   return ordered(input.sessionId,()=>input.op==='close'?close(input.sessionId):open(input.sessionId,signal));
- },async dispose(){disposed=true;for(const controller of openings.values())controller.abort(fail('EDITOR_CLOSED'));await Promise.allSettled([...queues.values()]);await Promise.allSettled([...active.keys()].map(close));await adapter?.dispose?.();}};
+ },async dispose(){
+  disposed=true;for(const controller of openings.values())controller.abort(fail('EDITOR_CLOSED'));for(const entry of active.values())entry.broker.close();
+  // Retire the adapter before an awaited opening can overlap a replacement
+  // composition. Keep awaiting its cleanup and preserve rejection semantics.
+  const stopping=Promise.resolve(adapter?.dispose?.());void stopping.catch(()=>{});
+  await Promise.allSettled([...queues.values()]);await Promise.allSettled([...active.keys()].map(close));await stopping;
+ }};
 }
 export function installEditorSessions(ctx,manager,options,binding=manager.execution??ctx.projectExecutionMode){
  const editors=createEditorSessions(ctx,manager,options,binding),reply=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
