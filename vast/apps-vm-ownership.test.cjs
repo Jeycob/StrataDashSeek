@@ -1,6 +1,8 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const {fixture}=require('./fixtures/vm-ownership.cjs');
+const {EventEmitter}=require('node:events');
+const {executionBindingFixture}=require('./fixtures/execution-binding.cjs');
 
 test('unowned warm pidfile never becomes a recovered worker or permits effects',async()=>{
  const f=fixture({record:'73\n'});assert.equal(f.worker.phase,'quarantined');assert.equal(f.worker.pid(),null);
@@ -44,4 +46,27 @@ test('only actual owned close publishes a durable absent receipt usable by a new
 });
 test('failed durable absence publication keeps HOLD even after the child closed',async()=>{
  const f=fixture({failAbsenceSave:true});await f.worker.start();f.setRecord(null);const pending=f.worker.stop();await new Promise(resolve=>setImmediate(resolve));f.exit();f.close();await assert.rejects(pending);assert.notEqual(f.worker.phase,'asleep');await assert.rejects(f.worker.start(),{code:'APPS_VM_RECONCILIATION_REQUIRED'});
+});
+test('ensure cannot return ready when its child closes during the warm engine await',async()=>{
+ const f=fixture();await f.worker.start();let release;f.worker.engine.available=()=>new Promise(resolve=>{release=resolve;});
+ const pending=f.worker.ensure();assert.equal(typeof release,'function');f.setRecord(null);f.exit();f.close();release();
+ await assert.rejects(pending,{code:'APPS_VM_RECONCILIATION_REQUIRED'});assert.equal(f.worker.pid(),null);assert.notEqual(f.worker.phase,'ready');
+});
+test('cold startup cannot validate or restore containers after close during engine info',async()=>{
+ const f=fixture({savedState:{initialized:true,workerProcess:{version:1,state:'absent'},resumeIds:['b'.repeat(64)]}}),effects=[];
+ const original=f.worker.engine.json;f.worker.engine.json=async()=>{const info=await original();f.setRecord(null);f.exit();f.close();return info;};
+ f.worker.validateResume=async()=>effects.push('validate');f.worker.startManagedContainer=async()=>effects.push('restore');f.worker.diskFree=Object.getPrototypeOf(f.worker).diskFree;
+ await assert.rejects(f.worker.start(),{code:'APPS_VM_RECONCILIATION_REQUIRED'});assert.deepEqual(effects,[]);assert.notEqual(f.worker.phase,'ready');
+});
+test('held serial connection cannot publish or write after its child closes',async()=>{
+ const writes=[],socket=new EventEmitter();Object.assign(socket,{destroyed:false,setEncoding(){},write:value=>writes.push(value),destroy(){this.destroyed=true;}});
+ const f=fixture({socketFactory:()=>socket});await f.worker.start();f.worker.serial=null;
+ const pending=Object.getPrototypeOf(f.worker).connectSerial.call(f.worker);f.setRecord(null);f.exit();f.close();socket.emit('connect');
+ await assert.rejects(pending,{code:'APPS_VM_RECONCILIATION_REQUIRED'});assert.equal(f.worker.serial,null);assert.deepEqual(writes,[]);assert.equal(socket.destroyed,true);
+});
+test('settling serial connect still works for the same owned child after execution closes',async()=>{
+ const writes=[],socket=new EventEmitter(),execution=executionBindingFixture('host-compat');Object.assign(socket,{destroyed:false,setEncoding(){},write:value=>writes.push(value),destroy(){this.destroyed=true;}});
+ const f=fixture({execution:execution.binding,socketFactory:()=>socket});await f.worker.start();f.worker.serial=null;execution.fail();
+ const pending=Object.getPrototypeOf(f.worker).connectSerial.call(f.worker,{settling:true});socket.emit('connect');await pending;assert.strictEqual(f.worker.serial,socket);assert.deepEqual(writes,['\n']);
+ f.setRecord(null);f.exit();f.close();
 });

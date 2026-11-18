@@ -69,12 +69,12 @@ async function waitOwnedClose(own){
   await Promise.race([own.done,new Promise((_,reject)=>{timer=setTimeout(()=>reject(settlementError()),60000);})]);
  }finally{clearTimeout(timer);}
 }
-function requireControl(vm,{settling=false,isolated=false,owned=false}={}){
+function requireControl(vm,{settling=false,isolated=false,owned=false,owner}={}){
  if(vm.cfg?.enabled===false||vm.cfg?.vm?.enabled===false)throw Object.assign(Error('Docker worker is not enabled; an existing guest remains quarantined for explicit reconciliation'),{code:'APPS_WORKER_DISABLED',status:409});
  if(vm.quarantined)throw ownershipError();
  if(!settling&&ownedProcesses.get(vm)?.stopRequested&&!ownedProcesses.get(vm).closed)throw settlementError();
  if(!settling)assertAppsExecution(vm,{isolated});
- if(owned)requireProcess(vm);
+ if(owned){requireProcess(vm);if(owner!==undefined&&ownedProcesses.get(vm)!==owner)throw ownershipError();}
 }
 function projectsEnabled(vm){return vm.execution.snapshot.mode==='isolated-guest'&&vm.cfg?.projectRuntime?.enabled===true;}
 function controlFirewall(){return `
@@ -198,18 +198,18 @@ class DockerVM {
  async ensure(){
   requireControl(this);requireProcess(this,{absent:true});this.requireCapacity();
   this.touch();const waitUntil=Date.now()+90000;while(this.stopping&&Date.now()<waitUntil){await pause(250);requireControl(this);}if(this.stopping)throw Error('Docker is still saving its state; retry shortly');
-  if(this.pending){await this.pending;requireControl(this);return;}
-  this.pending=this.start().finally(()=>{this.pending=null;});await this.pending;requireControl(this);
+  if(this.pending){await this.pending;requireControl(this,{owned:true});return;}
+  this.pending=this.start().finally(()=>{this.pending=null;});await this.pending;requireControl(this,{owned:true});
  }
  async connectSerial({settling=false}={}){
-  requireControl(this,{settling,owned:true});
+  requireControl(this,{settling,owned:true});const owner=ownedProcesses.get(this);
   if(this.serial&&!this.serial.destroyed)return;
   const socket=net.createConnection(path.join(this.root,'serial.sock'));socket.setEncoding('utf8');
   await new Promise((resolve,reject)=>{socket.once('connect',resolve);socket.once('error',reject);});
-  try{requireControl(this,{settling});}catch(error){socket.destroy();throw error;}
+  try{requireControl(this,{settling,owned:true,owner});}catch(error){socket.destroy();throw error;}
   this.serial=socket;socket.on('error',e=>{this.error=e.message;});
   socket.on('data',text=>{
-   if(this.phase==='starting')try{requireControl(this);}catch(error){this.phase='error';this.error=error.message;socket.destroy();return;}
+   try{requireControl(this,{settling:settling||this.stopping,owned:true,owner});}catch(error){if(ownedProcesses.get(this)===owner&&this.phase==='starting'){this.phase='error';this.error=error.message;}socket.destroy();return;}
    if(text.includes('\x1b[6n'))socket.write('\x1b[1;1R');
    this.buffer=(this.buffer+text).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'').slice(-16384);const log=path.join(this.root,'console.log');
    try{const old=fs.existsSync(log)?fs.readFileSync(log,'utf8'):'';fs.writeFileSync(log,(old+text).slice(-256*1024),{mode:0o600});}catch{}
@@ -225,9 +225,9 @@ class DockerVM {
  async start(){
   requireControl(this);requireProcess(this,{absent:true});this.requireCapacity();
   const projects=projectsEnabled(this);
-  if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1 && this.saved.resourceBootstrapVersion===2 && (!projects||this.projectRuntimeIsolation?.bootPid===this.pid())){await this.engine.available();requireControl(this);return;}
+  if(this.phase==='ready' && this.pid() && this.saved.controlIsolationVersion===1 && this.saved.resourceBootstrapVersion===2 && (!projects||this.projectRuntimeIsolation?.bootPid===this.pid())){const owner=ownedProcesses.get(this);await this.engine.available();requireControl(this,{owned:true,owner});return;}
   this.phase='starting';this.error=null;this.scriptSent=false;this.nonce=crypto.randomBytes(8).toString('hex');
-  if(this.serial&&!this.serial.destroyed)this.serial.write('\n');
+  if(this.serial&&!this.serial.destroyed){requireControl(this,{owned:true});this.serial.write('\n');}
   if(requireProcess(this,{absent:true}).kind==='ABSENT'){
    for(const name of ['serial.sock','qmp.sock','qemu.pid'])try{fs.unlinkSync(path.join(this.root,name));}catch(e){if(e.code!=='ENOENT')throw e;}
    const stat=fs.statfsSync(this.root);if(stat.bavail*stat.bsize<2*1024**3)throw Error('Less than 2 GiB host reserve; worker not started');
@@ -253,39 +253,40 @@ class DockerVM {
    }
    finally{if(log!==undefined)fs.closeSync(log);projectVM.closeExports(this.projectExports);}
   }
+  const owner=ownedProcesses.get(this);
   const deadline=Date.now()+(this.saved.initialized?300000:900000);
   try{
    while(Date.now()<deadline){
-    requireControl(this,{owned:true});
+    requireControl(this,{owned:true,owner});
     const bootExit=this.buffer.match(new RegExp('HARNESS_BOOT_EXIT_'+this.nonce+'=(\\d+)'));if(bootExit&&Number(bootExit[1])!==0)throw Error('Guest setup failed with exit '+bootExit[1]+'; inspect the worker console');
-    if(!this.serial||this.serial.destroyed)try{await this.connectSerial();requireControl(this);}catch(error){requireControl(this);}
-    if(!this.scriptSent||!this.buffer.includes('HARNESS_READY_'+this.nonce)||!bootExit){await pause(250);requireControl(this);continue;}
+    if(!this.serial||this.serial.destroyed)try{await this.connectSerial();requireControl(this,{owned:true,owner});}catch(error){requireControl(this,{owned:true,owner});}
+    if(!this.scriptSent||!this.buffer.includes('HARNESS_READY_'+this.nonce)||!bootExit){await pause(250);requireControl(this,{owned:true,owner});continue;}
     try{
      const info=await this.engine.json('GET','/info',{timeout:2000});
-     requireControl(this);
+     requireControl(this,{owned:true,owner});
      if(!info.Labels?.includes('io.stratadashseek.worker='+this.manifest.volumeId))throw Error('Unexpected Docker worker identity');
      if(info.CgroupVersion!=='2')throw Object.assign(Error('Unified cgroup v2 was not reported by the managed Docker worker; cold reconciliation is required'),{code:'APPS_CGROUP_V2_REQUIRED'});
      this.observedStorageDriver=info.Driver;this.storageObservedAt=Date.now();
      this.phase='restoring';this.saved.initialized=true;this.saved.controlIsolationVersion=1;this.saved.resourceBootstrapVersion=2;this.save();
-     if(projects){requireControl(this,{isolated:true});await projectVM.proveExports(this);requireControl(this,{isolated:true});}
+     if(projects){requireControl(this,{isolated:true,owned:true,owner});await projectVM.proveExports(this);requireControl(this,{isolated:true,owned:true,owner});}
      const resumeIds=this.saved.resumeIds||[];
-     if(resumeIds.length){if(typeof this.validateResume!=='function')throw Error('Published application resume identities require the application controller');await this.validateResume(resumeIds);requireControl(this);}
-     for(const id of resumeIds){requireControl(this);if(typeof this.startManagedContainer!=='function')throw Error('Managed container resource admission requires the application controller');await this.startManagedContainer(id);requireControl(this);}
-     this.phase='ready';this.touch();await this.diskFree();requireControl(this);this.save();return;
-    }catch(e){requireControl(this);if(this.phase!=='starting'||e.code==='APPS_CGROUP_V2_REQUIRED')throw e;}
-    await pause(1000);requireControl(this);
+     if(resumeIds.length){if(typeof this.validateResume!=='function')throw Error('Published application resume identities require the application controller');await this.validateResume(resumeIds);requireControl(this,{owned:true,owner});}
+     for(const id of resumeIds){requireControl(this,{owned:true,owner});if(typeof this.startManagedContainer!=='function')throw Error('Managed container resource admission requires the application controller');await this.startManagedContainer(id);requireControl(this,{owned:true,owner});}
+     this.phase='ready';this.touch();await this.diskFree();requireControl(this,{owned:true,owner});this.save();return;
+    }catch(e){requireControl(this,{owned:true,owner});if(this.phase!=='starting'||e.code==='APPS_CGROUP_V2_REQUIRED')throw e;}
+    await pause(1000);requireControl(this,{owned:true,owner});
    }
    throw Error('Docker worker startup exceeded five minutes; inspect its console');
   }catch(e){this.phase='error';this.error=e.message;throw e;}
  }
  async diskFree(){
-  requireControl(this,{owned:true});
-  if(!this.serial||this.serial.destroyed){await this.connectSerial();requireControl(this);}const nonce=crypto.randomBytes(8).toString('hex');
+  requireControl(this,{owned:true});const owner=ownedProcesses.get(this);
+  if(!this.serial||this.serial.destroyed){await this.connectSerial();requireControl(this,{owned:true,owner});}const nonce=crypto.randomBytes(8).toString('hex');
   this.serial.write("df -Pk /var/lib/harness | tail -n 1 | awk '{printf \"HARNESS_TOTAL_"+nonce+"=%s\\nHARNESS_USED_"+nonce+"=%s\\nHARNESS_FREE_"+nonce+"=%s\\n\", $2, $3, $4}'; df -Pi /var/lib/harness | tail -n 1 | awk '{printf \"HARNESS_ITOTAL_"+nonce+"=%s\\nHARNESS_INODES_"+nonce+"=%s\\n\", $2, $4}'\n");
-  const deadline=Date.now()+5000;while(Date.now()<deadline){requireControl(this);const read=label=>{const found=this.buffer.match(new RegExp('HARNESS_'+label+'_'+nonce+'=(\\d+)'));return found?Number(found[1]):null;},available=read('FREE'),inodes=read('INODES');if(available!==null&&inodes!==null){this.freeBytes=available*1024;this.freeInodes=inodes;this.totalBytes=read('TOTAL')===null?null:read('TOTAL')*1024;this.usedBytes=read('USED')===null?null:read('USED')*1024;this.totalInodes=read('ITOTAL');this.diskCheckedAt=Date.now();return this.freeBytes;}await pause(100);requireControl(this);}throw Error('Worker disk space and inodes could not be verified');
+  const deadline=Date.now()+5000;while(Date.now()<deadline){requireControl(this,{owned:true,owner});const read=label=>{const found=this.buffer.match(new RegExp('HARNESS_'+label+'_'+nonce+'=(\\d+)'));return found?Number(found[1]):null;},available=read('FREE'),inodes=read('INODES');if(available!==null&&inodes!==null){this.freeBytes=available*1024;this.freeInodes=inodes;this.totalBytes=read('TOTAL')===null?null:read('TOTAL')*1024;this.usedBytes=read('USED')===null?null:read('USED')*1024;this.totalInodes=read('ITOTAL');this.diskCheckedAt=Date.now();return this.freeBytes;}await pause(100);requireControl(this,{owned:true,owner});}throw Error('Worker disk space and inodes could not be verified');
  }
  async probeOverlay(){
-  requireControl(this);
+  const owner=ownedProcesses.get(this);requireControl(this,{owned:true,owner});
   if(this.phase!=='ready'||this.saved.controlIsolationVersion!==1||!this.pid()||!this.serial||this.serial.destroyed)throw Error('Overlay probe requires an already ready verified managed worker');
   if(this.overlayProbePending)throw Error('An overlay probe is already running');
   const nonce=crypto.randomBytes(8).toString('hex'),dir='/tmp/harness-overlay-'+nonce,script=Buffer.from(fixedguestOverlayProbe({volumeId32hex:this.manifest.volumeId,nonce16hex:nonce})).toString('base64');
@@ -294,14 +295,14 @@ class DockerVM {
    // The fixed script is the only serial payload. A private, nonexisting guest
    // directory and the outer hard timeout bound even interrupted diagnostics.
    this.serial.write("( umask 077; if mkdir '"+dir+"'; then\nbase64 -d > '"+dir+"/probe.sh' <<'OVERLAY_SCRIPT_"+nonce+"'\n"+script.match(/.{1,512}/g).join('\n')+"\nOVERLAY_SCRIPT_"+nonce+"\ntimeout -s TERM -k 20 45 sh '"+dir+"/probe.sh'; probe_rc=$?\nif test ! -L '"+dir+"' && test \"$(readlink -f '"+dir+"')\" = '"+dir+"' && test \"$(stat -c %u '"+dir+"')\" = 0; then rm -f -- '"+dir+"/probe.sh' && rmdir -- '"+dir+"' || probe_rc=124; else probe_rc=124; fi\nprintf 'HARNESS_OVERLAY_DONE_"+nonce+"=%s\\n' \"$probe_rc\"; else printf 'HARNESS_OVERLAY_DONE_"+nonce+"=125\\n'; fi )\n");
-   const deadline=Date.now()+70000;while(Date.now()<deadline){requireControl(this);const done=this.buffer.match(new RegExp('(?:^|\\n)HARNESS_OVERLAY_DONE_'+nonce+'=(\\d+)(?:\\r?\\n|$)'));if(done){const result=parseOverlayProbe(this.buffer,nonce),rc=Number(done[1]);if(rc===124||rc===125)throw Error('Overlay probe wrapper cleanup or preparation failed');if(result.supported&&rc!==0)throw Error('Overlay probe success conflicts with its exit status');const report={...result,checkedAt:Date.now()};this.saved.overlayProbe={...report,volumeId:this.manifest.volumeId,alpineSHA256:this.manifest.alpineSHA256};this.save();return report;}await pause(100);requireControl(this);}throw Error('Bounded overlay probe did not return a complete result');
+   const deadline=Date.now()+70000;while(Date.now()<deadline){requireControl(this,{owned:true,owner});const done=this.buffer.match(new RegExp('(?:^|\\n)HARNESS_OVERLAY_DONE_'+nonce+'=(\\d+)(?:\\r?\\n|$)'));if(done){const result=parseOverlayProbe(this.buffer,nonce),rc=Number(done[1]);if(rc===124||rc===125)throw Error('Overlay probe wrapper cleanup or preparation failed');if(result.supported&&rc!==0)throw Error('Overlay probe success conflicts with its exit status');const report={...result,checkedAt:Date.now()};this.saved.overlayProbe={...report,volumeId:this.manifest.volumeId,alpineSHA256:this.manifest.alpineSHA256};this.save();return report;}await pause(100);requireControl(this,{owned:true,owner});}throw Error('Bounded overlay probe did not return a complete result');
   }finally{this.overlayProbePending=null;}
  }
  async remember({settling=false}={}){requireControl(this,{settling,owned:true});if(this.phase!=='ready')return;const listed=await this.engine.list();requireControl(this,{settling,owned:true});const rows=listed.filter(c=>c.Labels?.[LABEL+'.role']!=='test');this.saved.containers=rows;this.saved.resumeIds=rows.filter(c=>c.State==='running'&&!/^project-(?:editor|relay|executor|egress)$/.test(c.Labels?.[LABEL+'.role']||'')).map(c=>c.Id);this.save();}
- async prepareProjectRuntime(input){requireControl(this,{isolated:true});const value=await projectVM.prepare(this,input);requireControl(this,{isolated:true});return value;}
- async projectRuntimeHealth(input){requireControl(this,{isolated:true});const value=await projectVM.health(this,input);requireControl(this,{isolated:true});return value;}
- async prepareProjectEgress(input){requireControl(this,{isolated:true});const value=await projectVM.prepareEgress(this,input);requireControl(this,{isolated:true});return value;}
- async projectEgressHealth(input){requireControl(this,{isolated:true});const value=await projectVM.egressHealth(this,input);requireControl(this,{isolated:true});return value;}
+ async prepareProjectRuntime(input){requireControl(this,{isolated:true});const owner=ownedProcesses.get(this),value=await projectVM.prepare(this,input);requireControl(this,{isolated:true,owned:true,owner});return value;}
+ async projectRuntimeHealth(input){requireControl(this,{isolated:true});const owner=ownedProcesses.get(this),value=await projectVM.health(this,input);requireControl(this,{isolated:true,owned:true,owner});return value;}
+ async prepareProjectEgress(input){requireControl(this,{isolated:true});const owner=ownedProcesses.get(this),value=await projectVM.prepareEgress(this,input);requireControl(this,{isolated:true,owned:true,owner});return value;}
+ async projectEgressHealth(input){requireControl(this,{isolated:true});const owner=ownedProcesses.get(this),value=await projectVM.egressHealth(this,input);requireControl(this,{isolated:true,owned:true,owner});return value;}
  async stop(){
   requireControl(this,{settling:true});
   if(this.pending)throw Error('Docker worker is starting');if(this.stopping)throw Error('Docker worker is already stopping');
@@ -319,7 +320,7 @@ class DockerVM {
    const stops=await Promise.allSettled(stopIds.map(id=>this.engine.request('POST','/containers/'+id+'/stop?t=15',{timeout:45000})));
    const failed=stops.find(r=>r.status==='rejected');if(failed)throw failed.reason;
    requireProcess(this);
-   if(!this.serial||this.serial.destroyed)await this.connectSerial({settling:true});this.serial.write('\nkill -TERM $(pidof dockerd) 2>/dev/null || true; for n in $(seq 1 30); do pidof dockerd >/dev/null || break; sleep 1; done; if pidof dockerd >/dev/null; then echo HARNESS_DOCKER_SHUTDOWN_FAILED; else sync; poweroff; fi\n');
+   if(!this.serial||this.serial.destroyed)await this.connectSerial({settling:true});requireControl(this,{settling:true,owned:true,owner:own});this.serial.write('\nkill -TERM $(pidof dockerd) 2>/dev/null || true; for n in $(seq 1 30); do pidof dockerd >/dev/null || break; sleep 1; done; if pidof dockerd >/dev/null; then echo HARNESS_DOCKER_SHUTDOWN_FAILED; else sync; poweroff; fi\n');
    await waitOwnedClose(own);
    publishAbsence(this,own);
    if(processObservation(this).kind!=='ABSENT')throw ownershipError();
