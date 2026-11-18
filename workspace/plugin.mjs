@@ -122,6 +122,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
       if (data.op === 'restore') return reply(await manager.inOrder(() => manager.restoreSession(id)));
       if (data.op === 'resume') { await manager.reviewResume(id, data.strategy); return reply({ resumed: true }); }
       if (data.op === 'automatic-reconcile') { const value=await manager.automaticReconcile(id);return reply({...value,automatic:automaticReviewView(value.automatic)}); }
+      if (data.op === 'automatic-resume-consumed') { if(Object.keys(data).sort().join(',')!=='op,sessionId')throw new WorkbenchError('INVALID_CONSUMED_RECOVERY_REQUEST','Only the owner conversation identity is accepted.',400);const value=await manager.automaticResumeConsumed(id);return reply({...value,automatic:automaticReviewView(value.automatic)}); }
       const checkpoint = await checkpointOperation(manager, data, request.signal);
       if (checkpoint) return reply(checkpoint.value);
       throw new WorkbenchError('UNKNOWN_OPERATION', 'Unknown operation.', 400);

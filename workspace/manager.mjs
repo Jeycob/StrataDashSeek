@@ -14,6 +14,7 @@ import { verificationStatusMayBeMasked } from './shell-status.mjs';
 import { beginUserRequest } from './turn-budget.mjs';
 import { prepareAutomaticRequest, automaticReview, admitAutomaticStep } from './automatic-review.mjs';
 import {automaticReceipt,reconcileAutomatic,retainAutomaticProcess} from './automatic-recovery.mjs';
+import {resumeConsumedPrestep} from './automatic-consumed-recovery.mjs';
 import { registeredSelection, validateWorkspaceModel } from './model-selection.mjs';
 import { createIndependentProject } from './project-repository.mjs';
 import { bindProjectExecution } from './execution-mode.mjs';
@@ -46,7 +47,7 @@ export class WorkspaceManager {
   }
   async checked(action) { this.execution.assertUnchanged(); const value = await action(); this.execution.assertUnchanged(); return value; }
   inOrder(action) { const next = this.serial.then(() => this.checked(action)); this.serial = next.catch(() => {}); return next; }
-  save() { this.execution.assertUnchanged(); const snapshot = structuredClone(this.data); const next = this.persistQueue.then(() => this.checked(() => atomicJSON(this.file, snapshot))); this.persistQueue = next.catch(() => {}); return next; }
+  save() { this.execution.assertUnchanged(); const snapshot = structuredClone(this.data); const next = this.persistQueue.then(() => this.checked(() => atomicJSON(this.file, snapshot,{durable:true}))); this.persistQueue = next.catch(() => {}); return next; }
   workspaceFor(session) { return this.ctx.workspaceRegistry.list().find(w => w.sessionIds.includes(session.id) || w.path === session.header.cwd); }
   settings(session) { const workspace = this.workspaceFor(session); return validateSettings(this.data.workspaces[workspace?.id ?? session.header.cwd]?.settings ?? {}); }
   async updateSettings(workspaceId, input) {
@@ -432,6 +433,10 @@ export class WorkspaceManager {
     const agent=this.ctx.agents.get(id),record=this.data.sessions[id];
     if(!agent||!record||this.ownerAgent(agent)!==agent||this.data.trash[id])throw new WorkbenchError('AUTOMATIC_OWNER_REQUIRED','A managed owner conversation is required.',409);
     const continued=await this.reconcileAutomatic(id);
+    return {automatic:this.budgets.get(id)?.automatic,blocked:this.budgets.get(id)?.blocked??null,continued:continued===true};
+  }
+  async automaticResumeConsumed(id){
+    const continued=await resumeConsumedPrestep(this,id);
     return {automatic:this.budgets.get(id)?.automatic,blocked:this.budgets.get(id)?.blocked??null,continued:continued===true};
   }
   async reportVerification(report) {
