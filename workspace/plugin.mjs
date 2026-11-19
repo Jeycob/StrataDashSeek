@@ -22,6 +22,7 @@ import { installProjectMemory } from './project-memory.mjs';
 import { installGenerationProfiles, generationControls, freezeGenerationSettings } from './generation-profiles.mjs';
 import { createProjectStarters, installProjectStarterDiscovery } from './project-starters.mjs';
 import { createTaskBudgets } from './task-budget.mjs';
+import { installQaReceipts } from './qa-receipt.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -45,6 +46,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   const taskBudgets = createTaskBudgets(ctx, manager);
   const models = installModelSelection(ctx, manager, { lifecycle: false });
   installGenerationProfiles(ctx, manager);
+  installQaReceipts(ctx, manager, { sourceCommit });
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
   execution.assertUnchanged();

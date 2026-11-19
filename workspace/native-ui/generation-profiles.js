@@ -4,6 +4,8 @@ const profileCopy={
 };
 Object.assign(profileCopy.en,{profileRun:'Profile / run',modelQuant:'Model / quantization',inputs:'Frozen comparison inputs',routes:'Recorded request routes',status:'Run status',controlsScope:'Sampling profiles apply only to the registered Strata route. Thinking stays off when selected; its budget is capped at half the output limit.'});
 Object.assign(profileCopy.cs,{profileRun:'Profil / běh',modelQuant:'Model / kvantizace',inputs:'Zmrazené vstupy porovnání',routes:'Zaznamenané cesty požadavků',status:'Stav běhu',controlsScope:'Profily generování platí jen pro registrovanou cestu Strata. Vypnuté uvažování zůstane vypnuté; jeho rozpočet nepřekročí polovinu výstupního limitu.'});
+Object.assign(profileCopy.en,{shared:'Shared service sample; not attributed to this run',modelDone:'Admission to model completion',acceptanceBasis:'Acceptance recorded by the server after independent checks (includes receipt latency)',container:'container RAM',host:'host RAM',wholeGpu:'whole GPU VRAM'});
+Object.assign(profileCopy.cs,{shared:'Sdílený vzorek služby; nepřipsáno tomuto běhu',modelDone:'Od přijetí do konce odpovědi',acceptanceBasis:'Přijetí zaznamenané serverem po nezávislých kontrolách (včetně prodlevy zápisu dokladu)',container:'RAM kontejneru',host:'RAM hostu',wholeGpu:'VRAM celého GPU'});
 function ProfileServingModel({visible,labels}){
  const [samples,setSamples]=React.useState({}),[now,setNow]=React.useState(Date.now());
  React.useEffect(()=>{if(!visible||!window.HarnessSettingsHealth)return;const controller=window.HarnessSettingsHealth.createController({onChange:value=>{setSamples(value);setNow(Date.now());}});void controller.refresh();const timer=setInterval(()=>setNow(Date.now()),1000);return()=>{clearInterval(timer);controller.dispose();};},[visible]);
@@ -20,8 +22,9 @@ function ProfileHistory({history,labels}){
     h('tbody',null,pair.rows.map(row=>h('tr',{key:row.id},
      h('td',null,row.arm+' · '+(row.profileName||row.id),h('br'),row.accepted===null?unknown:row.accepted?labels.pass:labels.fail,row.status&&h('p',null,labels.status+': '+row.status)),
      h('td',null,row.serving?row.serving.provider+' / '+row.serving.model:unknown,h('br'),row.serving?.quantization||unknown,row.requestRoutes&&h('p',null,labels.routes+': '+row.requestRoutes.rows.map(route=>route.provider+' / '+route.model).join(', '))),
-     h('td',null,seconds(row.acceptedMs)),h('td',null,memory(row)),
-     h('td',null,[row.acceptanceEvidence,row.serving?.evidenceId,stamp(row.serving?.observedAt),row.memory?.evidenceId,stamp(row.memory?.observedAt),row.requestRoutes?.evidenceId,...(row.sourceEvidence||[])].filter(Boolean).join(' · ')||unknown)))))))));
+     h('td',null,seconds(row.acceptedMs),row.acceptanceTimeBasis&&h('p',null,labels.acceptanceBasis),row.modelFinishedMs!==null&&row.modelFinishedMs!==undefined&&h('p',null,labels.modelDone+': '+seconds(row.modelFinishedMs))),
+     h('td',null,memory(row),row.sharedMemory&&h('p',null,labels.shared+': '+(row.sharedMemory.ramScope?labels[row.sharedMemory.ramScope]+' '+(row.sharedMemory.ramUsedBytes===null?'?':row.sharedMemory.ramUsedBytes+' B')+'; ':'')+labels.wholeGpu+' '+(row.sharedMemory.gpuUsedBytes===null?'?':row.sharedMemory.gpuUsedBytes+' B'))),
+     h('td',null,[row.acceptanceEvidence,row.serving?.evidenceId,stamp(row.serving?.observedAt),row.memory?.evidenceId,stamp(row.memory?.observedAt),row.sharedMemory?.evidenceId,stamp(row.sharedMemory?.observedAt),row.requestRoutes?.evidenceId,...(row.sourceEvidence||[])].filter(Boolean).join(' · ')||unknown)))))))));
 }
 function GenerationProfiles({sessionId,visible}){
  const labels=profileCopy[useLanguage()]||profileCopy.en,[view,setView]=React.useState(null),[busy,setBusy]=React.useState(false),[error,setError]=React.useState(''),[chosen,setChosen]=React.useState(''),[name,setName]=React.useState(''),[quant,setQuant]=React.useState(''),[controls,setControls]=React.useState({}),owner=React.useRef(null);

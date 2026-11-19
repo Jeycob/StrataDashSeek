@@ -8,6 +8,8 @@ These four controls reach the existing `strata-vast` loopback proxy on the next 
 
 ## Import existing benchmark results without another model run
 
+For the already planned ordinary #16 cases, use the [opt-in QA bridge](../benchmarks/strata-profiles/QA.md). It checks prepared inputs in the exact SID before the original submit, performs the same actual UI/API checks afterwards, and writes evidence/history automatically. It records SDK admission and model-completion timestamps separately from independent QA acceptance. Existing telemetry is a labelled shared host/container/GPU sample, never inferred per-run RSS. No measurement values need to be copied by hand.
+
 The offline importer consumes ordinary N06 collector artifacts already produced for a run:
 
 1. The frozen `*.record.json` plan with prompt, fixture, acceptance and budget identities.
