@@ -51,15 +51,34 @@ jobs:
       - name: Install exact production SDK and isolated test tooling
         id: dependencies
         run: |
-          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/playwright-browsers"
+          export PLAYWRIGHT_BROWSERS_PATH=/opt/stratadashseek-ci-browsers
+          sudo -n install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
           echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           npm ci --prefix runtime --no-audit --no-fund
           npm ci --prefix development/ci --no-audit --no-fund
           python -m pip install --no-deps --requirement development/ci/requirements.txt
           sudo -n apt-get update
-          sudo -n apt-get install --no-install-recommends -y iptables iproute2 util-linux e2fsprogs openssl ripgrep
+          sudo -n apt-get install --no-install-recommends -y apparmor iptables iproute2 util-linux e2fsprogs openssl ripgrep
           dpkg-query -W iptables iproute2 util-linux e2fsprogs openssl ripgrep
           node development/ci/node_modules/playwright/cli.js install --with-deps chromium
+          sudo -n chown -R root:root "$PLAYWRIGHT_BROWSERS_PATH"
+          sudo -n chmod -R go-w "$PLAYWRIGHT_BROWSERS_PATH"
+          if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] &&
+             [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == 1 ]]; then
+            # Ubuntu 24.04 requires an AppArmor userns rule for Chromium to build its own sandbox.
+            revision=$(node -p 'require("./development/ci/node_modules/playwright-core/browsers.json").browsers.find(browser => browser.name === "chromium-headless-shell").revision')
+            [[ "$revision" =~ ^[0-9]+$ ]]
+            shell="$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-$revision/chrome-headless-shell-linux64/chrome-headless-shell"
+            test -x "$shell"
+            test "$(realpath -- "$shell")" = "$shell"
+            sudo -n apparmor_parser --replace --skip-read-cache <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile stratadashseek-ci-preview "$shell" flags=(unconfined) {
+            userns,
+          }
+          EOF
+          fi
           echo "HARNESS_PYTHON=$(command -v python)" >> "$GITHUB_ENV"
       - name: Build the Worker without uploading or provisioning
         id: worker-build
