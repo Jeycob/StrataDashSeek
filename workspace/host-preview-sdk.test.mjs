@@ -25,19 +25,19 @@ let modules;
 function sdk(){return modules??=(async()=>{
  const cli=process.env.HARNESS_NATIVE_CLI??path.join(process.env.HOMEAI_RUNTIME??'/data/harness/runtime','node_modules/@deepseek-ai/dsh/lib/bin.js'),base=path.resolve(path.dirname(cli),'../..');
  const load=name=>import(pathToFileURL(path.join(base,name,'lib/index.js')));
- const [C,P,T,J,S,pipeline,output,sandbox,workspace]=await Promise.all([load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-jobs-local'),load('dsh-scope'),import(pathToFileURL(path.join(base,'dsh-tools/lib/pipeline.js'))),import(pathToFileURL(path.join(base,'dsh-subprocess-local/lib/output.js'))),load('dsh-sandbox-local'),load('dsh-workspace')]);
- return{...C,SystemPrompt:P.default,Tools:T.default,Jobs:J.default,...S,...pipeline,...output,Sandbox:sandbox.default,workspaceDomainState:workspace.workspaceDomainState};
+ const [C,P,T,J,S,pipeline,output,sandbox,workspace,jobTools]=await Promise.all([load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-jobs-local'),load('dsh-scope'),import(pathToFileURL(path.join(base,'dsh-tools/lib/pipeline.js'))),import(pathToFileURL(path.join(base,'dsh-subprocess-local/lib/output.js'))),load('dsh-sandbox-local'),load('dsh-workspace'),load('dsh-tool-jobs')]);
+ return{...C,SystemPrompt:P.default,Tools:T.default,Jobs:J.default,...S,...pipeline,...output,Sandbox:sandbox.default,workspaceDomainState:workspace.workspaceDomainState,applyJobTools:jobTools.apply};
 })();}
 const tick=()=>new Promise(resolve=>setTimeout(resolve,5));
 async function until(check){for(let n=0;n<200;n++){if(await check())return;await tick();}assert.fail('bounded fixture wait');}
 const config={enabled:true,ownerOrigin:'https://same.test',endpoints:[{origin:'https://same.test:8443',listenerPort:18190},{origin:'https://same.test:8444',listenerPort:18191}]};
 const args={command:'node fixture-server.mjs',description:'Start own synthetic app',run_in_background:true,timeoutMs:60000};
-async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=false,bindWait,noAckAt=-1}={}){
+async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=false,bindWait,noAckAt=-1,completionDelivery}={}){
  const S=await sdk(),directory=await fs.mkdtemp(path.join(os.tmpdir(),'host-preview-sdk-')),projects=path.join(directory,'projects'),state=path.join(directory,'state');
  await fs.mkdir(projects);await fs.mkdir(state);
  const ctx=new S.Context();new S.SystemPrompt(ctx,{});new S.Tools(ctx);
  ctx.provide('projectExecutionMode',createProjectExecutionMode(hostExecutionBinding()).service);
- const agents=new Map(),scopes=[],workspaces=[],routes=new Map(),events=new Map(),processes=[],calls=[],targets=[],brokers=[],relays=[];
+ const agents=new Map(),scopes=[],workspaces=[],routes=new Map(),events=new Map(),processes=[],calls=[],targets=[],brokers=[],relays=[],settlements=[],notifications=[];
  ctx.provide('agents',{get:id=>agents.get(id),list:()=>[...agents.values()]});
  // Use the pinned SDK's actual domain schema: the public archive view is a
  // readonly SessionId ARRAY, not a Set. Freeze it to catch consumer mutation.
@@ -56,6 +56,8 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
   spec.signal.addEventListener('abort',()=>process.kill(),{once:true});processes.push(process);return process;
  }});
  new S.Jobs(ctx,{maxConcurrentJobsPerOwner:4,retainBytes:65536,settledRetainBytes:16384,pumpPollMs:2});ctx.jobs.attachController('preview source fixture');
+ if(completionDelivery)S.applyJobTools(ctx,{completionDelivery,waitTimeoutMs:100,maxWaitTimeoutMs:1000,inlineOutputBytes:2048});
+ ctx.jobs.events.subscribe({owners:'scope'},event=>{if(event.type==='settled')settlements.push(event);});
  const manager={root:state,projectsRoot:projects,data:{sessions:{},trash:{}},ownerAgent(agent){while(agent?.session.header.origin==='subagent')agent=agents.get(agent.session.header.parentSession);return agent;},async projectFor(id){const a=agents.get(id);return{root:manager.data.sessions[id]?.root,live:a?.session,header:a?.session.header};}};
  const run=createProjectCommandRunner(ctx,manager,{captureBackgroundCustody:true},ctx.projectExecutionMode);registerProjectTool(ctx,manager,run,ctx.projectExecutionMode);
  const pipeline=new S.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>S.executeToolBatch(input,pipeline,()=>1)});
@@ -70,9 +72,10 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
  };
  if(transport){trusted.relay=async options=>{const relay=await createPreviewRelay(options);relays.push(relay);return relay;};trusted.broker=options=>{const broker=brokerModule.createEditorBroker(options);brokers.push(broker);return broker;};trusted.bind=async broker=>{await new Promise((resolve,reject)=>{broker.server.once('error',reject);broker.server.listen(0,'127.0.0.1',resolve);});await bindWait?.(broker);};}
  else if(bindWait)trusted.bind=bindWait;
- const preview=createHostPreview(ctx,manager,run,enabled?config:undefined,ctx.projectExecutionMode,trusted);
+ const makePreview=()=>createHostPreview(ctx,manager,run,enabled?config:undefined,ctx.projectExecutionMode,trusted);
+ const preview=makePreview();
  async function agent(id,{parent,mode}={}){
-  const a={id,status:'idle',inbox:{nextStep:[]},model:{current:()=>({provider:'fixture',model:'fixture'})},session:{id,mode,header:{createdAt:2000,...(parent?{origin:'subagent',parentSession:parent.id}:{})},append(type,data){const list=events.get(id)??[];const event={seq:list.length,type,data};list.push(event);events.set(id,list);return event;}},inject(){},followup(){}};
+  const a={id,status:'idle',inbox:{nextStep:[],nextTurn:[]},model:{current:()=>({provider:'fixture',model:'fixture'})},session:{id,mode,header:{createdAt:2000,...(parent?{origin:'subagent',parentSession:parent.id}:{})},append(type,data){const list=events.get(id)??[];const event={seq:list.length,type,data};list.push(event);events.set(id,list);return event;}},inject(message){notifications.push(message);},followup(message){notifications.push(message);}};
   const scope=S.createScope(ctx,a);a.ctx=scope.ctx;scopes.push(scope);agents.set(id,a);
   if(!parent){const root=path.join(projects,id);await fs.mkdir(root);const n=Object.keys(manager.data.sessions).length;manager.data.sessions[id]={root,workspaceId:'workspace-'+id,ports:[21000+n*4,21001+n*4,21002+n*4,21003+n*4]};workspaces.push({id:'workspace-'+id,path:root,sessionIds:[id]});}
   preview.install(a);return a;
@@ -81,7 +84,7 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
  async function call(a,name,value,signal=new AbortController().signal,callId){const toolSet=await ctx.tools.resolve({agent:a,modelSelection:a.model.current(),signal});try{const report=await ctx.tools.execute({agent:a,signal,toolSet,calls:[{id:callId??'preview-'+(++sequence),name,arguments:JSON.stringify(value)}]});return report.results[0].result;}finally{toolSet.dispose();}}
  const control=input=>preview.operation(input,{ownerControl:true});
  t.after(async()=>{for(const p of processes){p.hold=false;if(p.kills)p.release();}await preview.dispose();await run.dispose();for(const scope of scopes)await scope.dispose();await ctx.fiber.dispose();assert(path.resolve(directory).startsWith(path.resolve(os.tmpdir())+path.sep+'host-preview-sdk-'));await fs.rm(directory,{recursive:true,force:true});});
- return{ctx,manager,run,preview,agent,call,control,processes,calls,targets,brokers,relays,routes,workspaces,state,projects,archive,set rejectPeer(value){rejectPeer=value;}};
+ return{ctx,manager,run,preview,makePreview,agent,call,control,processes,calls,targets,brokers,relays,routes,workspaces,state,projects,archive,settlements,notifications,set rejectPeer(value){rejectPeer=value;}};
 }
 async function start(f,agent){const result=await f.call(agent,'project_exec',args);assert.equal(result.isError,false,JSON.stringify(result));return result.value.jobId;}
 async function open(f,agent,jobId){const result=await f.call(agent,'project_preview',{operation:'open',jobId});assert.equal(result.isError,false,JSON.stringify(result));return result.value;}
@@ -275,6 +278,72 @@ test('registered owner control uses only same-origin POST and bounded explicit o
  assert.equal((await route.fetch(request({operation:'status',sessionId:a.id},'https://same.test:8443'))).status,403);
  const response=await route.fetch(request({operation:'status',sessionId:a.id}));assert.equal(response.status,200);assert.equal((await response.json()).state,'closed');
  const huge=await route.fetch(request({operation:'status',sessionId:a.id,padding:'x'.repeat(2100)}));assert.equal(huge.status,413);assert.equal(f.targets.length,0);
+});
+
+test('expired result survives controller reload and restores an own preview with a fresh lifetime and quiet settlement', {timeout:10000}, async t=>{
+ const f=await fixture(t,{heavy:true,completionDelivery:'wakeup'}),owner=await f.agent('owner'),sessionId=owner.id;
+ const initial=await f.call(owner,'project_exec',{...args,timeoutMs:1000});
+ assert.equal(initial.isError,false,JSON.stringify(initial));
+ const first=await open(f,owner,initial.value.jobId);
+ const firstProducer=await f.run.custodyFor(first.jobId,sessionId);
+ const {result:active}=await f.control({operation:'status',sessionId});
+ assert.equal(active.canReopen,false);
+ await assert.rejects(f.control({operation:'reopen',sessionId,resultId:active.id}),{code:'PREVIEW_PREVIOUS_WORK_UNSETTLED'});
+ await Promise.all([firstProducer.done,new Promise(resolve=>setTimeout(resolve,1050))]);
+ assert(Date.now()>=first.expiresAt);
+ await f.preview.dispose();
+
+ const next=f.makePreview();
+ t.after(()=>next.dispose());
+ const route=f.routes.get('/api/workbench/preview');
+ const post=body=>route.fetch(new Request('http://dsh.internal/api/workbench/preview',{method:'POST',headers:{host:'same.test',origin:'https://same.test','content-type':'application/json'},body:JSON.stringify(body)}));
+ const status=await post({operation:'status',sessionId});
+ assert.equal(status.status,200);
+ const {result}=await status.json();
+ assert.deepEqual(result,{id:active.id,canReopen:true});
+ assert.equal(f.calls.length,1);
+ const originalCommand=f.calls[0].command;
+ const priorNotifications=f.notifications.length;
+ const call={operation:'reopen',sessionId,resultId:result.id};
+ const resumedCalls=[];
+ f.ctx.tools.guard(actual=>{if(actual.name==='project_preview_restart')resumedCalls.push(actual.name);});
+ const [restored,replayed]=await Promise.all([post(call),post(call)]);
+ const current=await restored.json();
+ assert.equal(restored.status,200,JSON.stringify(current));
+ assert.equal(replayed.status,409);
+ assert.equal((await replayed.json()).code,'PREVIEW_RESULT_STALE');
+ assert.equal(f.calls.length,2);
+ assert.equal(resumedCalls.length,1);
+ assert.equal(current.state,'ready');
+ assert.notEqual(current.jobId,first.jobId);
+ assert.notEqual(current.previewId,first.previewId);
+ assert(current.expiresAt>first.expiresAt);
+ assert.equal(new URL(current.url).origin,new URL(first.url).origin);
+ assert.equal(f.calls[1].command,originalCommand);
+ const resumed=await f.run.custodyFor(current.jobId,sessionId);
+ await Promise.all([resumed.done,new Promise(resolve=>setTimeout(resolve,1050))]);
+ assert.equal(f.settlements.find(event=>event.job.id===current.jobId)?.awaited,true);
+ assert.equal(f.notifications.length,priorNotifications);
+ assert.equal(f.calls.length,2);
+});
+
+test('owner restore rejects foreign result, injected command and changed context before running an app',async t=>{
+ const f=await fixture(t),owner=await f.agent('owner'),foreign=await f.agent('foreign');
+ await open(f,owner,await start(f,owner));
+ await f.control({operation:'close',sessionId:owner.id});
+ const {result:{id:resultId}}=await f.control({operation:'status',sessionId:owner.id});
+ const body={operation:'reopen',sessionId:owner.id,resultId};
+ await assert.rejects(f.control({...body,sessionId:foreign.id}),{code:'PREVIEW_RESULT_STALE'});
+ await assert.rejects(f.control({...body,command:'node elsewhere.mjs'}),{code:'PREVIEW_REQUEST_INVALID'});
+ owner.inbox.nextStep.push({id:'queued-input'});
+ await assert.rejects(f.control(body),{code:'PREVIEW_SESSION_BUSY'});
+ owner.inbox.nextStep.pop();
+ f.ctx.shellEnv.collect=()=>({SAVED_CONTEXT_CHANGED:'1'});
+ await assert.rejects(f.control(body),{code:'PREVIEW_RESTART_ADMISSION_FAILED'});
+ const next=await f.control({operation:'status',sessionId:owner.id});
+ assert.equal(next.result.canReopen,true);
+ assert.notEqual(next.result.id,resultId);
+ assert.equal(f.calls.length,1);
 });
 
 test('assembled SDK controller, real HTTP broker and private relay preserve app responses without owner credentials',async t=>{

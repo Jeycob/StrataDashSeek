@@ -124,6 +124,28 @@ SDK tools guard/approval/heavy-admission pipeline with a one-use private ticket.
 Ordinary tool resolution cannot obtain project_preview_restart. The shared
 heavy permit remains retained until the new producer actually settles.
 
+Reopen a saved result after expiry
+
+For a verified preview initially opened by the project conversation itself, the
+controller saves its original startup arguments and a digest of the resolved
+execution specification in private workbench state. It records settlement only
+after the exact producer ends. Owner status includes an optional
+{result:{id,canReopen}}. A connected owner can explicitly request
+{"operation":"reopen","sessionId":"...","resultId":"..."} when canReopen is true.
+The app starts from the retained project through the existing SDK admission
+pipeline, with current policy and the saved specification checked before launch.
+Success returns ready, a new job and preview identity, a new bounded lifetime
+and one-use link at the existing project origin. No prompt is sent. Completion
+of this owner-started job is collected in job history without waking the model.
+
+Refresh status on a stale result or uncertain response. Each result ID admits
+at most one reopen attempt. For a ready preview, the existing open operation
+with its current jobId issues another one-use link within its current lifetime.
+An unknown settlement or changed project context can prevent reopening.
+Projects with no saved preview are still available through their existing files.
+GET /api/workbench/download?sessionId=...&path=... downloads a relative project
+file up to 10 MiB through the authenticated owner connection.
+
 Up to16 restart request IDs are retained for idempotent results; a repeated ID
 returns the same operation, and a new stale generation refuses. A new producer
 is recorded immediately on SDK admission, before its custody acknowledgment,

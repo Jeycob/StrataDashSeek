@@ -10,6 +10,7 @@ import {createOwnPeerConnector} from './host-peer-connector.mjs';
 import {createPreviewRelay} from './host-preview-relay.mjs';
 import {projectBackgroundSchema} from './project-process.mjs';
 import {hasOwnedRangeProvider} from './owned-range-state.mjs';
+import {previewResults} from './host-preview-results.mjs';
 const {EditorOrigins}=createRequire(import.meta.url)('./editor-origins.cjs');
 const {createEditorBroker}=createRequire(import.meta.url)('./editor-broker.cjs');
 const fail=code=>new WorkbenchError(code,'The application preview is unavailable. Check its own job and reopen it from this conversation.',409);
@@ -39,10 +40,12 @@ const defaults={supported:previewSupported,uid:()=>process.getuid(),connector:cr
 
 // Trusted source-test factories are never supplied by plugin/browser config.
 export function createHostPreview(ctx,manager,run,config,binding=manager.execution??ctx.projectExecutionMode,trusted={}){
- const f={...defaults,...trusted},mode=bindProjectExecution(binding),settings=previewSettings(config),entries=new Map(),queues=new Map(),registrations=new Map();
+ const f={...defaults,...trusted},mode=bindProjectExecution(binding),settings=previewSettings(config),entries=new Map(),queues=new Map(),registrations=new Map(),pendingReopens=new Map();
+ const results=previewResults(manager.root);
  let disposed=false,origins;
  const check=()=>{need(!disposed&&mode.assertUnchanged().mode==='host-compat','PREVIEW_MODE_UNAVAILABLE');};check();
  const available=!!settings&&f.supported(ctx)&&['custodyFor','startCaptured','producerFor','stopOwned'].every(name=>typeof run[name]==='function');
+ const restorable=typeof run.previewRecipe==='function'&&typeof run.startSavedPreview==='function';
  function ordered(id,action){const before=queues.get(id)??Promise.resolve(),next=before.catch(()=>{}).then(action);queues.set(id,next);void next.finally(()=>{if(queues.get(id)===next)queues.delete(id);}).catch(()=>{});return next;}
  async function bounded(action,deadline,outer){
   const controller=new AbortController(),signal=outer?AbortSignal.any([outer,controller.signal]):controller.signal;let timer;
@@ -64,6 +67,29 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
   const before=liveContext(sessionId,access),project=await manager.projectFor(sessionId),root=await fs.realpath(before.record.root),base=await fs.realpath(manager.projectsRoot),stat=await fs.stat(root);
   const after=liveContext(sessionId,access);need(before.record===after.record&&root===after.record.root&&project.root===root&&project.live===after.agent.session&&contained(base,root)&&stat.isDirectory(),'PREVIEW_PROJECT_CHANGED');
   return{...after,root,dev:stat.dev,ino:stat.ino,projectId:createHash('sha256').update(root).digest('hex').slice(0,16),port:after.record.ports[0]};
+ }
+ const projectBinding=project=>({workspaceId:project.workspaceId,projectId:project.projectId,root:project.root,dev:project.dev,ino:project.ino,port:project.port,createdAt:project.agent.session.header.createdAt});
+ const sameProject=(saved,project)=>JSON.stringify(saved.project)===JSON.stringify(projectBinding(project));
+ function resultFor(sessionId,project,entry){
+  if(!restorable)return null;
+  const saved=results.read(sessionId);
+  if(!saved||!sameProject(saved,project)||entry&&entry.resultId!==saved.resultId)return null;
+  return saved;
+ }
+ const idle=agent=>agent.status==='idle'&&!agent.inbox?.nextStep?.length&&!agent.inbox?.nextTurn?.length;
+ const resultView=(saved,entry,project)=>({id:saved.resultId,canReopen:saved.settled&&(!entry||entry.state==='closed')&&idle(project.agent)});
+ function recordResult(entry,saved){
+  if(!restorable||entry.owner!==entry.sessionId)return;
+  const result=saved??{version:1,sessionId:entry.sessionId,resultId:randomBytes(16).toString('hex'),project:projectBinding(entry.project),recipe:run.previewRecipe(entry.seed,entry.owner),settled:false};
+  results.save(result);
+  entry.resultId=result.resultId;
+ }
+ function recordSettlement(entry){
+  if(!entry.workSettled||!entry.resultId)return;
+  try{
+   const saved=results.read(entry.sessionId);
+   if(saved?.resultId===entry.resultId&&!saved.settled)results.save({...saved,settled:true});
+  }catch{ctx.logger?.warn('Could not retain preview settlement.');}
  }
  function assertEntry(entry){
   const current=liveContext(entry.sessionId,entry.access);
@@ -87,10 +113,10 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
   entry.state='closing';revoke(entry);
   try{await bounded(async()=>{try{await run.stopOwned(entry.jobId,entry.owner);}catch{}await entry.producerDone;},f.now()+f.operationMs);entry.workSettled=true;entry.state='closed';}
   catch{entry.state='blocked';entry.workSettled=false;}
-  await entry.relay?.close();return view(entry);
+  await entry.relay?.close();recordSettlement(entry);return view(entry);
  }
  function watch(entry,capture){void Promise.resolve(capture.done).then(()=>{if(entry.capture===capture&&!['restarting','closing','closed'].includes(entry.state))void ordered(entry.sessionId,()=>closeEntry(entry));},()=>{if(entry.capture===capture)void ordered(entry.sessionId,()=>closeEntry(entry));});}
- async function open(sessionId,jobId,access,signal){
+ async function open(sessionId,jobId,access,signal,saved){
   need(available,'PREVIEW_NOT_CONFIGURED');const project=await context(sessionId,access),owner=access.id;
   const prior=entries.get(sessionId);
   if(prior&&prior.state!=='closed'){
@@ -113,7 +139,9 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
    entry.broker=f.broker({purpose:'preview',sessionId,generation:entry.id,origin:endpoint.origin,ownerOrigin:settings.ownerOrigin,socketPath,runtimeDeadline:entry.deadline,now:f.now,onActivity:()=>bounded(()=>validateEntry(entry),Math.min(entry.deadline,f.now()+2500))});
    await f.bind(entry.broker,endpoint);await validateEntry(entry);entry.openSignal=null;entry.state='ready';
    entry.timer=setTimeout(()=>{revoke(entry);void ordered(sessionId,()=>closeEntry(entry));},Math.max(1,entry.deadline-f.now()));entry.timer.unref?.();watch(entry,capture);
-   return issue(entry);
+   const opened=issue(entry);
+   try{recordResult(entry,saved);}catch(error){if(saved)throw error;ctx.logger?.warn('Could not retain preview startup information.');}
+   return opened;
   }catch(error){revoke(entry);await entry.relay?.close();entry.state='closed';throw error;}
   finally{signal?.removeEventListener('abort',abortOpen);}
  }
@@ -134,23 +162,73 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
    }catch(error){recordFailure(error);entry.state='blocked';entry.target.abort();entry.relay.destroyConnections();throw error;}
   },Math.min(entry.deadline,f.now()+f.operationMs),signal?AbortSignal.any([signal,entry.abort.signal]):entry.abort.signal).catch(error=>{recordFailure(error);entry.state='blocked';entry.target.abort();entry.relay.destroyConnections();void run.stopOwned(entry.jobId,entry.owner).catch(()=>{});throw Object.assign(fail(entry.restartFailure.code),{previewDiagnostic:entry.restartFailure});});entry.restarts.set(input.requestId,operation);return operation;
  }
- async function executeRestart(entry,signal){
+ async function executeRestart(entry,signal,startSaved){
   // A one-use server ticket enters the actual SDK guard/approval/heavy-tool
   // pipeline. Ordinary model resolves cannot admit this definition.
   const agent=ctx.agents.get(entry.owner);need(agent===entry.access,'PREVIEW_OWNER_CHANGED');
   const modelSelection=agent.model?.current();need(modelSelection?.provider&&modelSelection?.model,'PREVIEW_MODEL_CONTEXT_REQUIRED');
   const resolveContext={agent,modelSelection,signal:signal??new AbortController().signal},tickets=new WeakSet([resolveContext]);let used=false;
-  const remove=agent.ctx.tools.register({name:'project_preview_restart',description:'Internal exact admitted application restart.',parameters:{type:'object',properties:{},additionalProperties:false},output:{schema:projectBackgroundSchema,render:(_args,value)=>[{type:'text',text:'Owned application restart job: '+value.jobId}]},async execute(args,actual){need(!used&&actual.agent===agent&&Object.keys(args).length===0,'PREVIEW_RESTART_TICKET_INVALID');used=true;return run.startCaptured(entry.seed,actual,{deadline:entry.deadline,onAdmitted(background,producer){entry.jobId=background.jobId;entry.producerDone=producer.done;entry.producerCall=producer.call;need(!entry.abort.signal.aborted,'PREVIEW_RESTART_CHANGED');}});}},{when:value=>tickets.has(value)});
+  const remove=agent.ctx.tools.register({name:'project_preview_restart',description:'Internal exact admitted application restart.',parameters:{type:'object',properties:{},additionalProperties:false},output:{schema:projectBackgroundSchema,render:(_args,value)=>[{type:'text',text:'Owned application restart job: '+value.jobId}]},async execute(args,actual){need(!used&&actual.agent===agent&&Object.keys(args).length===0,'PREVIEW_RESTART_TICKET_INVALID');used=true;if(startSaved)return startSaved(actual);return run.startCaptured(entry.seed,actual,{deadline:entry.deadline,ownerPreview:entry.ownerPreview,onAdmitted(background,producer){entry.jobId=background.jobId;entry.producerDone=producer.done;entry.producerCall=producer.call;need(!entry.abort.signal.aborted,'PREVIEW_RESTART_CHANGED');}});}},{when:value=>tickets.has(value)});
   let toolSet;
   try{toolSet=await ctx.tools.resolve(resolveContext);const report=await ctx.tools.execute({agent,signal:resolveContext.signal,toolSet,calls:[{id:randomUUID(),name:'project_preview_restart',arguments:'{}'}]});const result=report.results?.[0]?.result;need(result&&!result.isError&&result.value?.kind==='background','PREVIEW_RESTART_ADMISSION_FAILED');return result.value;}
   finally{toolSet?.dispose();remove();}
  }
+ async function reopen(sessionId,resultId,entry,signal){
+  const project=await context(sessionId),access=project.agent;
+  const saved=resultFor(sessionId,project,entry);
+  need(ID.test(resultId??'')&&saved?.resultId===resultId,'PREVIEW_RESULT_STALE');
+  need(saved.settled&&(!entry||entry.state==='closed'),'PREVIEW_PREVIOUS_WORK_UNSETTLED');
+  const assertIdle=()=>need(idle(access),'PREVIEW_SESSION_BUSY');
+  assertIdle();
+  const controller=new AbortController(),pendingSignal=signal?AbortSignal.any([signal,controller.signal]):controller.signal;
+  pendingSignal.throwIfAborted();
+  const reservation={...saved,resultId:randomBytes(16).toString('hex'),settled:false};
+  results.save(reservation);
+  if(entry)entries.delete(sessionId);
+  pendingReopens.set(sessionId,controller);
+  let producer,jobId,admissionFinished=false;
+  const restoreReservation=()=>{
+   const current=results.read(sessionId);
+   if(current?.resultId===reservation.resultId&&!current.settled)results.save({...reservation,settled:true});
+  };
+  try{
+   return await bounded(async operationSignal=>{
+    let background;
+    try{
+     background=await executeRestart({owner:access.id,access},operationSignal,actual=>run.startSavedPreview(saved.recipe,actual,{
+      async beforeStart(){const current=await context(sessionId,access);operationSignal.throwIfAborted();need(sameProject(saved,current),'PREVIEW_PROJECT_CHANGED');assertIdle();},
+      onAdmitted(value,owned){
+       jobId=value.jobId;producer=owned;
+       if(operationSignal.aborted)void run.stopOwned(jobId,access.id).catch(()=>{});
+      }
+     }));
+    }finally{admissionFinished=true;}
+    operationSignal.throwIfAborted();
+    const opened=await open(sessionId,background.jobId,access,operationSignal,reservation);
+    entries.get(sessionId).ownerPreview=true;
+    return opened;
+   },f.now()+f.operationMs,pendingSignal);
+  }catch(error){
+   // A timeout may race SDK admission. Keep the durable reservation blocked
+   // until any late admitted producer is known and settled.
+   controller.abort();
+   if(producer){
+    const replacement=entries.get(sessionId);
+    if(replacement?.jobId===jobId){replacement.resultId=reservation.resultId;await closeEntry(replacement);}
+    else try{
+     await bounded(async()=>{try{await run.stopOwned(jobId,access.id);}catch{}await producer.done;},f.now()+f.operationMs);
+     restoreReservation();
+    }catch{ctx.logger?.warn('Could not confirm restored preview settlement.');}
+   }else if(admissionFinished)try{restoreReservation();}catch{ctx.logger?.warn('Could not release saved preview reservation.');}
+   throw error;
+  }finally{pendingReopens.delete(sessionId);}
+ }
  async function operation(input,{agent,ownerControl=false,signal}={}){
-  check();need(input&&typeof input==='object'&&!Array.isArray(input)&&Object.keys(input).every(k=>['operation','sessionId','jobId','previewId','generation','requestId'].includes(k))&&['open','status','close','restart'].includes(input.operation),'PREVIEW_REQUEST_INVALID');
-  const allowed={open:['operation','sessionId','jobId'],status:['operation','sessionId'],close:['operation','sessionId'],restart:['operation','sessionId','previewId','generation','requestId']}[input.operation];need(Object.keys(input).every(key=>allowed.includes(key)),'PREVIEW_REQUEST_INVALID');
-  if(!ownerControl)need(input.sessionId===undefined&&input.operation!=='restart'&&agent,'PREVIEW_REQUEST_INVALID');
+  check();need(input&&typeof input==='object'&&!Array.isArray(input)&&['open','status','close','restart','reopen'].includes(input.operation),'PREVIEW_REQUEST_INVALID');
+  const allowed={open:['operation','sessionId','jobId'],status:['operation','sessionId'],close:['operation','sessionId'],restart:['operation','sessionId','previewId','generation','requestId'],reopen:['operation','sessionId','resultId']}[input.operation];need(Object.keys(input).every(key=>allowed.includes(key)),'PREVIEW_REQUEST_INVALID');
+  if(!ownerControl)need(input.sessionId===undefined&&!['restart','reopen'].includes(input.operation)&&agent,'PREVIEW_REQUEST_INVALID');
   const sessionId=ownerControl?input.sessionId:manager.ownerAgent(agent)?.id;need(ID.test(sessionId??''),'PREVIEW_SESSION_INVALID');
-  if(input.operation==='close'){const current=entries.get(sessionId);if(current&&(ownerControl||current.owner===agent?.id))revoke(current);}
+  if(input.operation==='close'){const current=entries.get(sessionId);if(ownerControl)pendingReopens.get(sessionId)?.abort();if(current&&(ownerControl||current.owner===agent?.id))revoke(current);}
   return ordered(sessionId,async()=>{
    const entry=entries.get(sessionId),access=ownerControl?(entry?ctx.agents.get(entry.owner):ctx.agents.get(sessionId)):agent;
    if(!ownerControl&&entry)need(entry.owner===agent.id,'PREVIEW_FOREIGN_JOB');
@@ -158,7 +236,15 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
    if(!available)return{version:1,sessionId,state:'unavailable',code:'PREVIEW_NOT_CONFIGURED'};
    if(input.operation==='open'){need(typeof input.jobId==='string'&&input.jobId.length<=256,'PREVIEW_JOB_REQUIRED');return bounded(s=>open(sessionId,input.jobId,access,s),f.now()+f.operationMs,signal);}
    if(input.operation==='restart'){need(entry,'PREVIEW_NOT_OPEN');return restart(entry,input,signal);}
-   await context(sessionId,access);if(!entry)return{version:1,sessionId,state:'closed',workSettled:true};if(entry.state==='ready')await validateEntry(entry);return ownerControl?ownerStatus(entry):view(entry);
+   if(input.operation==='reopen')return reopen(sessionId,input.resultId,entry,signal);
+   const project=await context(sessionId,access);
+   if(entry?.state==='ready')await validateEntry(entry);
+   const value=entry?(ownerControl?ownerStatus(entry):view(entry)):{version:1,sessionId,state:'closed',workSettled:true};
+   if(!ownerControl)return value;
+   const saved=resultFor(sessionId,project,entry);
+   if(!saved)return value;
+   const savedState=entry?value:{...value,state:saved.settled?'closed':'blocked',workSettled:saved.settled};
+   return {...savedState,result:resultView(saved,entry,project)};
   });
  }
  function install(agent){
@@ -166,11 +252,11 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
   const definition={name:'project_preview',description:'Register this conversation’s own managed background app job as an application preview. Use open with its jobId, status, or close. For delivery, follow the returned fresh-link and server-lifetime instructions; close stops the server. Preview has a fixed lifetime; unavailable configuration never exposes arbitrary host ports.',parameters:{type:'object',properties:{operation:{type:'string',enum:['open','status','close']},jobId:{type:'string'}},required:['operation'],additionalProperties:false},output:{schema:{type:'object',additionalProperties:true},render:(_args,value)=>[{type:'text',text:value.url?'[Open application preview]('+value.url+')'+(Number.isFinite(value.grantExpiresAt)?'\nOpening link valid until: '+new Date(value.grantExpiresAt).toISOString():'')+'\nPreview server available until: '+new Date(value.expiresAt).toISOString()+'\n'+value.reopenInstructions:JSON.stringify(value)}]},execute:(args,actual)=>operation(args,{agent:actual.agent,signal:actual.signal})};
   registrations.set(agent,{definition,remove:agent.ctx.tools.register(definition,{when:({agent:actual})=>{const record=manager.data.sessions[manager.ownerAgent(actual)?.id];return !!record&&!record.legacy;}})});
  }
- function remove(agent){registrations.get(agent)?.remove();registrations.delete(agent);for(const entry of entries.values())if(entry.owner===agent.id||entry.sessionId===agent.id){revoke(entry);void ordered(entry.sessionId,()=>closeEntry(entry));}}
- const revokeSession=sessionId=>{const entry=entries.get(sessionId);if(entry){revoke(entry);void ordered(sessionId,()=>closeEntry(entry));}};
+ function remove(agent){registrations.get(agent)?.remove();registrations.delete(agent);pendingReopens.get(agent.id)?.abort();for(const entry of entries.values())if(entry.owner===agent.id||entry.sessionId===agent.id){revoke(entry);void ordered(entry.sessionId,()=>closeEntry(entry));}}
+ const revokeSession=sessionId=>{pendingReopens.get(sessionId)?.abort();const entry=entries.get(sessionId);if(entry){revoke(entry);void ordered(sessionId,()=>closeEntry(entry));}};
  ctx.on('workspace/session-archived',({sessionId})=>revokeSession(sessionId));
  ctx.on('session/event',(session,event)=>{if(event.type==='sandbox/mode')for(const entry of entries.values())if(entry.sessionId===session.id||entry.owner===session.id)revokeSession(entry.sessionId);});
  ctx.effect(()=>ctx.connection.fetch.register({path:'/api/workbench/preview',methods:['POST'],requestBody:'buffered',async fetch(request){try{if(!sameRequestOrigin(request))return new Response('{"code":"ORIGIN_REFUSED"}',{status:403});return Response.json(await operation(await boundedJSON(request,2048),{ownerControl:true,signal:request.signal}),{headers:{'Cache-Control':'no-store'}});}catch(error){return Response.json({code:error.code??'PREVIEW_UNAVAILABLE',...(error.previewDiagnostic?{diagnostic:error.previewDiagnostic}:{})},{status:error.status??503,headers:{'Cache-Control':'no-store'}});}}}));
  const poll=setInterval(()=>{for(const entry of entries.values())if(entry.state==='ready')void validateEntry(entry).catch(()=>{if(entries.get(entry.sessionId)===entry)revokeSession(entry.sessionId);});},1000);poll.unref?.();
- return{install,remove,operation,available,handles:actual=>registrations.get(actual.agent)?.definition===ctx.tools.get(actual.name,actual.agent,actual.toolSet),async dispose(){disposed=true;clearInterval(poll);for(const registration of registrations.values())registration.remove();registrations.clear();for(const entry of entries.values())revoke(entry);await Promise.allSettled([...entries.values()].map(closeEntry));}};
+ return{install,remove,operation,available,handles:actual=>registrations.get(actual.agent)?.definition===ctx.tools.get(actual.name,actual.agent,actual.toolSet),async dispose(){disposed=true;clearInterval(poll);for(const controller of pendingReopens.values())controller.abort();for(const registration of registrations.values())registration.remove();registrations.clear();for(const entry of entries.values())revoke(entry);await Promise.allSettled([...entries.values()].map(closeEntry));}};
 }

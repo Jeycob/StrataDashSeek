@@ -36,7 +36,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
   }
   ctx.effect?.(() => dispose, 'managed project background processes');
 
-  async function start({ cwd, spec, adaptations = [], hardDeadline }, execution, args) {
+  async function start({ cwd, spec, adaptations = [], hardDeadline, ownerPreview = false }, execution, args) {
     assertActive();
     execution.signal.throwIfAborted();
     if (disposed) throw new WorkbenchError('PROJECT_EXECUTOR_DISPOSED', 'Project command execution is shutting down.');
@@ -61,6 +61,14 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       process?.kill();
     };
     const abortBeforeCommit = () => cancel('tool call aborted before background ownership was committed');
+    // UI-owned preview settlements stay in job history without waking the agent.
+    // Register immediately before settlement so a long-running preview cannot
+    // outlive the SDK waiter timeout.
+    const retainOwnerSettlement = () => {
+      if (!ownerPreview || expirySettlement) return;
+      expirySettlement = jobs.wait(id, 1000, owner);
+      void expirySettlement.catch(() => {});
+    };
     execution.signal.addEventListener('abort', abortBeforeCommit, { once: true });
     try {
       assertActive();
@@ -94,7 +102,8 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
                 ? { status: 'killed', detail: (stopReason ?? (process.signal ? 'signal: ' + process.signal : 'killed before exit')) + sandboxNote, result }
                 : { status: 'completed', detail: 'exit code: ' + process.exitCode + sandboxNote, result };
               const entry = active.get(id), agent = entry?.agent;
-              if (expiryRequested && outcome.status === 'killed' && !result.sandbox?.denied && result.lifetimeExpired && Date.now() >= expiresAt && entry?.previewTurnCompleted &&
+              retainOwnerSettlement();
+              if (!ownerPreview && expiryRequested && outcome.status === 'killed' && !result.sandbox?.denied && result.lifetimeExpired && Date.now() >= expiresAt && entry?.previewTurnCompleted &&
                   agent.status === 'idle' && agent.session === entry.session && ctx.get?.('agents')?.get(owner) === agent &&
                   !agent.inbox?.nextTurn?.length && !agent.inbox?.nextStep?.length) {
                 // Collect only confirmed, expected expiry after the preview's
@@ -110,6 +119,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
               rejectCapture?.(error);
               // A failed preparation must release any handle it published.
               if (process) { process.kill(); await process.done; }
+              retainOwnerSettlement();
               return { status: controller.signal.aborted ? 'killed' : 'failed', detail: stopReason ?? (error instanceof Error ? error.message : String(error)) };
             } finally {
               rejectCapture?.(new WorkbenchError('PROJECT_CUSTODY_EXITED','Custody process is no longer active.'));

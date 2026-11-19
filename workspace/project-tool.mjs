@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import {createHash} from 'node:crypto';
 import { WorkbenchError, within } from './policy.mjs';
 import { normalizeVerificationCommand, nodeTestCommandRecipe } from './tool-recovery.mjs';
 import { createProjectProcessStarter, projectBackgroundSchema, projectJobLifetime, renderProjectBackground } from './project-process.mjs';
@@ -15,6 +16,7 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
   const processes = createProjectProcessStarter(ctx, {...config.processTimers,assertActive:check});
   const restartSeeds=new WeakMap();
   const comparable=spec=>JSON.stringify(Object.fromEntries(['command','workdir','env','dshEnv','sandboxPolicy','stdoutMaxBytes'].map(key=>[key,spec[key]])));
+  const fingerprint=spec=>createHash('sha256').update(spec).digest('hex');
   async function prepare(args, execution, custody = false) {
     check();
     if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !Object.hasOwn(projectCommandParameters.properties, key))) throw new WorkbenchError('INVALID_COMMAND', 'Only command, description, workdir, timeoutMs and run_in_background are supported for managed commands.', 400);
@@ -74,13 +76,27 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
   run.custodyFor = processes.custodyFor;
   run.releasePreviewAdmission = processes.releasePreviewAdmission;
   run.producerFor=processes.producerFor;run.stopOwned=processes.stopOwned;
-  run.startCaptured=async(seed,execution,{deadline,onAdmitted})=>{
+  run.previewRecipe = (seed, owner) => {
+    const admitted = restartSeeds.get(seed);
+    if (!admitted || admitted.owner !== owner) throw new WorkbenchError('PROJECT_CUSTODY_SEED_INVALID', 'No exact owned preview specification.');
+    return {args: admitted.args, specSha256: fingerprint(admitted.spec)};
+  };
+  run.startSavedPreview = async (recipe, execution, {beforeStart, onAdmitted}) => {
+    const prepared = await prepare(recipe.args, execution, 'auto');
+    if (recipe.args.run_in_background !== true || fingerprint(comparable(prepared.spec)) !== recipe.specSha256)
+      throw new WorkbenchError('PROJECT_CUSTODY_SPEC_CHANGED', 'The saved preview command context changed.');
+    await beforeStart();
+    const background = await processes.start({...prepared, ownerPreview: true}, execution, recipe.args);
+    onAdmitted(background, processes.producerFor(background.jobId, execution.agent.id));
+    return background;
+  };
+  run.startCaptured=async(seed,execution,{deadline,onAdmitted,ownerPreview=false})=>{
     const admitted=restartSeeds.get(seed);
     if(!admitted||execution.agent?.id!==admitted.owner||!Number.isSafeInteger(deadline))throw new WorkbenchError('PROJECT_CUSTODY_SEED_INVALID','No exact owned admitted restart specification.');
     const prepared=await prepare(admitted.args,execution,'auto');
     if(comparable(prepared.spec)!==admitted.spec)throw new WorkbenchError('PROJECT_CUSTODY_SPEC_CHANGED','Project command context changed; restart refused.');
     prepared.hardDeadline=Math.min(deadline,admitted.deadline);
-    const background=await processes.start(prepared,execution,admitted.args);
+    const background=await processes.start({...prepared,ownerPreview},execution,admitted.args);
     try{onAdmitted?.(background,processes.producerFor(background.jobId,execution.agent.id));await processes.custodyFor(background.jobId,execution.agent.id,{signal:execution.signal});return background;}
     catch(error){try{await processes.stopOwned(background.jobId,execution.agent.id);}catch{}throw error;}
   };
