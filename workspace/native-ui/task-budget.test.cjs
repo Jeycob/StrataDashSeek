@@ -4,12 +4,15 @@ const {createSourceFixture}=require('./test-bundle.cjs');
 
 test('Native first-prompt budget is reachable in both execution modes and keeps the unsent draft',{skip:!process.env.HARNESS_NATIVE_CLI,timeout:90000},async()=>{
  const {chromium}=require(process.env.HARNESS_PLAYWRIGHT_MODULE||'playwright'),directory=fs.mkdtempSync(path.join(os.tmpdir(),'task-budget-native-'));
- const overlay=path.join(directory,'overlay.json');fs.writeFileSync(overlay,JSON.stringify([{insert:[{id:'budget-native-fixture',name:pathToFileURL(createSourceFixture(directory)).href}]}]));
+ // A fresh CI home has no workspace. Register this fixture's own directory
+ // through the real Host API before using the ordinary New session control.
+ const seed=path.join(directory,'workspace-seed.mjs');fs.writeFileSync(seed,"export const inject=['workspaceRegistry'];export async function apply(ctx){await ctx.workspaceRegistry.create(process.cwd(),'Budget fixture');}");
+ const overlay=path.join(directory,'overlay.json');fs.writeFileSync(overlay,JSON.stringify([{insert:[{id:'budget-workspace-fixture',name:pathToFileURL(seed).href},{id:'budget-native-fixture',name:pathToFileURL(createSourceFixture(directory)).href}]}]));
  const child=spawn(process.execPath,[path.resolve(process.env.HARNESS_NATIVE_CLI),'web','--patch',overlay,'--no-open','--host','127.0.0.1','--port','0'],{cwd:directory,env:{...process.env,DSH_HOME:path.join(directory,'home'),PATH:path.dirname(process.execPath)+path.delimiter+process.env.PATH},stdio:['ignore','pipe','pipe'],windowsHide:true});
  let output='',browser;child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>output+=chunk);
  try{
   const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{clearInterval(poll);reject(Error('Native fixture startup timed out'));},40000),poll=setInterval(()=>{const match=output.match(/http:\/\/127\.0\.0\.1:\d+\S*/);if(match){clearInterval(poll);clearTimeout(timer);resolve(match[0]);}},50);child.once('error',error=>{clearTimeout(timer);clearInterval(poll);reject(error);});child.once('exit',code=>{clearTimeout(timer);clearInterval(poll);reject(Error('Native fixture exited '+code));});});
-  browser=await chromium.launch({headless:true,...(process.env.HARNESS_BROWSER_CHANNEL?{channel:process.env.HARNESS_BROWSER_CHANNEL}:{})});
+  browser=await chromium.launch({headless:true,chromiumSandbox:true,...(process.env.HARNESS_BROWSER_CHANNEL?{channel:process.env.HARNESS_BROWSER_CHANNEL}:{})});
   const page=await browser.newPage({viewport:{width:1440,height:1000}}),values=new Map(),mutations=[],errors=[],submissions=[];let mode='host-compat';page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(/\/api\/.*(submit|followup)/i.test(request.url()))submissions.push(request.url());});
   await page.route('**/api/workbench/execution',route=>route.fulfill({json:{version:1,available:true,mode}}));
   await page.route('**/api/workbench',route=>{
