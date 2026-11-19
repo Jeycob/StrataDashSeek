@@ -26,14 +26,14 @@ test('receipt DTO reads full retained history and never includes job secrets',()
 test('existing workflow persists request identity in its first queued job save before background work',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'apps-request-workflow-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
  class Manager{
-  constructor(){this.cfg={stateDir:root,workspaceRoot:root};this.store={projects:{[id]:{id,path:'missing-fixture'}},jobs:[]};this.releases={};this.redactions=new Map();this.saved=[];}
+  constructor(){this.cfg={stateDir:root,workspaceRoot:root};this.store={projects:{[id]:{id,path:'missing-fixture'}},jobs:[]};this.releases={};this.redactions=new Map();this.credentialBindings=new Map();this.saved=[];}
   requireEnabled(){}project(value){return this.store.projects[value];}acceptActivity(){}setBusy(value){this.busy=value;}save(){this.saved.push(structuredClone(this.store));}log(){}
  }
  require('./apps-workflow.cjs').install(Manager);
  const manager=new Manager(),job=enqueueProjectAction(manager,{id,action:'verify',_contextProjectId:id,requestId});
  assert.equal(job.requestId,requestId);assert.equal(manager.saved[0].jobs[0].requestId,requestId);assert.equal(manager.saved[0].jobs[0].status,'queued');
  for(let n=0;n<100&&['queued','running'].includes(job.status);n++)await new Promise(r=>setTimeout(r,5));
- assert.equal(job.status,'failed');
+ assert.equal(job.status,'failed');assert.equal(manager.busy,null);assert.equal(manager.saved.at(-1).jobs[0].status,'failed');
 });
 test('authenticated scoped HTTP receipt lookup survives an omitted enqueue response',async t=>{
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'apps-request-http-')),project=path.join(root,'project');await fs.mkdir(project);const projectId=crypto.createHash('sha256').update(await fs.realpath(project)).digest('hex').slice(0,16),f=fixture();

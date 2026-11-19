@@ -20,15 +20,39 @@ test('unknown or transitional asleep ownership never wakes or claims a successfu
 test('ready endpoint stop remains available with unsupported resources and never ensures/resumes',async t=>{
  const{manager:m,worker:w,engine:e}=await fixture(t);w.phase='ready';w.ensure=async()=>assert.fail('Stop must not ensure');e.json=async()=>assert.fail('Stop must not perform resource admission');const requests=[];e.request=async(method,route)=>requests.push([method,route]);await m.containerAction(id,'stop');assert.deepEqual(requests,[['POST','/containers/'+id+'/stop?t=10']]);assert.equal(w.wakeCount,0);
 });
+function runtimeLogProvenance(manager,projectId,secret){
+ require('./apps-workflow.cjs').init(manager);
+ const jobId='d'.repeat(16),token='e'.repeat(32),imageId='sha256:'+'f'.repeat(64),name='sdsh-'+projectId+'-'+jobId;
+ manager.store.jobs.push({id:jobId,creations:[{state:'confirmed',containerId:id,projectId,jobId,token,imageId,name,credentialLogEnvironment:['TOKEN']}]});
+ manager.releases.get=async(project,release)=>{
+  assert.equal(project,projectId);assert.equal(release,jobId);
+  return{id:jobId,projectId,requiresCredentialProof:true,credentialUse:{version:1,origin:'fresh',buildUsed:false,runtimeNames:['TOKEN']}};
+ };
+ manager.vault.resolve=async()=>assert.fail('Logs must use the deployed credential provenance');
+ return{Id:id,Image:imageId,Name:'/'+name,Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:projectId,[LABEL+'.job']:jobId,[LABEL+'.create']:token},Env:['TOKEN='+secret]}};
+}
 test('alive error-phase diagnostics read owned logs without ensure/start/resource admission',async t=>{
- const{manager:m,worker:w,engine:e}=await fixture(t),p=await m.register('demo');require('./apps-workflow.cjs').init(m);m.project(p.id).credentials={scope:'fixture',runtime:{TOKEN:'fixture-binding'}};m.vault.resolve=async()=>({TOKEN:'FIXTURE_PRIVATE_LOG_TOKEN'});w.phase='error';w.pid=()=>99;w.ensure=async()=>assert.fail('Logs must not wake');e.json=async()=>assert.fail('Logs must not resource-admit');e.owned=async()=>({Id:id,Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:p.id}}});let read=0;e.logs=async key=>{assert.equal(key,id);read++;return'available owned diagnostics FIXTURE_PRIVATE_LOG_TOKEN';};const text=await m.logs(id);assert.match(text,/available owned diagnostics/);assert(!text.includes('FIXTURE_PRIVATE_LOG_TOKEN'));assert.equal(read,1);assert.equal(w.wakeCount,0);
+ const{manager:m,worker:w,engine:e}=await fixture(t),p=await m.register('demo'),secret='FIXTURE_PRIVATE_LOG_TOKEN';
+ const container=runtimeLogProvenance(m,p.id,secret);
+ w.phase='error';w.pid=()=>99;w.ensure=async()=>assert.fail('Logs must not wake');e.json=async()=>assert.fail('Logs must not resource-admit');e.owned=async()=>container;
+ let reads=0;e.logs=async key=>{assert.equal(key,id);reads++;return'available owned diagnostics '+secret;};
+ const text=await m.logs(id);assert.equal(text,'available owned diagnostics [REDACTED]');assert.equal(reads,1);assert.equal(w.wakeCount,0);
 });
 test('stable asleep logs are honestly unavailable without waking or directing a blocked start',async t=>{
  const{manager:m,worker:w,engine:e}=await fixture(t);e.logs=async()=>assert.fail('Asleep endpoint must not be contacted');e.owned=async()=>assert.fail('Stable asleep must not inspect endpoint');const message=await m.logs(id);assert.match(message,/živé logy nejsou dostupné/);assert.equal(w.wakeCount,0);assert.equal(e.calls,0);
 });
-for(const failedStep of [null,'owned','vault'])test('log phase flip during raw read keeps redaction or refuses without raw: '+failedStep,async t=>{
- const{manager:m,worker:w,engine:e}=await fixture(t),p=await m.register('demo');require('./apps-workflow.cjs').init(m);m.project(p.id).credentials={scope:'fixture',runtime:{TOKEN:'binding'}};const secret='PHASE_RACE_PRIVATE_CANARY';let ownedReads=0,vaultReads=0;w.phase='error';w.pid=()=>w.phase==='asleep'?null:99;w.ensure=async()=>assert.fail('Never wake for logs');e.json=async()=>assert.fail('No resource gate or mutation');e.logs=async()=>{await Promise.resolve();w.phase='asleep';return'owned diagnostic '+secret;};e.owned=async()=>{ownedReads++;if(failedStep==='owned')throw Error('owned lookup failed');return{Id:id,Config:{Labels:{[LABEL]:'managed',[LABEL+'.project']:p.id}}};};m.vault.resolve=async()=>{vaultReads++;if(failedStep==='vault')throw Error('vault lookup failed');return{TOKEN:secret};};
- if(failedStep)await assert.rejects(m.logs(id),new RegExp(failedStep+' lookup failed'));else{const result=await m.logs(id);assert.match(result,/owned diagnostic/);assert(!result.includes(secret));}assert.equal(ownedReads,1);assert.equal(vaultReads,failedStep==='owned'?0:1);assert.equal(w.wakeCount,0);
+for(const failedStep of [null,'owned','provenance'])test('log phase flip keeps redaction or refuses before raw read: '+failedStep,async t=>{
+ const{manager:m,worker:w,engine:e}=await fixture(t),p=await m.register('demo'),secret='PHASE_RACE_PRIVATE_CANARY';
+ const container=runtimeLogProvenance(m,p.id,secret);
+ if(failedStep==='provenance')m.store.jobs=[];
+ let ownedReads=0,rawReads=0;
+ w.phase='error';w.pid=()=>w.phase==='asleep'?null:99;w.ensure=async()=>assert.fail('Never wake for logs');e.json=async()=>assert.fail('No resource gate or mutation');
+ e.logs=async()=>{rawReads++;await Promise.resolve();w.phase='asleep';return'owned diagnostic '+secret;};
+ e.owned=async()=>{ownedReads++;if(failedStep==='owned')throw Error('owned lookup failed');return container;};
+ if(failedStep==='owned')await assert.rejects(m.logs(id),/owned lookup failed/);
+ else if(failedStep==='provenance')await assert.rejects(m.logs(id),{code:'LOG_REDACTION_UNAVAILABLE'});
+ else assert.equal(await m.logs(id),'owned diagnostic [REDACTED]');
+ assert.equal(ownedReads,1);assert.equal(rawReads,failedStep?0:1);assert.equal(w.wakeCount,0);
 });
 test('worker capacity samples bytes and inodes with the same fresh nonce',async()=>{
  const f=ownedFixture(),vm=f.worker;await vm.start();vm.diskFree=Object.getPrototypeOf(vm).diskFree;vm.buffer='HARNESS_FREE_aaaaaaaaaaaaaaaa=999999\n';vm.serial.write=command=>{const nonce=command.match(/HARNESS_FREE_([a-f0-9]{16})/)[1];assert.match(command,/df -Pi \/var\/lib\/harness/);vm.buffer+='\nHARNESS_FREE_'+nonce+'=524288\nHARNESS_INODES_'+nonce+'=20000\n';};
