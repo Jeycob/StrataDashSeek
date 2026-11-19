@@ -78,8 +78,17 @@ UI assertion and a real screenshot checkpoint. A zero-test result, nonzero
 process exit or stale source is not accepted as success. See [quality
 contracts](qwen-quality.md).
 
-Three failed rounds without measurable improvement, or three repeats of the
-same normalized error, pause the run before another inference/tool step. A
+Repeated failed verification asks the agent to change its repair strategy
+instead of ending the task after three failures. The first warning starts one
+120-step autonomous repair allowance. Its absolute deadline survives reloads,
+internal followups and further warnings; edits, new baselines, repeated passing
+evidence and passing unrelated checks do not extend it. Only a new source-bound
+PASS for the failing kind (or an all-PASS covering it), or a new explicit owner
+request, renews the allowance. If the last admitted step changes the source,
+one final check runs before a truthful `AUTONOMOUS_REPAIR_EXHAUSTED` stop; an
+already current failed check is not duplicated. This is a finite repair budget,
+not an approval form. Real tool/permission errors and uncertain work retain
+their existing guards. A
 stage reaches automatic verification after its configured step interval
 (default 60); step counts alone do not require another approval. A new explicit
 owner message starts a fresh repair attempt, including its failure streak and
@@ -99,10 +108,11 @@ placeholders. A valid failed check establishes one canonical repair baseline
 and the existing repair window; it does not claim progress over a potentially
 different old test suite or mark a stage passed. The prior baseline is retained.
 The exception is persisted before dispatch and cannot be reused by an internal
-followup or reload. Further missing evidence stops with a verification-unavailable
-diagnostic; only a new explicit owner request or new verified passing source
-proof can renew the exception. Stale results, missing totals, denied execution
-and unchanged passing evidence never create a repair allowance.
+followup or reload. After obtaining that baseline, further unknown shell totals
+request a different strategy within the same finite repair allowance and retain
+periodic canonical checks. An unavailable first canonical result stops with its
+concrete diagnostic. Stale results, missing totals, denied execution and unchanged
+passing evidence never manufacture progress or renew the allowance.
 
 ## Wake and sleep
 

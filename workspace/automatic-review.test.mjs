@@ -27,7 +27,7 @@ async function fixture(t, options={}) {
   const budget=new RepairBudget({steps:options.steps??10});manager.budgets.set('owner',budget);record.budget=budget;
   const input={agent,signal:new AbortController().signal,turn:1,step:11,messages:[human('first')]};
   ctx.tools.execute=async batch=>{
-    calls.push(batch);assert.equal(batch.maxParallelToolCalls,1);assert.equal(batch.calls[0].name,'verify_project');const requested=JSON.parse(batch.calls[0].arguments).kind;assert.equal(requested,options.reviewKind??'all');
+    calls.push(batch);assert.equal(batch.maxParallelToolCalls,1);assert.equal(batch.calls[0].name,'verify_project');const requested=JSON.parse(batch.calls[0].arguments).kind;assert((Array.isArray(options.reviewKind)?options.reviewKind:[options.reviewKind??'all']).includes(requested));
     const report={...(options.report?.()??success()),sourceHash:(await sourceManifest(root)).sha256};
     if(options.changeSource)await fs.appendFile(path.join(root,'app.mjs'),'// changed during check\n');
     const result={isError:false,value:report,content:[{type:'text',text:JSON.stringify(report)}]};
@@ -67,15 +67,15 @@ test('unknown shell totals obtain one current-source canonical baseline, not fab
  const reloaded=new RepairBudget(JSON.parse(JSON.stringify(f.budget)));f.manager.budgets.set('owner',reloaded);f.record.budget=reloaded;
  assert.equal(prepareAutomaticRequest(f.record,reloaded,{turn:2,messages:[{id:'internal',role:'user',source:{kind:'workspace-runtime'}}]},10),false);
  await f.shell('fourth');await f.shell('fifth');
- assert.equal(reloaded.blocked?.code,'AUTOMATIC_VERIFICATION_UNAVAILABLE');await assert.rejects(f.step(3),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(f.calls.length,1);
+ assert.equal(reloaded.blocked,null);await f.step(3);assert.equal(f.calls.length,1);assert.equal(reloaded.automatic.repairAllowance.deadline,122);
 });
 
-test('the one canonical baseline window still stops repeated measured failures and supports all-fail counts',async t=>{
+test('the one canonical baseline supports all-fail counts and subsequent strategy changes stay bounded',async t=>{
  const f=await unknownRepair(t,{report:()=>countedFailure(5,0)});await f.step(2);
  assert.equal(f.budget.stalled,1);assert.equal(f.budget.stage,1);assert.equal(f.budget.checks.test.bestScore,5);assert.equal(f.budget.automatic.proofSerial,0);
  const report={...countedFailure(5,0),sourceHash:(await sourceManifest(f.root)).sha256},result={isError:false,value:report,content:[{type:'text',text:JSON.stringify(report)}]};
  for(let n=0;n<2;n++)await f.manager.toolResult({agent:f.agent,name:'verify_project',arguments:{kind:'test'},signal:f.input.signal},result);
- assert.equal(f.budget.blocked?.code,'REPAIR_NO_PROGRESS');await assert.rejects(f.step(3),e=>e.code==='REPAIR_NO_PROGRESS');assert.equal(f.calls.length,1);
+ assert.equal(f.budget.blocked,null);await f.step(3);assert.equal(f.calls.length,1);assert.equal(f.budget.automatic.repairAllowance.deadline,122);
 });
 
 test('unknown, stale, mismatched or refused fallback evidence fails closed without another repair window',async t=>{
@@ -163,8 +163,55 @@ test('ordinary failed verification grants only a bounded repair window and prese
  const f=await fixture(t,{report:failure});await f.step(11);assert.equal(f.budget.stage,1);assert.equal(f.budget.steps,11);assert.equal(f.budget.automatic.phase,'repairing');assert.equal(f.budget.automatic.nextCheckAt,30);assert.equal(f.budget.stalled,1);assert.equal(f.budget.blocked,null);
  for(let n=12;n<=30;n++)await f.step(n);assert.equal(f.calls.length,1);assert.equal(f.budget.automatic.taskSteps,30);
 });
-test('three identical failed checks stop rather than silently renewing repair counters',async t=>{
- const f=await fixture(t,{report:failure});for(let n=11;n<=50;n++)await f.step(n);await assert.rejects(f.step(51),e=>e.code==='REPAIR_NO_PROGRESS');assert.equal(f.calls.length,3);assert.equal(f.budget.stage,1);assert.equal(f.budget.stalled,3);assert.equal(f.budget.automatic.taskSteps,50);assert.equal(f.budget.automatic.phase,'stopped');
+test('managed repeated failed repairs request a different strategy without ending the user task',async t=>{
+ const f=await fixture(t,{report:failure});for(let n=11;n<=51;n++)await f.step(n);
+ assert.equal(f.calls.length,3);assert.equal(f.budget.blocked,null);assert.equal(f.budget.stage,1);assert.equal(f.budget.stalled,3);assert.equal(f.budget.automatic.taskSteps,51);
+ assert.match(f.manager.pendingDiagnostics.get('owner').get('REPAIR_STRATEGY_CHANGE'),/different approach/i);
+ assert.equal(f.budget.automatic.phase,'repairing');
+});
+
+test('an old stagnation stop becomes truthful repairing status without renewing accounting',async t=>{
+ const f=await fixture(t,{steps:0});await f.step(1);f.budget.stalled=3;f.budget.blocked={code:'REPAIR_NO_PROGRESS',message:'Old policy'};f.budget.automatic.phase='stopped';f.budget.automatic.reason='REPAIR_NO_PROGRESS';
+ await f.step(2);assert.equal(f.calls.length,0);assert.equal(f.budget.blocked,null);assert.equal(f.budget.automatic.phase,'repairing');assert.equal(f.budget.automatic.reason,undefined);assert.equal(f.budget.automatic.taskSteps,2);assert.equal(f.budget.stalled,3);assert.equal(f.budget.automatic.repairAllowance.deadline,121);
+});
+
+async function warnedRepair(t, options={}) {
+ const f=await fixture(t,{steps:0,reviewKind:['all','test'],report:countedFailure,...options});await f.step(1);
+ f.foreground=async (kind,passed,checkKinds=[kind])=>{
+  const sourceHash=(await sourceManifest(f.root)).sha256,report={passed,complete:passed,stale:false,sourceHash,checks:checkKinds.map(checkKind=>({id:checkKind,kind:checkKind,passed,checksTotal:14,checksPassed:passed?14:12,countsMeasured:true}))};
+  await f.manager.toolResult({agent:f.agent,name:'verify_project',arguments:{kind},callId:'foreground-'+kind,signal:f.input.signal},{isError:false,value:report,content:[{type:'text',text:JSON.stringify(report)}]});
+ };
+ if(options.priorPass)await f.foreground('test',true);
+ for(let n=0;n<3;n++)await f.foreground('test',false);
+ assert.equal(f.budget.automatic.repairAllowance.kind,'test');assert.equal(f.budget.automatic.repairAllowance.deadline,121);return f;
+}
+
+test('one repair allowance survives reload and internal followups and stops at its exact deadline without rechecking current failure',async t=>{
+ const f=await warnedRepair(t);await f.manager.save();const saved=JSON.parse(await fs.readFile(f.manager.file,'utf8'));const budget=new RepairBudget(saved.sessions.owner.budget);f.manager.budgets.set('owner',budget);f.record.budget=budget;
+ assert.equal(prepareAutomaticRequest(f.record,budget,{turn:2,messages:[{id:'internal',role:'user',source:{kind:'workspace-runtime'}}]},10),false);
+ for(let n=2;n<=121;n++)await f.step(n);
+ const calls=f.calls.length,deadline=budget.automatic.repairAllowance.deadline;assert.equal(deadline,121);assert.equal(budget.automatic.taskSteps,121);assert.equal(budget.blocked,null);
+ await assert.rejects(f.step(122),e=>e.code==='AUTONOMOUS_REPAIR_EXHAUSTED');assert.equal(f.calls.length,calls);assert.equal(budget.automatic.taskSteps,121);assert.equal(budget.automatic.repairAllowance.deadline,deadline);
+ await assert.rejects(f.step(123),e=>e.code==='AUTONOMOUS_REPAIR_EXHAUSTED');assert.equal(f.calls.length,calls);
+});
+
+test('only a new passing proof for the failing kind renews the repair allowance',async t=>{
+ const f=await warnedRepair(t,{priorPass:true}),allowance=f.budget.automatic.repairAllowance;
+ await f.foreground('test',true);assert.equal(f.budget.automatic.repairAllowance,allowance,'repeated passing source does not renew');
+ await fs.appendFile(path.join(f.root,'app.mjs'),'// build change\n');await f.foreground('build',true);assert.equal(f.budget.automatic.repairAllowance,allowance);
+ await fs.appendFile(path.join(f.root,'app.mjs'),'// unrelated all selection\n');await f.foreground('all',true,['build']);assert.equal(f.budget.automatic.repairAllowance,allowance);
+ await fs.appendFile(path.join(f.root,'app.mjs'),'// repaired original test behavior\n');await f.foreground('all',true,['build','test']);assert.equal(f.budget.automatic.repairAllowance,undefined);assert.equal(f.budget.automatic.taskSteps,1);
+});
+
+test('the last repair step receives one current-source final check; PASS continues and failure exhausts exactly once',async t=>{
+ for(const passed of [true,false]){
+  let final=false;const f=await warnedRepair(t,{report:()=>final&&passed?{...success(),checks:success().checks.map(check=>({...check,countsMeasured:true}))}:countedFailure()});
+  for(let n=2;n<=121;n++)await f.step(n);const calls=f.calls.length;
+  await fs.appendFile(path.join(f.root,'app.mjs'),'// last admitted repair\n');final=true;
+  if(passed){await f.step(122);assert.equal(f.budget.automatic.repairAllowance,undefined);assert.equal(f.budget.blocked,null);assert.equal(f.budget.automatic.taskSteps,122);}
+  else{await assert.rejects(f.step(122),e=>e.code==='AUTONOMOUS_REPAIR_EXHAUSTED');assert.equal(f.budget.automatic.taskSteps,121);await assert.rejects(f.step(123),e=>e.code==='AUTONOMOUS_REPAIR_EXHAUSTED');}
+  assert.equal(f.calls.length,calls+1);assert.equal(JSON.parse(f.calls.at(-1).calls[0].arguments).kind,'test');
+ }
 });
 test('unchanged passing checks do not reset a stage or erase failed-round history',async t=>{
  const f=await fixture(t);await f.step(11);f.budget.stalled=2;const errors=f.budget.errors={kept:2};for(let n=12;n<=20;n++)await f.step(n);await f.step(21);assert.equal(f.calls.length,2);assert.equal(f.budget.stage,2);assert.equal(f.budget.steps,11);assert.equal(f.budget.stalled,2);assert.equal(f.budget.errors,errors);assert.equal(f.budget.automatic.phase,'working');assert.equal(f.budget.automatic.nextCheckAt,40);assert.match(f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW'),/do not invent a repair/);
@@ -203,8 +250,8 @@ test('a concurrent successful verifier cannot be mistaken for this failed automa
  await f.step(11);assert.equal(f.budget.stage,2,'only the other actual success earned its stage');assert.equal(f.budget.automatic.phase,'repairing');assert.equal(f.budget.automatic.lastAutomaticOutcome.verifiedProgress,false);assert.match(f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW'),/bounded repair/);
  const g=await fixture(t);g.ctx.tools.execute=async batch=>({results:[{callId:batch.calls[0].id,result:{isError:false,value:success()}}]});await assert.rejects(g.step(11),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(g.budget.stage,1);
 });
-test('legacy check count is not a gate; no-progress and crashed in-flight checks still stop safely',async t=>{
- const f=await fixture(t,{settings:{maxAutomaticChecks:1},report:failure});for(let n=11;n<=50;n++)await f.step(n);await assert.rejects(f.step(51),e=>e.code==='REPAIR_NO_PROGRESS');assert.equal(f.calls.length,3);
+test('legacy check counts and repair warnings do not stop work; crashed in-flight checks stay fenced',async t=>{
+ const f=await fixture(t,{settings:{maxAutomaticChecks:1},report:failure});for(let n=11;n<=51;n++)await f.step(n);assert.equal(f.budget.blocked,null);assert.equal(f.calls.length,3);assert.equal(f.budget.automatic.repairAllowance.deadline,170);
  const g=await fixture(t);prepareAutomaticRequest(g.record,g.budget,g.input,10);g.budget.automatic.phase='checking';await assert.rejects(g.step(11),e=>e.code==='AUTOMATIC_VERIFICATION_UNCERTAIN');assert.equal(g.calls.length,0);
 });
 test('saved checking plus a new human turn remains durably fenced, including manual review and idle lease release',async t=>{
@@ -241,11 +288,11 @@ test('settings have autonomous defaults and finite validated bounds; verificatio
  assert.equal(DEFAULTS.maxTaskSteps,240);assert.equal(DEFAULTS.maxAutomaticChecks,3);for(const settings of[{maxTaskSteps:601},{maxTaskSteps:59},{maxAutomaticChecks:7},{maxAutomaticChecks:-1}])assert.throws(()=>validateSettings(settings),e=>e.code==='INVALID_SETTINGS');assert.equal(validateSettings({maxAutomaticChecks:0}).maxAutomaticChecks,0);
  const budget=new RepairBudget();prepareAutomaticRequest({},budget,{turn:1,messages:[human('one')]},60);assert.equal(recordVerifiedProgress(budget,{kind:'test'}),false);assert.equal(budget.automatic.proofSerial,0);
 });
-test('measured partial verification progress avoids a false repair loop, while three unchanged failures still stop',()=>{
+test('measured partial progress avoids a warning; unchanged failures start one finite repair allowance',()=>{
  const budget=new RepairBudget({steps:10});prepareAutomaticRequest({},budget,{turn:1,messages:[human('one')]},60);
  const observe=passed=>budget.observe({kind:'test',exitCode:1,text:'same concrete assertion',recovery:{failed:true,verification:true,category:'verification',evidence:{failed:1,passed}}});
  for(const passed of[0,1,2])observe(passed);assert.equal(budget.blocked,null);assert.equal(budget.stage,1);assert.equal(budget.steps,10);assert.equal(budget.automatic.taskSteps,10);assert.equal(budget.stalled,0);
- for(let n=0;n<3;n++)observe(2);assert.equal(budget.blocked.code,'REPAIR_NO_PROGRESS');assert.equal(budget.automatic.taskSteps,10);
+ for(let n=0;n<3;n++)observe(2);assert.equal(budget.blocked,null);assert.equal(budget.automatic.repairAllowance.deadline,130);assert.equal(budget.automatic.taskSteps,10);
  const unbound=new RepairBudget();prepareAutomaticRequest({},unbound,{turn:1,messages:[human('one')]},60);unbound.observe({kind:'test',exitCode:0,text:'# tests 1\n# pass 1\n# fail 0'});assert.equal(unbound.stage,1);assert.equal(unbound.automatic.proofSerial,0);
 });
 test('an actual foreground test of an old source cannot credit a different source changed by another child',async t=>{

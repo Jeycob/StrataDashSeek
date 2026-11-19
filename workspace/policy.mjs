@@ -2,7 +2,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { classifyToolOutcome } from './tool-recovery.mjs';
 import { shellVerificationKind } from './shell-status.mjs';
-import { AUTOMATIC_REVIEW_DEFAULTS, recordVerifiedProgress } from './automatic-review.mjs';
+import { AUTOMATIC_REVIEW_DEFAULTS, recordVerifiedProgress, recordRepairWarning } from './automatic-review.mjs';
 
 export class WorkbenchError extends Error {
   constructor(code, message, status = 409) { super(message); this.code = code; this.status = status; }
@@ -89,7 +89,7 @@ export class RepairBudget {
     for (const key of Object.keys(this.errors)) if (key.startsWith(prefix)) { delete this.errors[key]; removed++; }
     return removed;
   }
-  observe({ kind, exitCode, text, isError, manifestHash, timedOut, aborted, recovery, operationScope, reviewUnknownVerification = false, establishVerificationBaseline = false }, limit = 3) {
+  observe({ kind, exitCode, text, isError, manifestHash, timedOut, aborted, recovery, operationScope, reviewUnknownVerification = false, establishVerificationBaseline = false, verifiedKinds, repairKind = kind }, limit = 3) {
     if (this.blocked) return { improved: false };
     const classification = recovery ?? classifyToolOutcome({ kind, exitCode, text, isError, timedOut, aborted });
     const failed = classification.failed;
@@ -112,7 +112,7 @@ export class RepairBudget {
       : previous;
     const fingerprint = failed ? errorFingerprint(text) : null;
     if (fingerprint) this.errors[fingerprint] = (this.errors[fingerprint] ?? 0) + 1;
-    const verifiedProgress = !failed && recordVerifiedProgress(this, { kind, manifestHash });
+    const verifiedProgress = !failed && recordVerifiedProgress(this, { kind, manifestHash, verifiedKinds });
     const passed = this.automatic && Number.isSafeInteger(classification.evidence?.passed) ? classification.evidence.passed : undefined;
     const morePassed = failed && comparison && passed !== undefined && passed > (comparison.bestPassed ?? passed) && score <= comparison.bestScore;
     const improved = failed ? !establishVerificationBaseline && (!comparison || score < comparison.bestScore || morePassed) : verifiedProgress;
@@ -120,6 +120,7 @@ export class RepairBudget {
       ...(passed !== undefined ? { bestPassed: Math.max(passed, comparison?.bestPassed ?? 0) } : {}) };
     if (verifiedProgress) { this.steps = 0; this.stalled = 0; this.errors = {}; this.stage++; }
     else if (failed) { if (improved && comparison) { this.stalled = 0; if (this.automatic && fingerprint) this.errors[fingerprint] = 0; } else this.stalled++; }
+    let strategyChange = false;
     if (failed && (this.stalled >= limit || this.errors[fingerprint] >= limit)) {
       if (reviewUnknownVerification && this.automatic && score === 1e9 && ['test','build'].includes(kind)) {
         // Missing totals are not proof of regression. The managed pre-step
@@ -128,10 +129,11 @@ export class RepairBudget {
           this.automatic.repairEvidenceReview ??= { kind };
           this.automatic.repairEvidenceUsed = true;
           this.automatic.nextCheckAt = this.automatic.taskSteps;
-        } else this.blocked = { code:'AUTOMATIC_VERIFICATION_UNAVAILABLE', message:'Verification totals remain unavailable after the owned current-source check. Files and failed results are retained.' };
-      } else this.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Repeated repairs did not improve verification. Files and results are retained.' };
+        } else strategyChange = recordRepairWarning(this,repairKind);
+      } else if (this.automatic) strategyChange = recordRepairWarning(this,repairKind);
+      else this.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Repeated repairs did not improve verification. Files and results are retained.' };
     }
-    return { improved, score, key, verifiedProgress, blocked: this.blocked };
+    return { improved, score, key, verifiedProgress, strategyChange, blocked: this.blocked };
   }
   resume(strategy) {
     if (this.automatic && (this.automatic.uncertain || this.automatic.activeCallId || this.automatic.phase === 'checking')) throw new WorkbenchError('AUTOMATIC_VERIFICATION_UNCERTAIN', 'The unresolved verification is being reconciled against its actual terminal evidence.');

@@ -100,7 +100,7 @@ export async function reconcileAutomatic(manager,id){
    }else a.accountedCallId=callId;
   }
   if(!current())return false;
-  if(receipt.isError&&a.repairEvidenceReview)budget.blocked={code:'AUTOMATIC_VERIFICATION_UNAVAILABLE',message:'The owned current-source check failed to provide verification totals. Files and failed results are retained.'};
+  if(receipt.isError&&(a.repairEvidenceReview||operation.repairFinal))budget.blocked={code:'AUTOMATIC_VERIFICATION_UNAVAILABLE',message:'The owned current-source check failed to provide verification totals. Files and failed results are retained.'};
   a.recoveryFailures=receipt.isError?(a.recoveryFailures??0)+1:0;
   if(a.recoveryFailures>=3){budget.blocked={code:'AUTOMATIC_RECOVERY_NO_PROGRESS',message:'Repeated owned verification recovery did not finish successfully. Files and terminal evidence are retained.'};}
   a.lastCheck={at:receipt.at,passed:!receipt.isError&&receipt.report?.passed===true&&a.lastAutomaticOutcome?.sourceHash===receipt.report?.sourceHash,stale:receipt.report?.stale!==false||a.lastAutomaticOutcome?.sourceHash!==receipt.report?.sourceHash,checks:receipt.report?.checks??[]};

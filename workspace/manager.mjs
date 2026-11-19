@@ -384,7 +384,12 @@ export class WorkspaceManager {
       : this.budgets.get(exec.agent.id)?.automatic ? undefined : manifest?.sha256;
     if (structured && record.lastVerification && !proofHash) record.lastVerification.accepted = false;
     const budget = this.budgets.get(exec.agent.id);
-    const evidenceReview = structured && typeof exec.callId === 'string' && automatic?.activeCallId === exec.callId && automatic.repairEvidenceReview;
+    const ownedReview = structured && typeof exec.callId === 'string' && automatic?.activeCallId === exec.callId;
+    const finalRepair = ownedReview && automatic.operation?.repairFinal && automatic.repairAllowance;
+    const evidenceReview = ownedReview && !finalRepair && automatic.repairEvidenceReview;
+    if (finalRepair && (!recovery.verification || !measuredRepairEvidence(value, finalRepair.kind, proofHash))) {
+      budget.blocked = { code:'AUTOMATIC_VERIFICATION_UNAVAILABLE', message:'The final repair check did not provide current-source verification evidence. Files and failed results are retained.' };
+    }
     if (evidenceReview) {
       if (!recovery.verification || !measuredRepairEvidence(value, evidenceReview.kind, proofHash)) {
         budget.blocked = { code:'AUTOMATIC_VERIFICATION_UNAVAILABLE', message:'The current-source check did not provide reliable totals for the failed verification. Files and failed results are retained.' };
@@ -401,7 +406,20 @@ export class WorkspaceManager {
     }
     const decision = budget.observe({ kind, exitCode, text, isError: result.isError, recovery, operationScope, manifestHash: proofHash,
       reviewUnknownVerification: Boolean(!structured && automatic && ['bash','project_exec','exec_command','terminal'].includes(exec.name)),
-      establishVerificationBaseline: Boolean(evidenceReview && recovery.failed && !budget.blocked) }, this.settings(exec.agent.session).noProgressLimit);
+      establishVerificationBaseline: Boolean(evidenceReview && recovery.failed && !budget.blocked),
+      repairKind: structured ? value?.checks?.find(check=>check.passed===false&&['test','build','browser','acceptance'].includes(check.kind))?.kind ?? kind : kind,
+      verifiedKinds: structured && value?.passed === true ? value.checks?.filter(check=>check.passed===true).map(check=>check.kind) : undefined }, this.settings(exec.agent.session).noProgressLimit);
+    if (decision.strategyChange) {
+      const diagnostics = this.pendingDiagnostics.get(exec.agent.id) ?? new Map();
+      diagnostics.set('REPAIR_STRATEGY_CHANGE','[Harness: change repair strategy] Repeated attempts have not established success. Use a different approach: isolate the failing assertion, inspect the relevant state transition and fix the cause before rerunning the same source-bound check. Keep the original requirements and assertions. Continue the existing task within its 120-step repair allowance; no owner approval is required.');
+      while (diagnostics.size > 4) diagnostics.delete(diagnostics.keys().next().value);
+      this.pendingDiagnostics.set(exec.agent.id,diagnostics);
+    }
+    if (automatic?.repairAllowance && structured && recovery.failed) {
+      const repairKind=automatic.repairAllowance.kind, scoped=repairKind==='all'?value:{...value,checks:value?.checks?.filter(check=>check.kind===repairKind)};
+      if (measuredRepairEvidence(scoped,repairKind,proofHash)) automatic.repairAllowance.lastFailureHash=proofHash;
+    }
+    if (finalRepair && !budget.blocked && automatic.repairAllowance) budget.blocked={code:'AUTONOMOUS_REPAIR_EXHAUSTED',message:'The 120-step autonomous repair allowance ended without new verified success for the failing check. Files and results are retained.'};
     if (evidenceReview && !budget.blocked && !recovery.failed && !decision.verifiedProgress) {
       budget.blocked = { code:'AUTOMATIC_VERIFICATION_UNAVAILABLE', message:'The check repeated existing passing evidence without resolving the failed verification. Files and results are retained.' };
     }

@@ -66,6 +66,15 @@ test('late refused or setup-only repair evidence cannot schedule another fallbac
   await f.manager.automaticReconcile('owner');assert.equal(f.a.checks,1);assert.equal(f.a.recovery.canContinue,false);
  }
 });
+
+test('a late final repair failure exhausts the same allowance without admitting another step',async t=>{
+ const f=await fixture(t);f.a.repairAllowance={kind:'test',deadline:80,lastWarning:0,finalCheckStarted:true};f.a.operation.verificationKind='test';f.a.operation.repairFinal=true;
+ const report={passed:false,complete:false,stale:false,sourceHash:f.sourceHash,checks:[{id:'core',kind:'test',passed:false,checksPassed:12,checksTotal:14,countsMeasured:true}]};
+ const controller=new AbortController();controller.abort(Error('Owned deadline elapsed'));
+ f.manager.observeToolResult({agent:f.agent,name:'verify_project',arguments:{kind:'test'},callId:f.callId,signal:controller.signal},{isError:false,value:report,content:[]});await f.manager.drainToolResults('owner');f.a.terminalAcknowledged=true;
+ await f.manager.automaticReconcile('owner');assert.equal(f.budget.blocked?.code,'AUTONOMOUS_REPAIR_EXHAUSTED');assert.equal(f.a.recovery.canContinue,false);assert.equal(f.a.taskSteps,80);assert.equal(f.a.checks,1);assert.equal(f.a.activeCallId,undefined);
+ await f.manager.automaticReconcile('owner');assert.equal(f.a.taskSteps,80);assert.equal(f.a.checks,1);
+});
 test('foreign call result and pending verifier never become terminal proof or PASS',async t=>{
  const f=await fixture(t);await f.terminal({id:'foreign-call'});assert.equal(f.a.receipt,undefined);
  await f.manager.automaticReconcile('owner');assert.equal(f.a.recovery.canContinue,false);assert.equal(f.budget.blocked.code,'AUTOMATIC_VERIFICATION_UNCERTAIN');assert.equal(f.a.proofSerial,0);

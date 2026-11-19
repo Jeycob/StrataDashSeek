@@ -6,6 +6,7 @@ import {watchAutomaticCancellation,releaseAutomaticCancellation} from './automat
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 export const AUTOMATIC_REVIEW_DEFAULTS = Object.freeze({ maxTaskSteps: 240, maxAutomaticChecks: 3 });
 export const REPAIR_STEPS = 20;
+export const AUTONOMOUS_REPAIR_STEPS = 120;
 export const VERIFICATION_TIMEOUT_MS = 120000;
 export function automaticReviewView(value) {
   return value ? {...Object.fromEntries(['version','taskSteps','checks','nextCheckAt','phase','proofSerial','lastVerified','lastCheck','reason','recovery'].filter(key => value[key] !== undefined).map(key => [key,value[key]])),terminalAcknowledged:value.terminalAcknowledged===true} : null;
@@ -41,7 +42,7 @@ export function prepareAutomaticRequest(record, budget, { turn, messages, owner 
     // A genuine new owner request starts a new repair attempt. Retain the
     // measured checks as its baseline, but not the exhausted failure streak.
     if (fresh) { budget.stalled = 0; budget.errors = {}; }
-    if (fresh && ['TASK_BUDGET', 'AUTOMATIC_CHECK_LIMIT', 'AUTOMATIC_NO_PROGRESS', 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'AUTOMATIC_VERIFICATION_TIMEOUT', 'REPAIR_NO_PROGRESS', 'REPEATED_TOOL_ERROR'].includes(budget.blocked?.code)) budget.blocked = null;
+    if (fresh && ['TASK_BUDGET', 'AUTOMATIC_CHECK_LIMIT', 'AUTOMATIC_NO_PROGRESS', 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'AUTOMATIC_VERIFICATION_TIMEOUT', 'REPAIR_NO_PROGRESS', 'REPEATED_TOOL_ERROR', 'AUTONOMOUS_REPAIR_EXHAUSTED'].includes(budget.blocked?.code)) budget.blocked = null;
   }
   const a = budget.automatic;
   if (a.version !== 1 || !['taskSteps','checks','nextCheckAt','proofSerial'].every(k => integer(a[k])) || !a.proofs || typeof a.proofs !== 'object' || Array.isArray(a.proofs) || !a.admitted || typeof a.admitted !== 'object' || Array.isArray(a.admitted)) {
@@ -53,7 +54,7 @@ export function prepareAutomaticRequest(record, budget, { turn, messages, owner 
   return fresh;
 }
 
-export function recordVerifiedProgress(budget, { kind, manifestHash }) {
+export function recordVerifiedProgress(budget, { kind, manifestHash, verifiedKinds }) {
   const a = budget.automatic;
   if (!a) return true; // Legacy pure policy callers; managed runtime always enrolls.
   if (typeof manifestHash !== 'string' || !/^[a-f0-9]{64}$/i.test(manifestHash)) return false;
@@ -63,6 +64,7 @@ export function recordVerifiedProgress(budget, { kind, manifestHash }) {
   a.lastVerified = { kind, sourceHash: manifestHash, at: Date.now() };
   delete a.repairEvidenceUsed;
   delete a.repairEvidenceReview;
+  if (a.repairAllowance && (kind === a.repairAllowance.kind || kind === 'all' && verifiedKinds?.includes(a.repairAllowance.kind))) delete a.repairAllowance;
   a.phase = 'working'; delete a.reason;
   a.nextCheckAt = a.taskSteps + a.interval;
   return true;
@@ -71,16 +73,30 @@ export function recordVerifiedProgress(budget, { kind, manifestHash }) {
 export function admitAutomaticStep(budget, settings) {
   const a = budget.automatic;
   if (budget.blocked) return false;
+  if (a.repairAllowance && a.taskSteps >= a.repairAllowance.deadline) return stop(budget,'AUTONOMOUS_REPAIR_EXHAUSTED','The 120-step autonomous repair allowance ended without new verified success for the failing check. Files and failed results are retained.');
   if (!Number.isSafeInteger(a.taskSteps+1)||!Number.isSafeInteger(budget.steps+1)) return stop(budget,'AUTOMATIC_STATE_INVALID','Step accounting cannot be represented safely. Files are retained.');
   a.taskSteps++; budget.steps++;
   return true;
+}
+
+export function recordRepairWarning(budget, kind) {
+  const a = budget.automatic;
+  if (!a) return false;
+  if (!a.repairAllowance) {
+    const deadline = a.taskSteps + AUTONOMOUS_REPAIR_STEPS;
+    if (!Number.isSafeInteger(deadline)) { stop(budget,'AUTOMATIC_STATE_INVALID','Repair accounting cannot be represented safely.'); return false; }
+    a.repairAllowance = { kind, deadline };
+  }
+  const allowance = a.repairAllowance;
+  if (allowance.lastWarning === undefined || a.taskSteps >= allowance.lastWarning + REPAIR_STEPS) { allowance.lastWarning = a.taskSteps; return true; }
+  return false;
 }
 
 export function measuredRepairEvidence(report, kind, sourceHash) {
   const checks = report?.checks;
   return typeof sourceHash === 'string' && report?.sourceHash === sourceHash && report.stale === false
     && typeof report.passed === 'boolean' && Array.isArray(checks) && checks.length > 0
-    && checks.every(check => check?.kind === kind && check.countsMeasured === true
+    && checks.every(check => (kind === 'all' ? ['test','build','browser','acceptance'].includes(check?.kind) : check?.kind === kind) && check.countsMeasured === true
       && Number.isSafeInteger(check.checksPassed) && Number.isSafeInteger(check.checksTotal)
       && check.checksPassed >= 0 && check.checksTotal > 0 && check.checksTotal <= 1000000 && check.checksPassed <= check.checksTotal)
     && checks.reduce((total,check)=>total+check.checksTotal,0) <= 1000000
@@ -98,10 +114,15 @@ const diagnostics = (manager, id, text) => {
 export async function automaticReview(manager, input, record, budget, settings, freshHuman) {
   const a = budget.automatic, id = input.agent.id;
   const evidenceReview = a.repairEvidenceReview;
+  if (budget.blocked?.code === 'REPAIR_NO_PROGRESS' && !a.activeCallId && !a.uncertain) {
+    budget.blocked=null;a.phase='repairing';delete a.reason;
+    if(recordRepairWarning(budget,'all'))diagnostics(manager,id,'[Harness: change repair strategy] The previous failed attempts are retained. Use a different approach to the failing verification and continue the original task within its 120-step repair allowance. No owner approval is required.');
+  }
+  const allowance = a.repairAllowance, finalRepair = allowance && a.taskSteps >= allowance.deadline;
   if (['STAGE_BUDGET','TASK_BUDGET','AUTOMATIC_CHECK_LIMIT'].includes(budget.blocked?.code)&&!a.activeCallId&&!a.uncertain) { budget.blocked = null; a.nextCheckAt = a.taskSteps; }
   if (budget.blocked) return;
   if (a.phase === 'checking' || a.uncertain) { uncertain(budget); return; }
-  if (!evidenceReview && a.taskSteps < a.nextCheckAt) return; // Main interval or bounded repair window, never a stage pass.
+  if (!evidenceReview && !finalRepair && a.taskSteps < a.nextCheckAt) return; // Main interval or bounded repair window, never a stage pass.
   let mode, changes;
   try {
     mode = manager.ctx.sandboxPolicy.resolve({ session: (input.executionAgent ?? input.agent).session }).mode;
@@ -111,7 +132,7 @@ export async function automaticReview(manager, input, record, budget, settings, 
     stop(budget, 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'Verification permissions or project changes could not be established. Files are retained.'); return;
   }
   if (mode === 'read-only' || record.legacy || !changedApplicationCode(changes?.files)) {
-    if (evidenceReview) { stop(budget, 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'Missing verification totals could not be resolved against writable current project sources. Files and failed results are retained.'); return; }
+    if (evidenceReview || finalRepair) { stop(budget, 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'The required repair check could not run against writable current project sources. Files and failed results are retained.'); return; }
     // Read-only analysis and prose are not application verification. Do not
     // install a contract, borrow owner write permission or fabricate a pass.
     a.phase = 'working'; a.nextCheckAt = a.taskSteps + settings.maxStageSteps;
@@ -144,12 +165,16 @@ export async function automaticReview(manager, input, record, budget, settings, 
     diagnostics(manager,id,'[Harness: verification not started] Source binding failed before dispatch: '+code+'. No check was charged and no active operation or passing result was created.');
     return;
   }
-  if(budget.blocked||!evidenceReview&&a.taskSteps<a.nextCheckAt)return;
+  if(budget.blocked||!evidenceReview&&!finalRepair&&a.taskSteps<a.nextCheckAt)return;
+  if (finalRepair) {
+    if (allowance.finalCheckStarted || allowance.lastFailureHash === sourceHash) { stop(budget,'AUTONOMOUS_REPAIR_EXHAUSTED','The 120-step autonomous repair allowance ended with the failing check still unverified. Files and failed results are retained.'); return; }
+    allowance.finalCheckStarted = true;
+  }
   const callId = 'automatic-review-' + crypto.randomUUID();
   a.phase = 'checking'; a.checks++; a.activeCallId = callId; delete a.lastAutomaticOutcome;delete a.receipt;
   if(a.continuation){a.previousContinuation={callId:a.continuation.callId,messageId:a.continuation.message?.id,state:a.continuation.state};delete a.continuation;}a.continuationNeeded=false;
   const startedAt=Date.now();
-  a.terminalAcknowledged=false;a.operation={callId,ownerId:id,root,sourceHash,task,verificationKind:evidenceReview?.kind??'all',startedAt,deadlineAt:startedAt+VERIFICATION_TIMEOUT_MS};
+  a.terminalAcknowledged=false;a.operation={callId,ownerId:id,root,sourceHash,task,verificationKind:finalRepair?allowance.kind:evidenceReview?.kind??'all',repairFinal:Boolean(finalRepair),startedAt,deadlineAt:startedAt+VERIFICATION_TIMEOUT_MS};
   const operation=a.operation;
   watchAutomaticCancellation(manager,id,record,budget,operation,input.signal);
   if(a.legacyRecovery?.verificationState==='required'){a.legacyRecovery.verificationState='started';a.legacyRecovery.verificationCallId=callId;a.continuationNeeded=true;}
@@ -168,7 +193,7 @@ export async function automaticReview(manager, input, record, budget, settings, 
     // budget.observe directly from this controller.
     dispatchStarted=true;
     execution = Promise.resolve(manager.ctx.tools.execute({ agent: input.executionAgent ?? input.agent, signal: verificationSignal,
-      maxParallelToolCalls: 1, calls: [{ type: 'tool-call', id: callId, name: 'verify_project', arguments: JSON.stringify({kind:evidenceReview?.kind ?? 'all'}) }] }));
+      maxParallelToolCalls: 1, calls: [{ type: 'tool-call', id: callId, name: 'verify_project', arguments: JSON.stringify({kind:operation.verificationKind}) }] }));
     manager.automaticInFlight ??= new Map(); manager.automaticInFlight.set(id, execution);
     const drained = () => {
       executionSettled = true;

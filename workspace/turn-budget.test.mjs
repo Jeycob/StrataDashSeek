@@ -117,6 +117,6 @@ test('a fresh owner request starts a new repair streak while retaining prior ver
   await f.manager.preStep({ ...f.input, step: 2, agent: f.owner });
   assert.equal(f.budget.stalled, 1, 'same human identity cannot renew the repair streak again');
   f.budget.observe(failure); assert.equal(f.budget.blocked, null);
-  f.budget.observe(failure); assert.equal(f.budget.blocked?.code, 'REPAIR_NO_PROGRESS', 'new genuinely repeated failures remain bounded');
+  f.budget.observe(failure); assert.equal(f.budget.blocked, null); assert.equal(f.budget.automatic.repairAllowance.deadline, 122, 'new repeated failures receive one finite autonomous repair allowance');
   assert.equal(f.budget.stage, 4);
 });
