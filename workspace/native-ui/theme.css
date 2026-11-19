@@ -108,3 +108,23 @@
 .harness-code-host { flex: 1; min-height: 380px; min-width: 0; }
 .harness-code-frame { border: 1px solid var(--dsw-alias-border-l3, #ccd5df); border-radius: 6px; box-sizing: border-box; background: #1f1f1f; }
 @media (max-width: 680px) { .harness-code-editor { padding: 8px; } }
+
+.harness-turn-usage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 4px 0;
+  color: var(--dsw-alias-label-secondary, #68717e);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.harness-turn-usage > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 5px;
+}
+.harness-turn-usage dd {
+  margin: 0;
+  color: var(--dsw-alias-label-primary, #20242b);
+  font-variant-numeric: tabular-nums;
+}

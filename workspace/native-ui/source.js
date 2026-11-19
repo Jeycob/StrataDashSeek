@@ -252,7 +252,54 @@ function relativeProject(root,base){
  return relative&&!relative.split('/').some(p=>!p||p==='.'||p==='..')?relative:null;
 }
 function useLanguage(){const [language,set]=React.useState(window.HarnessI18n.language);React.useEffect(()=>{const change=()=>set(window.HarnessI18n.language);window.addEventListener('harness-language-change',change);return()=>window.removeEventListener('harness-language-change',change);},[]);return language;}
+
+const turnUsageCopy = {
+ en: {title:'Turn usage', elapsed:'Elapsed time', input:'Uncached input', read:'Cache read', write:'Cache write', output:'Output tokens', missing:'Unavailable'},
+ cs: {title:'Spotřeba za tah', elapsed:'Doba běhu', input:'Necachovaný vstup', read:'Čtení cache', write:'Zápis cache', output:'Výstupní tokeny', missing:'Nedostupné'},
+};
+const isUsageCount = value => Number.isSafeInteger(value) && value >= 0;
+
+function formatTurnDuration(milliseconds, locale) {
+ const seconds = Math.round(milliseconds / 100) / 10;
+ const hours = Math.floor(seconds / 3600);
+ const minutes = Math.floor(seconds / 60) % 60;
+ const format = (value, unit) => new Intl.NumberFormat(locale, {
+  style:'unit', unit, unitDisplay:'short', maximumFractionDigits:1,
+ }).format(value);
+ return [
+  hours > 0 && format(hours, 'hour'),
+  (hours > 0 || minutes > 0) && format(minutes, 'minute'),
+  format(seconds % 60, 'second'),
+ ].filter(Boolean).join(' ');
+}
+
+function CompletedTurnUsage({ turn }) {
+ const labels = turnUsageCopy[useLanguage()] ?? turnUsageCopy.en;
+ const locale = window.HarnessI18n.locale;
+ const start = turn.start?.time;
+ const end = turn.end?.time;
+ const elapsed = isUsageCount(start) && isUsageCount(end) && end >= start
+  ? formatTurnDuration(end - start, locale)
+  : labels.missing;
+ const usage = turn.data.get('turn-tail')?.tokenUsage;
+ const tokens = value => isUsageCount(value)
+  ? new Intl.NumberFormat(locale).format(value)
+  : labels.missing;
+ const rows = [
+  [labels.elapsed, elapsed],
+  [labels.input, tokens(usage?.uncachedInputTokens)],
+  [labels.read, tokens(usage?.cacheReadTokens)],
+  [labels.write, tokens(usage?.cacheWriteTokens)],
+  [labels.output, tokens(usage?.outputTokens)],
+ ];
+ return h('dl', {className:'harness-turn-usage', 'aria-label':labels.title},
+  rows.map(([label, value]) => h('div', {key:label}, h('dt', null, label), h('dd', null, value))));
+}
+
 function apply(ctx,config={}){
+ ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
+  name:'conversation.chat.turnTail', id:'harness.turn-usage', order:100,
+ }, CompletedTurnUsage)), 'native-workbench: completed turn usage');
  const ROOT=config.appsWorkspaceRoot||'/data/harness/workspaces';
  const views=new Set();
  const ownsCzech=!ctx.locale.getSnapshot().locales.some(row=>row.id==='cs');
