@@ -22,6 +22,28 @@ shell writes. The workbench's project, Docker and vault options use the existing
 **Settings**. See the [workbench guide](docs/workspace-runtime.md) for tracking
 limits, temporary process jobs and verification behavior.
 
+## Run your first task
+
+1. Connect to Tailscale, open your private wake link and wait for Harness to
+   open. Sign in, choose a workspace and start a conversation. Describe the
+   result and how you want it checked in one message. For example, ask for an
+   `index.html` counter and specify that increment, decrement and reset should
+   each be tested in the browser.
+2. Open the preview link in the completion message while the preview is live.
+   To keep a copy of the result, open **Workspace files**, select the output
+   file and use **Download**. Preview links are temporary. Project files stay
+   in the workspace after the preview ends.
+3. In an isolated guest project, open **Code editor** in the right sidebar and
+   select **Open code-server**. Save your changes in the editor before closing
+   it. Use **Reconnect editor** if the connection expires. The editor requires
+   an enabled Apps/VM worker with editor and relay images configured. Host-mode
+   projects use **Workspace files** to open and edit files.
+4. Use **Applications and Docker** in the sidebar to inspect project containers
+   and **Settings** for instance options. For wake, health checks and optional
+   Apps provisioning, follow the [installation and operation overview](docs/installation-overview.md).
+   Listing Docker status does not start the guest. A sleeping instance must be
+   woken before you can run a task or open its editor.
+
 ```mermaid
 flowchart LR
   Phone[iPhone / browser] -->|authenticated wake| Worker[Cloudflare Worker]
