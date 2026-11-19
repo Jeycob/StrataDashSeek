@@ -39,6 +39,33 @@ test('matching durable final receipt reconciles once and preserves original task
  await f.manager.automaticReconcile('owner');await f.terminal();assert.equal(f.a.proofSerial,1);assert.equal(f.budget.stage,2);
  const view=automaticReviewView(f.a);assert.equal(view.terminalAcknowledged,true);assert.equal(view.recovery.state,'recovered');assert.equal(view.receipt,undefined);assert.equal(view.operation,undefined);assert.equal(view.activeCallId,undefined);
 });
+
+test('late same-kind repair evidence retains measured counts and accounts its baseline once after reload',async t=>{
+ const f=await fixture(t);Object.assign(f.a,{repairEvidenceUsed:true,repairEvidenceReview:{kind:'test'}});f.a.operation.verificationKind='test';
+ f.budget.stalled=3;f.budget.checks.test={bestScore:5,lastScore:1e9};
+ const report={passed:false,complete:false,stale:false,sourceHash:f.sourceHash,checks:[{id:'core',kind:'test',passed:false,checksPassed:12,checksTotal:14,countsMeasured:true}]};
+ const controller=new AbortController();controller.abort(Error('Owned deadline elapsed'));
+ const terminal=kind=>f.manager.observeToolResult({agent:f.agent,name:'verify_project',arguments:{kind},callId:f.callId,signal:controller.signal},{isError:false,value:report,content:[]});
+ terminal('all');await f.manager.drainToolResults('owner');assert.equal(f.a.receipt,undefined,'a different kind cannot satisfy the owned operation');
+ terminal('test');await f.manager.drainToolResults('owner');assert.equal(f.a.receipt.verificationKind,'test');assert.equal(f.a.receipt.report.checks[0].countsMeasured,true);assert.equal(f.budget.checks.test.bestScore,5);
+ f.a.terminalAcknowledged=true;await f.manager.save();const saved=JSON.parse(await fs.readFile(f.manager.file,'utf8'));f.manager.data=saved;const reloaded=new RepairBudget(saved.sessions.owner.budget);f.manager.budgets.set('owner',reloaded);
+ await f.manager.automaticReconcile('owner');const a=reloaded.automatic;
+ assert.equal(reloaded.blocked,null);assert.equal(a.activeCallId,undefined);assert.equal(a.uncertain,undefined);assert.equal(a.accountedCallId,f.callId);assert.equal(a.checks,1);assert.equal(a.taskSteps,80);assert.equal(reloaded.stage,1);assert.equal(a.proofSerial,0);
+ assert.equal(reloaded.checks.test.bestScore,2);assert.equal(reloaded.stalled,1);assert.equal(a.repairEvidenceBaseline.previous.bestScore,5);assert.equal(a.repairEvidenceUsed,true);assert.equal(a.repairEvidenceReview,undefined);
+ await f.manager.automaticReconcile('owner');assert.equal(reloaded.stalled,1);assert.equal(a.taskSteps,80);assert.equal(a.checks,1);
+});
+
+test('late refused or setup-only repair evidence cannot schedule another fallback or grant an allowance',async t=>{
+ for(const isError of [true,false]){
+  const f=await fixture(t);Object.assign(f.a,{repairEvidenceUsed:true,repairEvidenceReview:{kind:'test'}});f.a.operation.verificationKind='test';f.budget.stalled=3;f.budget.checks.test={bestScore:5,lastScore:1e9};
+  const controller=new AbortController();controller.abort(Error('Owned deadline elapsed'));
+  const report={passed:false,complete:false,stale:false,sourceHash:f.sourceHash,checks:[{id:'bootstrap',kind:'test',passed:false,checksPassed:0,checksTotal:1,countsMeasured:true,category:'setup',diagnosticCode:'TEST_BOOTSTRAP_FAILURE'}]};
+  f.manager.observeToolResult({agent:f.agent,name:'verify_project',arguments:{kind:'test'},callId:f.callId,signal:controller.signal},{isError,value:isError?undefined:report,error:isError?{info:{code:'PERMISSION_REQUIRED'}}:undefined,content:[]});
+  await f.manager.drainToolResults('owner');f.a.terminalAcknowledged=true;await f.manager.automaticReconcile('owner');
+  assert.equal(f.budget.blocked?.code,'AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(f.a.recovery.canContinue,false);assert.equal(f.a.activeCallId,undefined);assert.equal(f.a.taskSteps,80);assert.equal(f.a.checks,1);assert.equal(f.budget.stalled,3);assert.equal(f.budget.checks.test.bestScore,5);assert.equal(f.a.proofSerial,0);
+  await f.manager.automaticReconcile('owner');assert.equal(f.a.checks,1);assert.equal(f.a.recovery.canContinue,false);
+ }
+});
 test('foreign call result and pending verifier never become terminal proof or PASS',async t=>{
  const f=await fixture(t);await f.terminal({id:'foreign-call'});assert.equal(f.a.receipt,undefined);
  await f.manager.automaticReconcile('owner');assert.equal(f.a.recovery.canContinue,false);assert.equal(f.budget.blocked.code,'AUTOMATIC_VERIFICATION_UNCERTAIN');assert.equal(f.a.proofSerial,0);

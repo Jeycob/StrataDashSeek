@@ -89,7 +89,7 @@ export class RepairBudget {
     for (const key of Object.keys(this.errors)) if (key.startsWith(prefix)) { delete this.errors[key]; removed++; }
     return removed;
   }
-  observe({ kind, exitCode, text, isError, manifestHash, timedOut, aborted, recovery, operationScope }, limit = 3) {
+  observe({ kind, exitCode, text, isError, manifestHash, timedOut, aborted, recovery, operationScope, reviewUnknownVerification = false, establishVerificationBaseline = false }, limit = 3) {
     if (this.blocked) return { improved: false };
     const classification = recovery ?? classifyToolOutcome({ kind, exitCode, text, isError, timedOut, aborted });
     const failed = classification.failed;
@@ -107,7 +107,7 @@ export class RepairBudget {
     // A prior pass ends its repair series. A later failure must establish a
     // new baseline: no positive failure count can improve on historical zero.
     // This also repairs persisted zero minima without clearing any stop budget.
-    const comparison = failed && previous?.bestScore === 0
+    const comparison = establishVerificationBaseline ? undefined : failed && previous?.bestScore === 0
       ? Number.isFinite(previous.lastScore) && previous.lastScore > 0 ? { ...previous, bestScore: previous.lastScore } : undefined
       : previous;
     const fingerprint = failed ? errorFingerprint(text) : null;
@@ -115,12 +115,22 @@ export class RepairBudget {
     const verifiedProgress = !failed && recordVerifiedProgress(this, { kind, manifestHash });
     const passed = this.automatic && Number.isSafeInteger(classification.evidence?.passed) ? classification.evidence.passed : undefined;
     const morePassed = failed && comparison && passed !== undefined && passed > (comparison.bestPassed ?? passed) && score <= comparison.bestScore;
-    const improved = failed ? !comparison || score < comparison.bestScore || morePassed : verifiedProgress;
+    const improved = failed ? !establishVerificationBaseline && (!comparison || score < comparison.bestScore || morePassed) : verifiedProgress;
     this.checks[key] = { bestScore: Math.min(score, comparison?.bestScore ?? score), lastScore: score, fingerprint, manifestHash,
       ...(passed !== undefined ? { bestPassed: Math.max(passed, comparison?.bestPassed ?? 0) } : {}) };
     if (verifiedProgress) { this.steps = 0; this.stalled = 0; this.errors = {}; this.stage++; }
     else if (failed) { if (improved && comparison) { this.stalled = 0; if (this.automatic && fingerprint) this.errors[fingerprint] = 0; } else this.stalled++; }
-    if (failed && (this.stalled >= limit || this.errors[fingerprint] >= limit)) this.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Repeated repairs did not improve verification. Files and results are retained.' };
+    if (failed && (this.stalled >= limit || this.errors[fingerprint] >= limit)) {
+      if (reviewUnknownVerification && this.automatic && score === 1e9 && ['test','build'].includes(kind)) {
+        // Missing totals are not proof of regression. The managed pre-step
+        // controller must resolve this once, before admitting another step.
+        if (this.automatic.repairEvidenceReview || !this.automatic.repairEvidenceUsed) {
+          this.automatic.repairEvidenceReview ??= { kind };
+          this.automatic.repairEvidenceUsed = true;
+          this.automatic.nextCheckAt = this.automatic.taskSteps;
+        } else this.blocked = { code:'AUTOMATIC_VERIFICATION_UNAVAILABLE', message:'Verification totals remain unavailable after the owned current-source check. Files and failed results are retained.' };
+      } else this.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Repeated repairs did not improve verification. Files and results are retained.' };
+    }
     return { improved, score, key, verifiedProgress, blocked: this.blocked };
   }
   resume(strategy) {

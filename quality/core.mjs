@@ -139,7 +139,7 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
     const before = await fingerprint(root, inputs), startedAt = Date.now(), runId = crypto.randomUUID(), results = [];
     for (const check of selected) {
       signal?.throwIfAborted();
-      const start = Date.now(), diagnostics = [], secondaryDiagnostics = []; let measured = { passed: 0, failed: 1 }, artifacts = [], result, evidenceErrorCode, inspection;
+      const start = Date.now(), diagnostics = [], secondaryDiagnostics = []; let measured = { passed: 0, failed: 1 }, countsMeasured = false, artifacts = [], result, evidenceErrorCode, inspection;
       const remaining = Math.min(startedAt+budgetMs,serverControl?.deadline??Infinity)-start;
       if (remaining < 100) { results.push({ id: check.id, kind: check.kind, passed: false, exitCode: null, checksPassed: 0, checksTotal: 1, diagnostics: ['VERIFICATION_BUDGET_EXHAUSTED'], artifactPaths: [] }); break; }
       const cwd = await confined(root, check.cwd ?? '.');
@@ -167,13 +167,15 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
           if (stat.mtimeMs < start - 10 || data.runId !== runId) throw new QualityError('STALE_EVIDENCE', 'Structured evidence must be produced by this run.');
           if (!Number.isInteger(data.passed) || !Number.isInteger(data.failed) || data.passed < 0 || data.failed < 0) throw new QualityError('INVALID_COUNTS', 'Invalid structured check counts.');
           measured = { passed: data.passed, failed: data.failed };
+          countsMeasured = true;
           for (const failed of data.results?.filter(r => !r.passed) ?? []) diagnostics.push([failed.code ?? failed.name ?? 'ASSERTION_FAILED', failed.detail].filter(Boolean).join(': ').slice(0,500));
           if (check.kind === 'browser' && (data.engine !== 'chromium' || !data.screenshots?.length)) throw new QualityError('BROWSER_EVIDENCE_MISSING', 'A real Chromium run and screenshots are required.');
           for (const artifact of data.screenshots ?? []) { await confined(root, artifact.path); artifacts.push(artifact.path); }
           artifacts.push(resultFile);
         } else if (check.kind === 'test' || check.kind === 'acceptance') {
-          measured = parseTestCounts(result.stdout + '\n' + result.stderr) ?? { passed: 0, failed: 1 };
-        } else measured = { passed: result.exitCode === 0 ? 1 : 0, failed: result.exitCode === 0 ? 0 : 1 };
+          const counts = parseTestCounts(result.stdout + '\n' + result.stderr);
+          countsMeasured = counts !== null; measured = counts ?? { passed: 0, failed: 1 };
+        } else { measured = { passed: result.exitCode === 0 ? 1 : 0, failed: result.exitCode === 0 ? 0 : 1 }; countsMeasured = Number.isInteger(result.exitCode); }
         if (!measured.passed) diagnostics.push('NO_POSITIVE_CHECKS');
         if (measured.failed) diagnostics.push(`FAILED_ASSERTIONS_${measured.failed}`);
         for (const artifact of check.artifacts ?? []) { const p = await confined(root, artifact); if (!(await fs.stat(p)).isFile()) throw new QualityError('ARTIFACT_MISSING', 'Expected a regular output file.'); artifacts.push(artifact); }
@@ -182,7 +184,7 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
       const inspectionRecoveryCode=inspection&&({BROWSER_SERVER_PORTS_UNAVAILABLE:'PORT_UNAVAILABLE',BROWSER_SERVER_IPV4_REQUIRED:'INVALID_BROWSER_URL',BROWSER_SERVER_UNDECLARED:'INVALID_BROWSER_CHECK',BROWSER_SERVER_INSPECTION_FAILED:'QUALITY_RUNNER_FAILED'}[inspection.code]??inspection.code);
       const recovery = classifyToolOutcome({ kind: check.kind, exitCode: result.exitCode, isError: !passed, timedOut: result.timedOut, aborted: result.aborted, errorCode: inspectionRecoveryCode??evidenceErrorCode,
         text: result.stdout + '\n' + result.stderr + '\n' + diagnostics.join('\n') });
-      results.push({ id: check.id, kind: check.kind, passed, category: recovery.category, diagnosticCode: recovery.code, ...(inspection?{primaryDiagnosticCode:inspection.code,inspection,secondaryDiagnostics}:{}), exitCode: result.exitCode, durationMs: Date.now() - start, checksPassed: measured.passed, checksTotal: measured.passed + measured.failed, outputTruncated: result.truncated, diagnostics: diagnostics.slice(0,8), artifactPaths: artifacts, logPath: `.harness/quality/${check.id}.log` });
+      results.push({ id: check.id, kind: check.kind, passed, category: recovery.category, diagnosticCode: recovery.code, ...(inspection?{primaryDiagnosticCode:inspection.code,inspection,secondaryDiagnostics}:{}), exitCode: result.exitCode, durationMs: Date.now() - start, checksPassed: measured.passed, checksTotal: measured.passed + measured.failed, countsMeasured, outputTruncated: result.truncated, diagnostics: diagnostics.slice(0,8), artifactPaths: artifacts, logPath: `.harness/quality/${check.id}.log` });
     }
     const after = await fingerprint(root, inputs), stale = before.hash !== after.hash;
     if (stale) for (const r of results) { r.passed = false; r.diagnostics.push('SOURCE_CHANGED_DURING_VERIFICATION'); }
@@ -195,6 +197,6 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
 }
 
 export function compactReport(report) {
-  return { passed: report.passed, complete: report.complete, stale: report.stale, sourceHash: report.sourceHash, missingKinds: report.missingKinds, checks: report.results.map(r => ({ id: r.id, kind: r.kind, passed: r.passed, category: r.category, diagnosticCode: r.diagnosticCode, ...(r.inspection?{primaryDiagnosticCode:r.primaryDiagnosticCode,inspection:r.inspection,secondaryDiagnostics:r.secondaryDiagnostics}:{}), checksPassed: r.checksPassed, checksTotal: r.checksTotal, diagnostics: r.diagnostics, logPath: r.logPath, artifactPaths: r.artifactPaths })), reportPath: '.harness/quality/latest.json' };
+  return { passed: report.passed, complete: report.complete, stale: report.stale, sourceHash: report.sourceHash, missingKinds: report.missingKinds, checks: report.results.map(r => ({ id: r.id, kind: r.kind, passed: r.passed, category: r.category, diagnosticCode: r.diagnosticCode, ...(r.inspection?{primaryDiagnosticCode:r.primaryDiagnosticCode,inspection:r.inspection,secondaryDiagnostics:r.secondaryDiagnostics}:{}), checksPassed: r.checksPassed, checksTotal: r.checksTotal, countsMeasured: r.countsMeasured === true, diagnostics: r.diagnostics, logPath: r.logPath, artifactPaths: r.artifactPaths })), reportPath: '.harness/quality/latest.json' };
 }
 

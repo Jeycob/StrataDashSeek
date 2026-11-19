@@ -61,6 +61,8 @@ export function recordVerifiedProgress(budget, { kind, manifestHash }) {
   if (Object.hasOwn(a.proofs, key) || Object.keys(a.proofs).length >= 256) return false;
   a.proofs[key] = true; a.proofSerial++;
   a.lastVerified = { kind, sourceHash: manifestHash, at: Date.now() };
+  delete a.repairEvidenceUsed;
+  delete a.repairEvidenceReview;
   a.phase = 'working'; delete a.reason;
   a.nextCheckAt = a.taskSteps + a.interval;
   return true;
@@ -74,6 +76,18 @@ export function admitAutomaticStep(budget, settings) {
   return true;
 }
 
+export function measuredRepairEvidence(report, kind, sourceHash) {
+  const checks = report?.checks;
+  return typeof sourceHash === 'string' && report?.sourceHash === sourceHash && report.stale === false
+    && typeof report.passed === 'boolean' && Array.isArray(checks) && checks.length > 0
+    && checks.every(check => check?.kind === kind && check.countsMeasured === true
+      && Number.isSafeInteger(check.checksPassed) && Number.isSafeInteger(check.checksTotal)
+      && check.checksPassed >= 0 && check.checksTotal > 0 && check.checksTotal <= 1000000 && check.checksPassed <= check.checksTotal)
+    && checks.reduce((total,check)=>total+check.checksTotal,0) <= 1000000
+    && (report.passed ? checks.every(check => check.passed === true && check.checksPassed === check.checksTotal)
+      : checks.some(check => check.passed === false && check.checksPassed < check.checksTotal));
+}
+
 const diagnostics = (manager, id, text) => {
   const pending = manager.pendingDiagnostics.get(id) ?? new Map();
   pending.set('AUTOMATIC_REVIEW', text);
@@ -83,10 +97,11 @@ const diagnostics = (manager, id, text) => {
 
 export async function automaticReview(manager, input, record, budget, settings, freshHuman) {
   const a = budget.automatic, id = input.agent.id;
+  const evidenceReview = a.repairEvidenceReview;
   if (['STAGE_BUDGET','TASK_BUDGET','AUTOMATIC_CHECK_LIMIT'].includes(budget.blocked?.code)&&!a.activeCallId&&!a.uncertain) { budget.blocked = null; a.nextCheckAt = a.taskSteps; }
   if (budget.blocked) return;
   if (a.phase === 'checking' || a.uncertain) { uncertain(budget); return; }
-  if (a.taskSteps < a.nextCheckAt) return; // Main interval or bounded repair window, never a stage pass.
+  if (!evidenceReview && a.taskSteps < a.nextCheckAt) return; // Main interval or bounded repair window, never a stage pass.
   let mode, changes;
   try {
     mode = manager.ctx.sandboxPolicy.resolve({ session: (input.executionAgent ?? input.agent).session }).mode;
@@ -96,6 +111,7 @@ export async function automaticReview(manager, input, record, budget, settings, 
     stop(budget, 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'Verification permissions or project changes could not be established. Files are retained.'); return;
   }
   if (mode === 'read-only' || record.legacy || !changedApplicationCode(changes?.files)) {
+    if (evidenceReview) { stop(budget, 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'Missing verification totals could not be resolved against writable current project sources. Files and failed results are retained.'); return; }
     // Read-only analysis and prose are not application verification. Do not
     // install a contract, borrow owner write permission or fabricate a pass.
     a.phase = 'working'; a.nextCheckAt = a.taskSteps + settings.maxStageSteps;
@@ -128,12 +144,12 @@ export async function automaticReview(manager, input, record, budget, settings, 
     diagnostics(manager,id,'[Harness: verification not started] Source binding failed before dispatch: '+code+'. No check was charged and no active operation or passing result was created.');
     return;
   }
-  if(budget.blocked||a.taskSteps<a.nextCheckAt)return;
+  if(budget.blocked||!evidenceReview&&a.taskSteps<a.nextCheckAt)return;
   const callId = 'automatic-review-' + crypto.randomUUID();
   a.phase = 'checking'; a.checks++; a.activeCallId = callId; delete a.lastAutomaticOutcome;delete a.receipt;
   if(a.continuation){a.previousContinuation={callId:a.continuation.callId,messageId:a.continuation.message?.id,state:a.continuation.state};delete a.continuation;}a.continuationNeeded=false;
   const startedAt=Date.now();
-  a.terminalAcknowledged=false;a.operation={callId,ownerId:id,root,sourceHash,task,startedAt,deadlineAt:startedAt+VERIFICATION_TIMEOUT_MS};
+  a.terminalAcknowledged=false;a.operation={callId,ownerId:id,root,sourceHash,task,verificationKind:evidenceReview?.kind??'all',startedAt,deadlineAt:startedAt+VERIFICATION_TIMEOUT_MS};
   const operation=a.operation;
   watchAutomaticCancellation(manager,id,record,budget,operation,input.signal);
   if(a.legacyRecovery?.verificationState==='required'){a.legacyRecovery.verificationState='started';a.legacyRecovery.verificationCallId=callId;a.continuationNeeded=true;}
@@ -152,7 +168,7 @@ export async function automaticReview(manager, input, record, budget, settings, 
     // budget.observe directly from this controller.
     dispatchStarted=true;
     execution = Promise.resolve(manager.ctx.tools.execute({ agent: input.executionAgent ?? input.agent, signal: verificationSignal,
-      maxParallelToolCalls: 1, calls: [{ type: 'tool-call', id: callId, name: 'verify_project', arguments: '{"kind":"all"}' }] }));
+      maxParallelToolCalls: 1, calls: [{ type: 'tool-call', id: callId, name: 'verify_project', arguments: JSON.stringify({kind:evidenceReview?.kind ?? 'all'}) }] }));
     manager.automaticInFlight ??= new Map(); manager.automaticInFlight.set(id, execution);
     const drained = () => {
       executionSettled = true;

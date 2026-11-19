@@ -14,15 +14,16 @@ export const unresolvedAutomatic=a=>!!a&&(a.phase==='checking'||a.activeCallId||
 export function recoveryState(a,state,reason,canContinue=false){a.recovery={state,code:reason,canContinue};}
 export function automaticReceipt(manager,exec,result){
  const id=exec.agent?.id,a=manager.budgets.get(id)?.automatic;
- if(!own(manager,id,a)||exec.name!=='verify_project'||exec.callId!==a.activeCallId||exec.arguments?.kind!=='all')return false;
+ if(!own(manager,id,a)||exec.name!=='verify_project'||exec.callId!==a.activeCallId||exec.arguments?.kind!==(a.operation.verificationKind??'all'))return false;
  if(a.receipt)return a.receipt.callId===exec.callId;
  const value=result.value;
- a.receipt={version:1,callId:exec.callId,ownerId:id,root:a.operation.root,sourceHash:a.operation.sourceHash,at:Date.now(),
+ a.receipt={version:1,callId:exec.callId,ownerId:id,root:a.operation.root,sourceHash:a.operation.sourceHash,verificationKind:a.operation.verificationKind??'all',at:Date.now(),
   isError:result.isError===true||!!result.error,errorCode:code(result.error?.info?.code),
   // Only structured final SDK data; no rendered text, paths or credentials.
   report:value&&typeof value==='object'?{passed:value.passed===true,complete:value.complete===true,stale:value.stale!==false,
    sourceHash:hash(value.sourceHash)?value.sourceHash:null,code:typeof value.code==='string'&&/^[A-Z0-9_]{1,80}$/.test(value.code)?value.code:undefined,
-   checks:Array.isArray(value.checks)?value.checks.slice(0,24).map(c=>({id:typeof c?.id==='string'?c.id.slice(0,80):'',kind:['test','build','browser','acceptance'].includes(c?.kind)?c.kind:undefined,passed:c?.passed===true,checksPassed:Number.isSafeInteger(c?.checksPassed)?c.checksPassed:undefined,checksTotal:Number.isSafeInteger(c?.checksTotal)?c.checksTotal:undefined})):[]}:null};
+   checks:Array.isArray(value.checks)?value.checks.slice(0,24).map(c=>({id:typeof c?.id==='string'?c.id.slice(0,80):'',kind:['test','build','browser','acceptance'].includes(c?.kind)?c.kind:undefined,passed:c?.passed===true,checksPassed:Number.isSafeInteger(c?.checksPassed)?c.checksPassed:undefined,checksTotal:Number.isSafeInteger(c?.checksTotal)?c.checksTotal:undefined,countsMeasured:c?.countsMeasured===true&&value.checks.length<=24,
+    category:['success','verification','setup','invocation','configuration','timeout','empty-verification','tool-error'].includes(c?.category)?c.category:undefined,diagnosticCode:code(c?.diagnosticCode)})):[]}:null};
  return true;
 }
 export function acknowledgeAutomatic(manager,id,callId){
@@ -85,7 +86,7 @@ export async function reconcileAutomatic(manager,id){
   if(!current())return false;
   if(!a.terminalAcknowledged||!a.receipt)return pending(a,Date.now()>=operation.cleanupDeadlineAt?'AUTOMATIC_TERMINAL_RECEIPT_MISSING':'AUTOMATIC_TERMINAL_PENDING',Date.now()>=operation.cleanupDeadlineAt?'blocked':'pending');
   const receipt=a.receipt;
-  if(receipt.version!==1||receipt.callId!==callId||receipt.ownerId!==id||receipt.root!==operation.root||receipt.sourceHash!==operation.sourceHash||typeof receipt.isError!=='boolean'||!Number.isSafeInteger(receipt.at)||!receipt.isError&&!receipt.report)return pending(a,'AUTOMATIC_TERMINAL_RECEIPT_MISMATCH','blocked');
+  if(receipt.version!==1||receipt.callId!==callId||receipt.ownerId!==id||receipt.root!==operation.root||receipt.sourceHash!==operation.sourceHash||(receipt.verificationKind??'all')!==(operation.verificationKind??'all')||typeof receipt.isError!=='boolean'||!Number.isSafeInteger(receipt.at)||!receipt.isError&&!receipt.report)return pending(a,'AUTOMATIC_TERMINAL_RECEIPT_MISMATCH','blocked');
   if(operation.rangeRequired&&(!operation.rangeQualified||!operation.rangeSettled))return pending(a,'AUTOMATIC_OWNED_RANGE_UNCONFIRMED','blocked');
   if(budget.blocked&&!['AUTOMATIC_VERIFICATION_UNCERTAIN','AUTOMATIC_VERIFICATION_TIMEOUT'].includes(budget.blocked.code))return pending(a,budget.blocked.code,'blocked');
   // Save the terminal proof before the one accounting transition. Restart
@@ -95,10 +96,11 @@ export async function reconcileAutomatic(manager,id){
   if(a.accountedCallId!==callId){
    if(!receipt.isError&&receipt.report){
     const agent=manager.ctx.agents.get(id);if(!agent)return pending(a,'AUTOMATIC_OWNER_UNAVAILABLE','blocked');
-    if(!await pauseUntil(manager.toolResult({agent,name:'verify_project',arguments:{kind:'all'},callId,signal:AbortSignal.timeout(4000)},{isError:false,value:receipt.report,content:[]},undefined,receipt),Date.now()+4000))return pending(a,'AUTOMATIC_ACCOUNTING_UNCONFIRMED','blocked');
+    if(!await pauseUntil(manager.toolResult({agent,name:'verify_project',arguments:{kind:operation.verificationKind??'all'},callId,signal:AbortSignal.timeout(4000)},{isError:false,value:receipt.report,content:[]},undefined,receipt),Date.now()+4000))return pending(a,'AUTOMATIC_ACCOUNTING_UNCONFIRMED','blocked');
    }else a.accountedCallId=callId;
   }
   if(!current())return false;
+  if(receipt.isError&&a.repairEvidenceReview)budget.blocked={code:'AUTOMATIC_VERIFICATION_UNAVAILABLE',message:'The owned current-source check failed to provide verification totals. Files and failed results are retained.'};
   a.recoveryFailures=receipt.isError?(a.recoveryFailures??0)+1:0;
   if(a.recoveryFailures>=3){budget.blocked={code:'AUTOMATIC_RECOVERY_NO_PROGRESS',message:'Repeated owned verification recovery did not finish successfully. Files and terminal evidence are retained.'};}
   a.lastCheck={at:receipt.at,passed:!receipt.isError&&receipt.report?.passed===true&&a.lastAutomaticOutcome?.sourceHash===receipt.report?.sourceHash,stale:receipt.report?.stale!==false||a.lastAutomaticOutcome?.sourceHash!==receipt.report?.sourceHash,checks:receipt.report?.checks??[]};

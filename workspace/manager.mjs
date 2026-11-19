@@ -12,7 +12,7 @@ import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, norm
 import { guideFirstCheck } from './verification-guidance.mjs';
 import { verificationStatusMayBeMasked } from './shell-status.mjs';
 import { beginUserRequest } from './turn-budget.mjs';
-import { prepareAutomaticRequest, automaticReview, admitAutomaticStep } from './automatic-review.mjs';
+import { prepareAutomaticRequest, automaticReview, admitAutomaticStep, measuredRepairEvidence } from './automatic-review.mjs';
 import {automaticReceipt,reconcileAutomatic,retainAutomaticProcess} from './automatic-recovery.mjs';
 import {resumeConsumedPrestep} from './automatic-consumed-recovery.mjs';
 import { registeredSelection, validateWorkspaceModel } from './model-selection.mjs';
@@ -383,7 +383,28 @@ export class WorkspaceManager {
     const proofHash = structured ? value?.stale === false && value?.sourceHash === manifest?.sha256 && (!automatic?.activeCallId||automatic.activeCallId!==exec.callId||automatic.operation?.sourceHash===value.sourceHash) ? manifest?.sha256 : undefined
       : this.budgets.get(exec.agent.id)?.automatic ? undefined : manifest?.sha256;
     if (structured && record.lastVerification && !proofHash) record.lastVerification.accepted = false;
-    const budget = this.budgets.get(exec.agent.id), decision = budget.observe({ kind, exitCode, text, isError: result.isError, recovery, operationScope, manifestHash: proofHash }, this.settings(exec.agent.session).noProgressLimit);
+    const budget = this.budgets.get(exec.agent.id);
+    const evidenceReview = structured && typeof exec.callId === 'string' && automatic?.activeCallId === exec.callId && automatic.repairEvidenceReview;
+    if (evidenceReview) {
+      if (!recovery.verification || !measuredRepairEvidence(value, evidenceReview.kind, proofHash)) {
+        budget.blocked = { code:'AUTOMATIC_VERIFICATION_UNAVAILABLE', message:'The current-source check did not provide reliable totals for the failed verification. Files and failed results are retained.' };
+        if (record.lastVerification) record.lastVerification.accepted = false;
+      } else {
+        delete automatic.repairEvidenceReview;
+        if (recovery.failed) {
+          // Shell and contract checks can cover different suites. Establish
+          // one canonical baseline, never claim their counts prove progress.
+          automatic.repairEvidenceBaseline = { kind, previous: budget.checks[kind], sourceHash: proofHash };
+          budget.stalled = 0;
+        }
+      }
+    }
+    const decision = budget.observe({ kind, exitCode, text, isError: result.isError, recovery, operationScope, manifestHash: proofHash,
+      reviewUnknownVerification: Boolean(!structured && automatic && ['bash','project_exec','exec_command','terminal'].includes(exec.name)),
+      establishVerificationBaseline: Boolean(evidenceReview && recovery.failed && !budget.blocked) }, this.settings(exec.agent.session).noProgressLimit);
+    if (evidenceReview && !budget.blocked && !recovery.failed && !decision.verifiedProgress) {
+      budget.blocked = { code:'AUTOMATIC_VERIFICATION_UNAVAILABLE', message:'The check repeated existing passing evidence without resolving the failed verification. Files and results are retained.' };
+    }
     if (budget.automatic && !structured && recovery.verification && !recovery.failed) {
       const diagnostics = this.pendingDiagnostics.get(exec.agent.id) ?? new Map();
       if (diagnostics.size < 4 || diagnostics.has('VERIFICATION_SOURCE_UNBOUND')) diagnostics.set('VERIFICATION_SOURCE_UNBOUND', '[Harness: source binding unavailable] The foreground check returned its actual success, but shell execution has no trusted before/after source proof. Its output is retained and no stage was renewed. Use source-bound verify_project for canonical stage verification.');

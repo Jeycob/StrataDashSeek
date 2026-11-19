@@ -71,6 +71,17 @@ test('real exit code overrides printed success; zero assertions cannot pass', as
     assert.equal(r.passed,false); assert.ok(r.results[0].diagnostics.includes(diagnostic));
   }
 });
+
+test('real Node output without numeric totals is marked unmeasured; canonical all-fail totals remain measurable',async t=>{
+ const workspace=await project(t,[{id:'core',kind:'test',command:[process.execPath,'--test','--test-reporter=./compact.mjs','core.test.mjs']}]);
+ await fs.writeFile(path.join(workspace,'core.test.mjs'),"import test from 'node:test';import assert from 'node:assert/strict';for(let n=0;n<2;n++)test('real failure '+n,()=>assert.equal(n,-1));");
+ await fs.writeFile(path.join(workspace,'compact.mjs'),"export default async function*(events){for await(const event of events)if(event.type==='test:pass'||event.type==='test:fail')yield (event.type==='test:pass'?'✔':'✖')+' case\\n';}");
+ const env={...process.env};delete env.NODE_TEST_CONTEXT;
+ const missing=await verifyProject({workspace,env});assert.equal(missing.passed,false);assert.equal(missing.results[0].exitCode,1);assert.equal(missing.results[0].countsMeasured,false);assert.equal(compactReport(missing).checks[0].countsMeasured,false);
+ assert.equal(missing.results[0].checksTotal,1,'legacy placeholder remains a failure, never measured progress');
+ const contract=JSON.parse(await fs.readFile(path.join(workspace,'.harness-quality.json'),'utf8'));contract.checks[0].command=[process.execPath,'--test','--test-reporter=tap','core.test.mjs'];await fs.writeFile(path.join(workspace,'.harness-quality.json'),JSON.stringify(contract));
+ const measured=await verifyProject({workspace,env});assert.equal(measured.passed,false);assert.equal(measured.results[0].exitCode,1);assert.equal(measured.results[0].checksTotal,2);assert.equal(measured.results[0].checksPassed,0);assert.equal(compactReport(measured).checks[0].countsMeasured,true);
+});
 test('partial stage differs from full completion', async t => {
   const workspace = await project(t,[passing,{id:'build',kind:'build',command:command('process.exit(0)')}],['test','build']);
   const partial = await verifyProject({workspace,kind:'test'});

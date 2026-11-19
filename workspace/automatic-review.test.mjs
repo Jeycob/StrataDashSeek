@@ -27,11 +27,11 @@ async function fixture(t, options={}) {
   const budget=new RepairBudget({steps:options.steps??10});manager.budgets.set('owner',budget);record.budget=budget;
   const input={agent,signal:new AbortController().signal,turn:1,step:11,messages:[human('first')]};
   ctx.tools.execute=async batch=>{
-    calls.push(batch);assert.equal(batch.maxParallelToolCalls,1);assert.equal(batch.calls[0].name,'verify_project');assert.deepEqual(JSON.parse(batch.calls[0].arguments),{kind:'all'});
+    calls.push(batch);assert.equal(batch.maxParallelToolCalls,1);assert.equal(batch.calls[0].name,'verify_project');const requested=JSON.parse(batch.calls[0].arguments).kind;assert.equal(requested,options.reviewKind??'all');
     const report={...(options.report?.()??success()),sourceHash:(await sourceManifest(root)).sha256};
     if(options.changeSource)await fs.appendFile(path.join(root,'app.mjs'),'// changed during check\n');
     const result={isError:false,value:report,content:[{type:'text',text:JSON.stringify(report)}]};
-    manager.observeToolResult({agent,name:'verify_project',arguments:{kind:'all'},callId:batch.calls[0].id,signal:batch.signal},result);
+    manager.observeToolResult({agent,name:'verify_project',arguments:{kind:requested},callId:batch.calls[0].id,signal:batch.signal},result);
     return{results:[{callId:batch.calls[0].id,result}],additionalContexts:[],concluded:false};
   };
   return{manager,ctx,budget,record,input,root,agent,settings,calls,async step(n){return manager.preStep({...input,step:n});}};
@@ -39,6 +39,86 @@ async function fixture(t, options={}) {
 
 test('soft limit automatically dispatches guarded verification and continues the same task without a user message',async t=>{
  const f=await fixture(t);await f.step(11);assert.equal(f.calls.length,1);assert.equal(f.budget.blocked,null);assert.equal(f.budget.stage,2);assert.equal(f.budget.steps,1);assert.equal(f.budget.automatic.taskSteps,11);assert.equal(f.budget.automatic.checks,1);assert.equal(f.budget.automatic.phase,'working');assert.match(f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW'),/verified progress/);
+});
+
+const countedFailure = (failed=2, passed=12) => ({passed:false,complete:false,stale:false,checks:[{id:'core',kind:'test',passed:false,checksTotal:failed+passed,checksPassed:passed,countsMeasured:true}]});
+async function unknownRepair(t, options={}) {
+ const f=await fixture(t,{steps:0,reviewKind:'test',report:countedFailure,...options});
+ f.budget.checks.test={bestScore:5,lastScore:5,fingerprint:'historical-suite'};await f.step(1);
+ f.shell=async suffix=>{
+  const result={isError:false,value:{exitCode:1,stdout:'AssertionError: failure '+suffix,stderr:''},content:[{type:'text',text:'✖ failed assertion '+suffix}]},before=structuredClone(result);
+  await f.manager.toolResult({agent:f.agent,name:'project_exec',arguments:{command:'node --test tests/core.test.mjs'},signal:f.input.signal},result);assert.deepEqual(result,before);
+ };
+ for(let n=0;n<3;n++)await f.shell(n);
+ assert.equal(f.calls.length,0);assert.equal(f.budget.blocked,null);assert.equal(f.budget.stalled,3);assert.equal(f.budget.checks.test.bestScore,5);
+ assert.deepEqual(f.budget.automatic.repairEvidenceReview,{kind:'test'});assert.equal(f.budget.automatic.repairEvidenceUsed,true);
+ const saved=JSON.parse(await fs.readFile(f.manager.file,'utf8')).sessions.owner.budget;
+ assert.equal(saved.automatic.repairEvidenceUsed,true,'the sole fallback is consumed durably before dispatch');
+ return f;
+}
+
+test('unknown shell totals obtain one current-source canonical baseline, not fabricated partial progress',async t=>{
+ const f=await unknownRepair(t);await f.step(2);
+ assert.equal(f.calls.length,1);assert.equal(f.budget.blocked,null);assert.equal(f.budget.stage,1);assert.equal(f.budget.automatic.proofSerial,0);assert.equal(f.budget.automatic.taskSteps,2);
+ assert.equal(f.budget.checks.test.bestScore,2);assert.equal(f.budget.checks.test.lastScore,2);assert.equal(f.budget.stalled,1);
+ assert.equal(f.budget.automatic.repairEvidenceBaseline.previous.bestScore,5);assert.equal(f.budget.automatic.repairEvidenceUsed,true);assert.equal(f.budget.automatic.repairEvidenceReview,undefined);
+ assert.equal(f.budget.automatic.phase,'repairing');assert.equal(f.budget.automatic.nextCheckAt,21);assert.equal(f.record.checkpoints,undefined);
+ // Persist/reload and internal followups cannot acquire a second exception.
+ const reloaded=new RepairBudget(JSON.parse(JSON.stringify(f.budget)));f.manager.budgets.set('owner',reloaded);f.record.budget=reloaded;
+ assert.equal(prepareAutomaticRequest(f.record,reloaded,{turn:2,messages:[{id:'internal',role:'user',source:{kind:'workspace-runtime'}}]},10),false);
+ await f.shell('fourth');await f.shell('fifth');
+ assert.equal(reloaded.blocked?.code,'AUTOMATIC_VERIFICATION_UNAVAILABLE');await assert.rejects(f.step(3),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(f.calls.length,1);
+});
+
+test('the one canonical baseline window still stops repeated measured failures and supports all-fail counts',async t=>{
+ const f=await unknownRepair(t,{report:()=>countedFailure(5,0)});await f.step(2);
+ assert.equal(f.budget.stalled,1);assert.equal(f.budget.stage,1);assert.equal(f.budget.checks.test.bestScore,5);assert.equal(f.budget.automatic.proofSerial,0);
+ const report={...countedFailure(5,0),sourceHash:(await sourceManifest(f.root)).sha256},result={isError:false,value:report,content:[{type:'text',text:JSON.stringify(report)}]};
+ for(let n=0;n<2;n++)await f.manager.toolResult({agent:f.agent,name:'verify_project',arguments:{kind:'test'},signal:f.input.signal},result);
+ assert.equal(f.budget.blocked?.code,'REPAIR_NO_PROGRESS');await assert.rejects(f.step(3),e=>e.code==='REPAIR_NO_PROGRESS');assert.equal(f.calls.length,1);
+});
+
+test('unknown, stale, mismatched or refused fallback evidence fails closed without another repair window',async t=>{
+ const cases=[
+  {report:()=>({...countedFailure(1,0),checks:[{...countedFailure(1,0).checks[0],countsMeasured:false}]})},
+  {report:()=>({...countedFailure(),stale:true})},
+  {report:()=>({...countedFailure(),checks:[{...countedFailure().checks[0],kind:'browser'}]})},
+  {changeSource:true},
+  {refused:true},
+ ];
+ for(const options of cases){
+  const f=await unknownRepair(t,options);if(options.refused)f.ctx.tools.execute=async batch=>{f.calls.push(batch);return{results:[{callId:batch.calls[0].id,result:{isError:true,error:{message:'Permission refused'}}}]};};
+  await assert.rejects(f.step(2),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(f.calls.length,1);assert.equal(f.budget.automatic.taskSteps,1);assert.equal(f.budget.stage,1);assert.equal(f.budget.checks.test.bestScore,5);assert.equal(f.budget.stalled,3);
+  await assert.rejects(f.step(3),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(f.calls.length,1);
+ }
+});
+
+test('a fresh owner request replaces a queued evidence review but cannot clear an uncertain one',async t=>{
+ const f=await unknownRepair(t);await f.manager.preStep({...f.input,turn:2,step:1,messages:[human('new-task')]});
+ assert.equal(f.calls.length,0);assert.equal(f.budget.automatic.repairEvidenceReview,undefined);assert.equal(f.budget.automatic.repairEvidenceUsed,undefined);assert.equal(f.budget.automatic.taskSteps,1);assert.equal(f.budget.stalled,0);
+ const g=await unknownRepair(t);g.budget.automatic.phase='checking';g.budget.automatic.activeCallId='pending-owned-check';
+ assert.equal(prepareAutomaticRequest(g.record,g.budget,{turn:2,messages:[human('new-task')]},10),false);
+ assert.equal(g.budget.blocked?.code,'AUTOMATIC_VERIFICATION_UNCERTAIN');assert.equal(g.budget.automatic.repairEvidenceUsed,true);assert.deepEqual(g.budget.automatic.repairEvidenceReview,{kind:'test'});assert.equal(g.budget.automatic.taskSteps,1);
+});
+
+test('missing source access and repeated passing evidence cannot recycle an unknown-result fallback',async t=>{
+ for(const noSource of ['read-only','unchanged']){
+  const f=await unknownRepair(t);if(noSource==='read-only')f.agent.session.mode='read-only';else f.manager.changes.list=async()=>({files:[]});
+  await assert.rejects(f.step(2),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(f.calls.length,0);assert.equal(f.budget.automatic.taskSteps,1);assert.equal(f.budget.stalled,3);
+ }
+ const f=await unknownRepair(t,{report:()=>({...success(),checks:success().checks.map(check=>({...check,countsMeasured:true}))})});
+ const hash=(await sourceManifest(f.root)).sha256;assert.equal(recordVerifiedProgress(f.budget,{kind:'test',manifestHash:hash}),true);
+ // Restore the already-consumed marker after seeding historical proof. A
+ // duplicate passing report is not a new proof that can renew the exception.
+ f.budget.automatic.repairEvidenceUsed=true;f.budget.automatic.repairEvidenceReview={kind:'test'};const serial=f.budget.automatic.proofSerial;
+ await assert.rejects(f.step(2),e=>e.code==='AUTOMATIC_VERIFICATION_UNAVAILABLE');assert.equal(f.calls.length,1);assert.equal(f.budget.stage,1);assert.equal(f.budget.automatic.proofSerial,serial);assert.equal(f.budget.automatic.repairEvidenceUsed,true);
+});
+
+test('new foreground source-bound passing proof resolves a queued unknown-result review without another dispatch',async t=>{
+ const f=await unknownRepair(t),report={...success(),sourceHash:(await sourceManifest(f.root)).sha256};
+ await f.manager.toolResult({agent:f.agent,name:'verify_project',arguments:{kind:'test'},signal:f.input.signal},{isError:false,value:report,content:[{type:'text',text:JSON.stringify(report)}]});
+ assert.equal(f.budget.stage,2);assert.equal(f.budget.automatic.proofSerial,1);assert.equal(f.budget.automatic.repairEvidenceUsed,undefined);assert.equal(f.budget.automatic.repairEvidenceReview,undefined);
+ await f.step(2);assert.equal(f.calls.length,0);assert.equal(f.budget.blocked,null);
 });
 test('pre-dispatch source IO rejection records a concrete diagnostic without creating an operation or charging a check',async t=>{
  const f=await fixture(t);f.manager.review=async()=>{throw Object.assign(Error('Synthetic source read failure'),{code:'SOURCE_MANIFEST_IO'});};

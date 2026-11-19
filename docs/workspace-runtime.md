@@ -92,6 +92,18 @@ Checkpoints include at most 5000 source files/32 MiB, with each file at most
 1 MiB. Larger assets are outside this recovery feature. Superseded checkpoint
 generations are pruned; referenced best versions remain retained.
 
+If repeated failed shell checks omit their numerical totals, the controller
+can run one current-source contract check of the same kind before deciding
+that repairs stalled. Quality reports distinguish measured counts from failure
+placeholders. A valid failed check establishes one canonical repair baseline
+and the existing repair window; it does not claim progress over a potentially
+different old test suite or mark a stage passed. The prior baseline is retained.
+The exception is persisted before dispatch and cannot be reused by an internal
+followup or reload. Further missing evidence stops with a verification-unavailable
+diagnostic; only a new explicit owner request or new verified passing source
+proof can renew the exception. Stale results, missing totals, denied execution
+and unchanged passing evidence never create a repair allowance.
+
 ## Wake and sleep
 
 One foreground client wake operation is shared by overlapping callers. Health
