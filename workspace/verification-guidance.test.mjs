@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { needsFirstCheck, changedApplicationCode, guideFirstCheck, needsStageBudgetWarning, warnStageBudget } from './verification-guidance.mjs';
+import { needsFirstCheck, changedApplicationCode, guideFirstCheck, needsStageBudgetWarning, warnStageBudget, QUALITY_CONTRACT_EXAMPLE, BROWSER_PLAN_EXAMPLE } from './verification-guidance.mjs';
 import { RepairBudget } from './policy.mjs';
+import { validateContract } from '../quality/core.mjs';
+import { validatePlan } from '../quality/browser.mjs';
 
 test('guidance waits for changed application code and leaves questions, prose and completed checks alone', () => {
   assert.equal(needsFirstCheck({}, { steps: 7, checks: {} }), false);
@@ -25,7 +27,9 @@ test('one bounded stage message covers shell and file saves without modifying so
   assert.equal(await guideFirstCheck(manager, agent, record, budget), false);
   assert.equal(manager.scans(), 1); assert.equal(JSON.stringify(budget), before);
   const messages = manager.pendingDiagnostics.get('one'); assert.equal(messages.get('EDIT_CONTEXT_STALE'), 'Keep the existing diagnostic');
-  const text = messages.get('FIRST_FUNCTIONAL_CHECK'); assert.match(text, /verify_project/); assert.match(text, /cleanup before assertions/); assert(!text.includes('eshop')); assert(text.length < 1600);
+  const text = messages.get('FIRST_FUNCTIONAL_CHECK'); assert.match(text, /verify_project/); assert.match(text, /cleanup before assertions/); assert(!text.includes('eshop')); assert(text.length < 2400);
+  assert.doesNotThrow(()=>validateContract(QUALITY_CONTRACT_EXAMPLE));assert.doesNotThrow(()=>validatePlan(BROWSER_PLAN_EXAMPLE));
+  assert.match(text,/\.harness\/quality\//);assert.match(text,/sources lists only existing/);assert.match(text,/no waitMs/);
 });
 
 test('unchanged or prose-only work is inspected at most once every four steps and does not get a message', async () => {

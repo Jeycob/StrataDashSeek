@@ -92,6 +92,24 @@ export const excludedSourcePath = relative => isPrivateSourcePath(relative) || r
 export function manifestDigest(manifest) {
   return manifest.version === 2 ? hash(JSON.stringify({ version: 2, inventoryComplete: manifest.inventoryComplete, inventory: Object.entries(manifest.inventory).sort(), files: Object.entries(manifest.files).sort() })) : hash(JSON.stringify(Object.entries(manifest.files).sort()));
 }
+// Diagnostic projection only. Neither the authoritative digest nor the
+// checkpoint inventory changes, and private path names never enter the result.
+export function changedSourcePaths(before, after) {
+  if (!before?.files || !before.inventory || !after?.files || !after.inventory) return undefined;
+  const names = new Set([...Object.keys(before.files),...Object.keys(before.inventory),...Object.keys(after.files),...Object.keys(after.inventory)]);
+  const paths=[];let more=false,privatePathsChanged=false;
+  for (const name of [...names].sort()) {
+    if (JSON.stringify([before.files[name],before.inventory[name]]) === JSON.stringify([after.files[name],after.inventory[name]])) continue;
+    if (isPrivateSourcePath(name)) { privatePathsChanged=true;continue; }
+    if (paths.length < 8) paths.push(name.length > 240 ? name.slice(0,237)+'...' : name); else more=true;
+  }
+  return {paths,more,privatePathsChanged};
+}
+export function sourceChangeDiagnostic(changes) {
+  return 'The source changed during verification; stale evidence cannot pass a stage.'
+    + (changes ? (changes.paths.length?' Changed relative paths: '+JSON.stringify(changes.paths)+(changes.more?' (more omitted)':'')+'.':' Changed paths are not identifiable from the retained snapshots.')+(changes.privatePathsChanged?' Private path changes are omitted.':'') : ' Changed paths are unavailable for this earlier snapshot.')
+    + ' Write generated screenshots, logs and test output under .harness/quality/. Keep application and test sources in their declared locations, then rerun verification.';
+}
 export async function sourceManifest(root, { maxFiles = 5000, maxBytes = 32 * 1024 * 1024, maxEntries = 50000, signal } = {}) {
   root = await fs.realpath(root);
   const files = Object.create(null), inventory = Object.create(null); let bytes = 0, count = 0, entries = 0, inventoryComplete = true;

@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY_VERSION, validationKind, relativeFile, within, operationFingerprint } from './policy.mjs';
-import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash } from './storage.mjs';
+import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash, changedSourcePaths, sourceChangeDiagnostic } from './storage.mjs';
 import { LiveChanges } from './changes.mjs';
 import { previewCheckpointRestore, restoreCheckpointTransaction, recoverCheckpointRestore, checkpointRecoveryStatus } from './checkpoint-restore.mjs';
 import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
@@ -449,11 +449,13 @@ export class WorkspaceManager {
       if (!keep.has(candidate)) await fs.rm(candidate, { recursive: true, force: true });
     }
   }
-  async review(id) {
+  async review(id, { includeSourceSnapshot = false } = {}) {
     const agent = this.ctx.agents.get(id), owner = agent ? this.ownerAgent(agent) : undefined, record = this.data.sessions[owner?.id ?? id];
     if (!record) return undefined;
     const restoreRecovery = await this.checkpointRecovery(owner?.id ?? id); const manifest = restoreRecovery.pending ? null : await sourceManifest(record.root);
-    return { root: record.root, legacy: Boolean(record.legacy), sourceHash: manifest?.sha256 ?? null, restoreRecovery, beforeRestore: record.beforeRestoreInfo ?? restoreRecovery.beforeRestore, budget: record.budget, checkpoints: record.checkpoints, ports: record.ports, databasePath: record.databasePath };
+    return { root: record.root, legacy: Boolean(record.legacy), sourceHash: manifest?.sha256 ?? null,
+      ...(includeSourceSnapshot && manifest ? {sourceSnapshot:{files:manifest.files,inventory:manifest.inventory}} : {}),
+      restoreRecovery, beforeRestore: record.beforeRestoreInfo ?? restoreRecovery.beforeRestore, budget: record.budget, checkpoints: record.checkpoints, ports: record.ports, databasePath: record.databasePath };
   }
   reconcileAutomatic(id){return reconcileAutomatic(this,id);}
   retainAutomaticProcess(value){return retainAutomaticProcess(this,value);}
@@ -482,7 +484,13 @@ export class WorkspaceManager {
     const agent = this.ctx.agents.get(report.sessionId); if (!agent) throw new WorkbenchError('SESSION_NOT_LIVE', 'A live conversation is required to record verification.');
     if (!['test', 'build', 'browser', 'acceptance', 'all'].includes(report.kind) || !Number.isInteger(report.exitCode)) throw new WorkbenchError('INVALID_VERIFICATION', 'Invalid structured verification result.', 400);
     const owner = this.ownerAgent(agent), record = this.data.sessions[owner.id]; if (!record) throw new WorkbenchError('PROJECT_NOT_READY', 'Project isolation is not ready.');
-    if (report.sourceHash && (await sourceManifest(record.root)).sha256 !== report.sourceHash) throw new WorkbenchError('STALE_VERIFICATION', 'The source changed during verification; stale evidence cannot pass a stage.');
+    if (report.sourceHash) {
+      const current = await sourceManifest(record.root);
+      if (current.sha256 !== report.sourceHash) {
+        const sourceChanges = changedSourcePaths(report.sourceSnapshot,current);
+        throw Object.assign(new WorkbenchError('STALE_VERIFICATION', sourceChangeDiagnostic(sourceChanges)), {sourceChanges});
+      }
+    }
     // The final SDK outcome is authoritative for the single repair budget.
     // This internal report only records source-checked evidence; an admission or
     // final policy failure must never be counted twice or earn a stage pass.

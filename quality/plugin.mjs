@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {requireProjectExecutionMode} from '../workspace/execution-mode-service.mjs';
+import {changedSourcePaths,sourceChangeDiagnostic} from '../workspace/storage.mjs';
 
 export const name = 'qwen-quality-gates';
 export const inject = ['tools', 'shell', 'shellEnv', 'projectExecutionMode'];
@@ -13,7 +14,7 @@ export async function executeVerification(ctx, args, execution, config = {}) {
   check();
   if (!['all','build','test','browser','acceptance'].includes(args.kind ?? 'all')) return errorResult('INVALID_KIND', 'Unknown verification kind.');
   const accessSessionId = execution.agent.session.id;
-  const review = await ctx.waterfall('workspace-runtime/review', { sessionId:accessSessionId,execution }, () => undefined);
+  const review = await ctx.waterfall('workspace-runtime/review', { sessionId:accessSessionId,execution,includeSourceSnapshot:true }, () => undefined);
   check();
   if (!review?.root || !review.sourceHash || review.legacy === true) return errorResult('NO_MANAGED_PROJECT', 'Start an isolated managed project before verification.');
   const sessionId=review.sessionId??accessSessionId;
@@ -71,10 +72,10 @@ export async function executeVerification(ctx, args, execution, config = {}) {
     check();
     report = errorResult('QUALITY_RUNNER_FAILED', e.message);
   }finally{await serverChannel?.close();}
-  const after = await ctx.waterfall('workspace-runtime/review', { sessionId:accessSessionId,execution }, () => undefined);
+  const after = await ctx.waterfall('workspace-runtime/review', { sessionId:accessSessionId,execution,includeSourceSnapshot:true }, () => undefined);
   check();
   const stale = !after || after.root !== review.root || after.sourceHash !== review.sourceHash || report.stale;
-  if (stale) { report.passed = false; report.complete = false; report.stale = true; report.code = 'STALE_SOURCE'; }
+  if (stale) { report.passed = false; report.complete = false; report.stale = true; report.code = 'STALE_SOURCE';report.sourceChanges=changedSourcePaths(review.sourceSnapshot,after?.sourceSnapshot);report.error=sourceChangeDiagnostic(report.sourceChanges); }
   if (result?.exitCode !== 0 || result?.timedOut) { report.passed = false; report.complete = false; }
   if (result?.timedOut) report.timedOut = true;
   const failed = report.checks.filter(c => !c.passed).flatMap(c => c.diagnostics ?? []);
@@ -82,13 +83,16 @@ export async function executeVerification(ctx, args, execution, config = {}) {
     sessionId, kind, exitCode: report.passed ? 0 : 1,
     diagnostics: [report.code, report.error, ...failed].filter(Boolean).slice(0,12).join('; ').slice(0,1500),
     sourceHash: review.sourceHash,
+    sourceSnapshot: review.sourceSnapshot,
     checksPassed: report.checks.reduce((n,c) => n + (c.checksPassed ?? 0), 0),
     checksTotal: Math.max(1, report.checks.reduce((n,c) => n + (c.checksTotal ?? 1), 0)),
     artifactPaths: report.checks.flatMap(c => c.artifactPaths ?? []).slice(0,32), signal: execution.signal,
   });check(); } catch (e) {
     if (execution.signal.aborted) throw e;
     check();
-    return { ...report, passed: false, complete: false, sourceHash: review.sourceHash, code: e.code ?? 'VERIFICATION_NOT_ACCEPTED', error: e.message };
+    return { ...report, passed: false, complete: false, sourceHash: review.sourceHash, code: e.code ?? 'VERIFICATION_NOT_ACCEPTED', error: e.message,
+      ...(e.code === 'STALE_VERIFICATION' ? {stale:true} : {}),
+      ...(e.sourceChanges ? {sourceChanges:e.sourceChanges} : {}) };
   }
   return { ...report, sourceHash: review.sourceHash };
 }

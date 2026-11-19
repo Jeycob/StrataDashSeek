@@ -114,6 +114,16 @@ periodic canonical checks. An unavailable first canonical result stops with its
 concrete diagnostic. Stale results, missing totals, denied execution and unchanged
 passing evidence never manufacture progress or renew the allowance.
 
+Verification compares the full workspace source manifest as well as the
+contract's declared sources. Write generated screenshots, logs and test output
+under `.harness/quality/`; an arbitrary `evidence/` directory remains part of
+the workspace source hash. A stale result now names up to eight changed relative
+paths, with private paths omitted, so generated output can be distinguished from
+an application edit. It remains a failed verification; no files are automatically
+excluded, moved or accepted. The one-time first-check guidance includes validated
+contract/browser examples, supported names/actions and limits. Adapt their files
+and assertions to the actual task; all declared sources must already exist.
+
 ## Wake and sleep
 
 One foreground client wake operation is shared by overlapping callers. Health

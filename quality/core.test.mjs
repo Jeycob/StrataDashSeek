@@ -9,6 +9,9 @@ import {executeVerification, apply} from './plugin.mjs';
 import {createHash} from 'node:crypto';
 import {createProjectExecutionMode} from '../workspace/execution-mode-service.mjs';
 import {inspectBrowserServer} from './browser-server-inspect.mjs';
+import {WorkspaceManager} from '../workspace/manager.mjs';
+import {sourceManifest} from '../workspace/storage.mjs';
+import {hostExecutionBinding} from '../workspace/fixtures/execution-binding.mjs';
 function hostMode(){const policy={version:1,contract:'project-execution-v1',mode:'host-compat',policyEpoch:'11111111-2222-3333-4444-555555555555',activationSourceCommit:'a'.repeat(40)},policySha256=createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(policy).sort(([a],[b])=>a.localeCompare(b))))).digest('hex'),snapshot={...policy,policySha256,sourceCommit:'a'.repeat(40),launchId:'aaaaaaaa-2222-3333-4444-555555555555'};return createProjectExecutionMode({snapshot,assertUnchanged:()=>snapshot}).service;}
 
 const command = code => [process.execPath, '-e', code];
@@ -217,6 +220,33 @@ test('plugin refuses legacy shared projects without executing commands',async()=
 test('manager rejection is returned as failed evidence, never a pass',async()=>{
   const f=pluginContext();f.ctx.serial=async()=>{throw Object.assign(Error('Source changed before acceptance'),{code:'STALE_VERIFICATION'});};
   const r=await executeVerification(f.ctx,{},f.execution);assert.equal(r.complete,false);assert.equal(r.passed,false);assert.equal(r.code,'STALE_VERIFICATION');
+});
+
+test('stale diagnostics identify generated output and real source changes without changing source hashing',async t=>{
+ for(const mode of ['unmanaged-output','managed-output','source-edit','late-source-edit']){
+  const root=await project(t,[passing]);await fs.mkdir(path.join(root,'.harness/quality'),{recursive:true});await fs.mkdir(path.join(root,'evidence'));await fs.mkdir(path.join(root,'tests'));
+  for(const file of ['index.html','tests/core.test.mjs','package.json'])await fs.writeFile(path.join(root,file),'original fixture source');
+  const agent={id:'fixture',session:{id:'fixture',header:{cwd:root}}};
+  const manager=new WorkspaceManager({agents:{get:id=>id==='fixture'?agent:undefined}},{stateRoot:path.join(root,'.harness/state')},hostExecutionBinding());manager.data={sessions:{fixture:{root,legacy:false}},trash:{},workspaces:{}};
+  const f=pluginContext();f.execution.agent=agent;assert.equal((await manager.review('fixture')).sourceSnapshot,undefined,'ordinary UI review does not expose the inventory');
+  f.ctx.waterfall=async(name,input)=>name==='workspace-runtime/review'?manager.review('fixture',{includeSourceSnapshot:input.includeSourceSnapshot}):undefined;
+  f.ctx.serial=async(name,report)=>{assert.equal(name,'workspace-runtime/verification');if(mode==='late-source-edit')await fs.appendFile(path.join(root,'index.html'),' changed after wrapper review');await manager.reportVerification(report);};
+  f.ctx.shell.execute=async()=>({result:async()=>{
+   if(mode==='unmanaged-output'){
+    for(let n=0;n<10;n++)await fs.writeFile(path.join(root,'evidence','frame'+n+'.png'),Buffer.from([137,80,78,71,0,n]));
+    await fs.writeFile(path.join(root,'.env'),'synthetic private fixture');
+   }else if(mode==='managed-output')await fs.writeFile(path.join(root,'.harness/quality/frame.png'),Buffer.from([137,80,78,71,0,1]));
+   else if(mode==='source-edit')for(const file of ['index.html','tests/core.test.mjs','package.json'])await fs.appendFile(path.join(root,file),' changed');
+   return{exitCode:0,stdout:{text:JSON.stringify({passed:true,complete:true,stale:false,checks:[{id:'fixture',kind:'test',passed:true,checksPassed:1,checksTotal:1}]})}};
+  }});
+  const before=(await sourceManifest(root)).sha256,result=await executeVerification(f.ctx,{},f.execution),after=(await sourceManifest(root)).sha256;
+  assert.equal(result.sourceSnapshot,undefined);
+  if(mode==='managed-output'){assert.equal(result.passed,true);assert.equal(before,after);continue;}
+  assert.notEqual(before,after);assert.equal(result.passed,false);assert.equal(result.complete,false);assert.equal(result.stale,true);assert.equal(result.code,'STALE_VERIFICATION');assert.match(result.error,/\.harness\/quality\//);
+  if(mode==='unmanaged-output'){
+   assert.equal(result.sourceChanges.paths.length,8);assert(result.sourceChanges.paths.every(name=>name.startsWith('evidence/frame')));assert.equal(result.sourceChanges.more,true);assert.equal(result.sourceChanges.privatePathsChanged,true);assert(!JSON.stringify(result).includes('.env'));
+  }else assert.deepEqual(result.sourceChanges.paths,mode==='source-edit'?['index.html','package.json','tests/core.test.mjs']:['index.html']);
+ }
 });
 test('malformed native runner output cannot earn a manager pass',async()=>{
   const f=pluginContext();f.ctx.shell.execute=async()=>({result:async()=>({exitCode:0,stdout:{text:'not JSON'}})});
