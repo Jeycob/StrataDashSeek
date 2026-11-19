@@ -1,0 +1,68 @@
+name: Diagnose Chromium preview selection
+
+on:
+  push:
+    branches: [codex/roadmap-12-linux-ci-20261119]
+
+permissions:
+  contents: read
+
+jobs:
+  preview-selection:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      HOMEAI_RUNTIME: ${{ github.workspace }}/runtime
+      HARNESS_NATIVE_CLI: ${{ github.workspace }}/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js
+      HARNESS_PLAYWRIGHT_MODULE: ${{ github.workspace }}/development/ci/node_modules/playwright
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.22.1'
+      - name: Install the pinned Linux test dependencies
+        run: |
+          test "$(git rev-parse HEAD^)" = 580bb04fcb735b51f37e7e4ce4a658f43bce4ec9
+          export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/playwright-browsers"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
+          npm ci --prefix runtime --no-audit --no-fund
+          npm ci --prefix development/ci --no-audit --no-fund
+          node development/ci/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Run the unchanged preview fixture and classify the failure
+        shell: bash
+        run: |
+          status=0
+          DEBUG=pw:browser node --test --test-reporter=tap --test-timeout=120000 \
+            workspace/native-ui/preview-selection.test.cjs > "$RUNNER_TEMP/preview-fixture.log" 2>&1 || status=$?
+          node --input-type=module - "$RUNNER_TEMP/preview-fixture.log" "$status" <<'JS'
+          import {readFileSync} from 'node:fs';
+          const output = readFileSync(process.argv[2], 'utf8');
+          const status = Number(process.argv[3]);
+          const kernelFlag = key => {
+            try {
+              const value = readFileSync('/proc/sys/kernel/' + key, 'utf8').trim();
+              return /^[01]$/.test(value) ? value : 'unknown';
+            } catch {
+              return 'unavailable';
+            }
+          };
+          const launches = output.split('\n').filter(line => line.includes('pw:browser') && line.includes('<launching>'));
+          const line = /\bat TestContext\.<anonymous> \([^)\n]*preview-selection\.test\.cjs:(\d+):\d+\)/.exec(output)?.[1] ?? '1';
+          const details = {
+            exit: status,
+            sandboxedLaunches: launches.filter(launch => !launch.includes('--no-sandbox')).length,
+            usernsRestriction: kernelFlag('apparmor_restrict_unprivileged_userns'),
+            usernsClone: kernelFlag('unprivileged_userns_clone'),
+            sandboxDenied: /no usable sandbox|chromium sandboxing failed|failed to move to new namespace/i.test(output),
+            permissionDenied: /(?:operation not permitted|permission denied)/i.test(output),
+            missingLibrary: /error while loading shared libraries/i.test(output),
+            timeout: /TimeoutError/.test(output),
+            assertion: /AssertionError/.test(output),
+            snapshot: /"renderError":"(PREVIEW_[A-Z_]+)"/.exec(output)?.[1] ?? null,
+          };
+          const level = status ? 'error' : 'notice';
+          console.log('::' + level + ' file=workspace/native-ui/preview-selection.test.cjs,line=' + line + '::' + JSON.stringify(details));
+          JS
+          exit "$status"
