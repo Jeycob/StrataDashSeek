@@ -227,6 +227,38 @@ test('actual scoped SDK tool registers an own preview with Apps absent and no pu
 test('disabled configuration is unavailable without connector, broker, listener or process effects',async t=>{
  const f=await fixture(t,{enabled:false}),a=await f.agent('owner');const out=await f.call(a,'project_preview',{operation:'open',jobId:'none'});assert.equal(out.isError,false);assert.equal(out.value.state,'unavailable');assert.equal(f.targets.length+f.calls.length+f.brokers.length+f.relays.length,0);
 });
+
+test('model status with its own running job keeps the B005 preview ready without renewal or shutdown', async t => {
+ const f = await fixture(t, { heavy: true }), owner = await f.agent('owner'), other = await f.agent('other');
+ const jobId = await start(f, owner), opened = await open(f, owner, jobId);
+ const status = await f.call(owner, 'project_preview', { operation: 'status', jobId });
+ assert.equal(status.isError, false, status.content.map(block => block.text).join('\n'));
+ assert.equal(status.value.state, 'ready');
+ assert.equal(status.value.jobId, jobId);
+ assert.equal(status.value.expiresAt, opened.expiresAt);
+ assert.equal(f.brokers[0].issued, 1);
+ assert.equal(f.processes[0].kills, 0);
+ assert.equal((await f.call(other, 'project_preview', { operation: 'status', jobId })).isError, true);
+ assert.equal((await f.call(owner, 'project_preview', { operation: 'status', jobId: 'different-job' })).isError, true);
+ const fresh = await open(f, owner, jobId);
+ assert.ok(Number.isFinite(fresh.grantExpiresAt));
+ assert.equal(fresh.expiresAt, opened.expiresAt);
+ assert.equal(f.brokers[0].issued, 2);
+ assert.equal(f.processes[0].kills, 0);
+});
+
+test('model status never presents the broker base URL as an opening grant', async t => {
+ const f = await fixture(t), owner = await f.agent('owner');
+ const jobId = await start(f, owner);
+ await open(f, owner, jobId);
+ const status = await f.call(owner, 'project_preview', { operation: 'status' });
+ assert.equal(status.isError, false);
+ assert.equal(status.value.url, undefined);
+ assert.doesNotMatch(status.content.map(block => block.text).join('\n'), /\[Open application preview\]|https:\/\/same\.test/u);
+ assert.match(status.value.reopenInstructions, /project_preview open/u);
+ assert.equal((await f.control({ operation: 'status', sessionId: owner.id })).url, 'https://same.test:8443/');
+ assert.equal(f.brokers[0].issued, 1);
+});
 test('foreign session and child SDK job ownership cannot create, observe or close another preview',async t=>{
  const f=await fixture(t),a=await f.agent('owner'),b=await f.agent('foreign'),child=await f.agent('child',{parent:a}),id=await start(f,a);
  assert.equal((await f.call(b,'project_preview',{operation:'open',jobId:id})).isError,true);assert.equal((await f.call(child,'project_preview',{operation:'open',jobId:id})).isError,true);assert.equal(f.targets.length,0);

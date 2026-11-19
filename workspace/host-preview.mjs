@@ -226,7 +226,9 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
  }
  async function operation(input,{agent,ownerControl=false,signal}={}){
   check();need(input&&typeof input==='object'&&!Array.isArray(input)&&['open','status','close','restart','reopen','snapshot'].includes(input.operation),'PREVIEW_REQUEST_INVALID');
-  const allowed={open:['operation','sessionId','jobId'],status:['operation','sessionId'],close:['operation','sessionId'],restart:['operation','sessionId','previewId','generation','requestId'],reopen:['operation','sessionId','resultId'],snapshot:['operation','sessionId','previewId','generation','layout','route','scrollY']}[input.operation];need(Object.keys(input).every(key=>allowed.includes(key)),'PREVIEW_REQUEST_INVALID');
+  const allowed={open:['operation','sessionId','jobId'],status:['operation','sessionId'],close:['operation','sessionId'],restart:['operation','sessionId','previewId','generation','requestId'],reopen:['operation','sessionId','resultId'],snapshot:['operation','sessionId','previewId','generation','layout','route','scrollY']}[input.operation];
+  if(!ownerControl&&input.operation==='status')allowed.push('jobId');
+  need(Object.keys(input).every(key=>allowed.includes(key)),'PREVIEW_REQUEST_INVALID');
   if(!ownerControl)need(input.sessionId===undefined&&!['restart','reopen','snapshot'].includes(input.operation)&&agent,'PREVIEW_REQUEST_INVALID');
   const sessionId=ownerControl?input.sessionId:manager.ownerAgent(agent)?.id;need(ID.test(sessionId??''),'PREVIEW_SESSION_INVALID');
   if(input.operation==='close'){const current=entries.get(sessionId);if(ownerControl)pendingReopens.get(sessionId)?.abort();if(current&&(ownerControl||current.owner===agent?.id))revoke(current);}
@@ -255,10 +257,13 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
     assertCurrent();
     return {version:1,sessionId,previewId:entry.id,generation:entry.generation,image};
    }
+   if(!ownerControl&&input.jobId!==undefined&&(!entry||input.jobId!==entry.jobId)){
+    throw new WorkbenchError('PREVIEW_STATUS_JOB_MISMATCH','The supplied job is not the current preview for this conversation. Use status without jobId to inspect the current preview.',409);
+   }
    const project=await context(sessionId,access);
    if(entry?.state==='ready')await validateEntry(entry);
    const value=entry?(ownerControl?ownerStatus(entry):view(entry)):{version:1,sessionId,state:'closed',workSettled:true};
-   if(!ownerControl)return value;
+   if(!ownerControl){const {url,...modelStatus}=value;return modelStatus;}
    const saved=resultFor(sessionId,project,entry);
    if(!saved)return value;
    const savedState=entry?value:{...value,state:saved.settled?'closed':'blocked',workSettled:saved.settled};
@@ -267,7 +272,7 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
  }
  function install(agent){
   if(registrations.has(agent))return;
-  const definition={name:'project_preview',description:'Register this conversation’s own managed background app job as an application preview. Use open with its jobId, status, or close. For delivery, follow the returned fresh-link and server-lifetime instructions; close stops the server. Preview has a fixed lifetime; unavailable configuration never exposes arbitrary host ports.',parameters:{type:'object',properties:{operation:{type:'string',enum:['open','status','close']},jobId:{type:'string'}},required:['operation'],additionalProperties:false},output:{schema:{type:'object',additionalProperties:true},render:(_args,value)=>[{type:'text',text:value.url?'[Open application preview]('+value.url+')'+(Number.isFinite(value.grantExpiresAt)?'\nOpening link valid until: '+new Date(value.grantExpiresAt).toISOString():'')+'\nPreview server available until: '+new Date(value.expiresAt).toISOString()+'\n'+value.reopenInstructions:JSON.stringify(value)}]},execute:(args,actual)=>operation(args,{agent:actual.agent,signal:actual.signal})};
+  const definition={name:'project_preview',description:'Register this conversation’s own managed background app job as an application preview. Open takes its jobId and issues a fresh opening link. Status is read-only, accepts the current preview’s jobId optionally and issues no link. Close stops the server. For delivery, follow the returned fresh-link and server-lifetime instructions. Preview has a fixed lifetime; unavailable configuration never exposes arbitrary host ports.',parameters:{type:'object',properties:{operation:{type:'string',enum:['open','status','close']},jobId:{type:'string'}},required:['operation'],additionalProperties:false},output:{schema:{type:'object',additionalProperties:true},render:(_args,value)=>[{type:'text',text:value.url&&Number.isFinite(value.grantExpiresAt)?'[Open application preview]('+value.url+')'+'\nOpening link valid until: '+new Date(value.grantExpiresAt).toISOString()+'\nPreview server available until: '+new Date(value.expiresAt).toISOString()+'\n'+value.reopenInstructions:JSON.stringify(value)}]},execute:(args,actual)=>operation(args,{agent:actual.agent,signal:actual.signal})};
   registrations.set(agent,{definition,remove:agent.ctx.tools.register(definition,{when:({agent:actual})=>{const record=manager.data.sessions[manager.ownerAgent(actual)?.id];return !!record&&!record.legacy;}})});
  }
  function remove(agent){registrations.get(agent)?.remove();registrations.delete(agent);pendingReopens.get(agent.id)?.abort();for(const entry of entries.values())if(entry.owner===agent.id||entry.sessionId===agent.id){revoke(entry);void ordered(entry.sessionId,()=>closeEntry(entry));}}
