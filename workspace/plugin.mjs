@@ -19,6 +19,7 @@ import { automaticReviewView } from './automatic-review.mjs';
 import { installDockerCleanup } from './docker-cleanup.mjs';
 import { installModelSelection } from './model-selection.mjs';
 import { installProjectMemory } from './project-memory.mjs';
+import { installGenerationProfiles, generationControls, freezeGenerationSettings } from './generation-profiles.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -38,6 +39,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   const manager = new WorkspaceManager(ctx, config, execution); await manager.initialize();
   installProjectMemory(ctx, manager);
   const models = installModelSelection(ctx, manager, { lifecycle: false });
+  installGenerationProfiles(ctx, manager);
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
   execution.assertUnchanged();
@@ -70,7 +72,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   for (const agent of ctx.agents.list()) { if(composition.isolated)composition.install(agent);await models.restore(agent);execution.assertUnchanged();if(!composition.isolated)composition.install(agent); }
   ctx.on('agent/created', async ({ agent, source, signal }) => { if(composition.isolated)composition.install(agent);await models.restoreAfterDefaults(agent, source, (a, s) => manager.applyDefaults(a, s));execution.assertUnchanged();if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal);execution.assertUnchanged();if(!composition.isolated)composition.install(agent); }, { global: true });
   ctx.on('agent/pre-step', async (input, next) => {
-    await manager.preStep(input); manager.frozenSettings.set(input.agent.id, { ...manager.settings(manager.ownerAgent(input.agent).session) });
+    await manager.preStep(input); manager.frozenSettings.set(input.agent.id, freezeGenerationSettings(manager,input.agent));
     const decision = await next(), id = manager.ownerAgent(input.agent).id, message = manager.pendingNotices.get(id), diagnostics = manager.pendingDiagnostics.get(id);
     if (decision.kind === 'enter' && (message || diagnostics?.size)) {
       manager.pendingNotices.delete(id); manager.pendingDiagnostics.delete(id);
@@ -101,7 +103,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
     const url = new URL(request.baseURL); if (!['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)) return headers;
     const settings = manager.frozenSettings.get(String(request.sessionId)); if (!settings) return headers;
     headers.set('x-harness-session', String(request.sessionId));
-    headers.set('x-harness-generation', Buffer.from(JSON.stringify({ topP: settings.topP, temperature: settings.temperature, maxTokens: settings.maxTokens, thinkingBudget: settings.thinkingBudget, effort: settings.reasoningEffort })).toString('base64url'));
+    headers.set('x-harness-generation', Buffer.from(JSON.stringify(generationControls(settings))).toString('base64url'));
     return headers;
   }, { global: true });
   ctx.shellEnv.register({ name: 'isolated-project', variables: Object.fromEntries(['DSH_PROJECT_ROOT', 'DSH_APP_PORT', 'DSH_API_PORT', 'DSH_TEST_PORT', 'DSH_DATABASE_URL'].map(k => [k, { description: 'Assigned isolated project runtime value.' }])), resolve: execution => {

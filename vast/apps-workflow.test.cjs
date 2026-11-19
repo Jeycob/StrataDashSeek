@@ -4,6 +4,93 @@ const {resourceEngine}=require('./resource-fixture.cjs');
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path');
 const {AppsManager}=require('./apps-manager.cjs'),{LABEL}=require('./apps-engine.cjs'),{InfisicalVault}=require('./apps-vault.cjs'),{parseCompose,policy}=require('./apps-compose.cjs'),{redact,temporarySecrets}=require('./apps-command.cjs');
 const {createAppsService}=require('./apps-service.cjs');
+test('configured reference leak refuses export; normal verify of corrected source restores export after rotation',async t=>{
+ const f=await workflow(t,{withOld:false}),marker='synthetic-export-only-private-value',next='synthetic-export-rotated-private-value';let current=marker;
+ f.m.projectSettings(f.p.id,{scope:{projectId:'synthetic-project',environment:'test',secretPath:'/fixture'},runtime:{API_TOKEN:'SYNTHETIC_RECORD'},build:{}});
+ f.m.vault.resolve=async(_scope,mapping)=>Object.fromEntries(Object.keys(mapping||{}).map(key=>[key,current]));
+ const file=path.join(f.root,'web','debug.json');await fs.writeFile(file,JSON.stringify({accidental:marker}));
+ const first=await finish(f.m.enqueue(f.p.id,'verify'));assert.equal(first.status,'passed',first.error);
+ current=next;const refused=await finish(f.m.enqueue(f.p.id,'export'));assert.equal(refused.status,'failed');assert.match(refused.error,/EXPORT_SECRET_DETECTED/);assert.equal(refused.error.includes(marker),false);assert.equal(refused.export,undefined);
+ await fs.writeFile(file,'{"safe":true}');const fixed=await finish(f.m.enqueue(f.p.id,'verify'));assert.equal(fixed.status,'passed',fixed.error);
+ const exported=await finish(f.m.enqueue(f.p.id,'export'));assert.equal(exported.status,'passed',exported.error);
+ const contents=require('node:zlib').gunzipSync(await fs.readFile(f.m.exportFile(exported.id).file));assert.equal(contents.includes(Buffer.from(marker)),false);assert.equal(contents.includes(Buffer.from(next)),false);assert.equal(contents.includes(Buffer.from('.export-credential-proof.json')),false);assert.equal(contents.includes(Buffer.from('required-secrets.json')),true);
+ assert.equal(f.m.credentialBindings.size,0);assert.equal(f.m.redactions.size,0);
+});
+test('release metadata retains required credential checks if proof persistence fails and references are removed',async t=>{
+ for(const duringFinalization of [false,true]){
+  const f=await workflow(t,{withOld:false}),scope={projectId:'synthetic-project',environment:'test',secretPath:'/fixture'};
+  f.m.projectSettings(f.p.id,{scope,runtime:{API_TOKEN:'SYNTHETIC_RECORD'},build:{}});f.m.vault.resolve=async(_scope,mapping)=>Object.fromEntries(Object.keys(mapping||{}).map(key=>[key,'synthetic-proof-write-failure-value']));
+  const onPassed=f.m.releases.onPassed;f.m.releases.onPassed=async(project,id)=>{
+   const proof=path.join(f.m.releases.dir(project,id),'.export-credential-proof.json');await fs.mkdir(proof);
+   await onPassed(project,id);await fs.rmdir(proof); // Simulate failed atomic persistence followed by no sidecar.
+  };
+  if(duringFinalization){const browser=f.m.browserCandidate;f.m.browserCandidate=async(...args)=>{f.m.project(f.p.id).credentials={scope,runtime:{},build:{}};return browser(...args);};}
+  const verified=await finish(f.m.enqueue(f.p.id,'verify'));assert.equal(verified.status,'passed',verified.error);
+  assert.equal((await f.m.releases.get(f.p.id,verified.id)).requiresCredentialProof,true);
+  if(!duringFinalization)f.m.projectSettings(f.p.id,{scope,runtime:{},build:{}});
+  f.m.vault.resolve=async()=>{throw Error('No current references should require a vault call');};
+  const exported=await finish(f.m.enqueue(f.p.id,'export'));assert.equal(exported.status,'failed');assert.match(exported.error,/EXPORT_SECRET_CHECK_UNAVAILABLE/);assert.equal(exported.export,undefined);
+ }
+});
+test('rollback retains sensitive or unknown credential provenance after references are removed; fresh Verify restores clean exports and logs',async t=>{
+ for(const historical of [false,true]){
+  const f=await workflow(t,{withOld:false}),scope={projectId:'synthetic-project',environment:'test',secretPath:'/fixture'};
+  f.m.projectSettings(f.p.id,{scope,runtime:{API_TOKEN:'SYNTHETIC_RECORD'},build:{}});f.m.vault.resolve=async(_scope,mapping)=>Object.fromEntries(Object.keys(mapping||{}).map(key=>[key,'synthetic-retained-credential']));
+  const first=await finish(f.m.enqueue(f.p.id,'verify'));assert.equal(first.status,'passed',first.error);
+  if(historical){const file=path.join(f.m.releases.dir(f.p.id,first.id),'release.json'),data=JSON.parse(await fs.readFile(file,'utf8'));delete data.requiresCredentialProof;delete data.credentialUse;await fs.writeFile(file,JSON.stringify(data));}
+  f.m.projectSettings(f.p.id,{scope,runtime:{},build:{}});
+  const rollback=await finish(f.m.enqueue(f.p.id,'rollback',{releaseId:first.id}));assert.equal(rollback.status,'passed',rollback.error);
+  const retained=await f.m.releases.get(f.p.id,rollback.id);assert.equal(retained.requiresCredentialProof,true);assert.equal(retained.credentialUse.origin,'retained-unknown');
+  const refused=await finish(f.m.enqueue(f.p.id,'export'));assert.equal(refused.status,'failed');assert.match(refused.error,/EXPORT_SECRET_CHECK_UNAVAILABLE/);
+  let reads=0;f.m.engine.logs=async()=>{reads++;return'synthetic-retained-credential';};await assert.rejects(f.m.logs(f.m.project(f.p.id).containerId),{code:'LOG_REDACTION_UNAVAILABLE'});assert.equal(reads,0);
+  const fresh=await finish(f.m.enqueue(f.p.id,'verify'));assert.equal(fresh.status,'passed',fresh.error);assert.equal((await f.m.releases.get(f.p.id,fresh.id)).requiresCredentialProof,false);
+  f.m.engine.logs=async()=>{reads++;return'ordinary clean log';};assert.equal(await f.m.logs(f.m.project(f.p.id).containerId),'ordinary clean log');
+  assert.equal((await finish(f.m.enqueue(f.p.id,'export'))).status,'passed');
+ }
+});
+test('old runtime container logs redact its injected values after vault rotation and reference removal without exposing inspect',async t=>{
+ const f=await workflow(t,{withOld:false}),value='synthetic-old-running-instance-value',scope={projectId:'synthetic-project',environment:'test',secretPath:'/fixture'};
+ f.m.projectSettings(f.p.id,{scope,runtime:{API_TOKEN:'SYNTHETIC_RECORD'},build:{}});f.m.vault.resolve=async(_scope,mapping)=>Object.fromEntries(Object.keys(mapping||{}).map(key=>[key,value]));
+ const verified=await finish(f.m.enqueue(f.p.id,'verify'));assert.equal(verified.status,'passed',verified.error);
+ const cid=f.m.project(f.p.id).containerId,container=f.e.map.get(cid);container.Config.Env=f.e.creates.find(c=>c.id===cid).body.Env;
+ assert(container.Config.Env.includes('API_TOKEN='+value));f.m.projectSettings(f.p.id,{scope,runtime:{},build:{}});f.m.vault.resolve=async()=>{throw Error('Current rotated values must not be used for historical logs');};
+ let reads=0;f.m.engine.logs=async()=>{reads++;return'normal '+value+' '+Buffer.from(value).toString('base64');};assert.equal(await f.m.logs(cid),'normal [REDACTED] [REDACTED]');assert.equal(reads,1);
+ const token=container.Config.Labels[LABEL+'.create'];container.Config.Labels[LABEL+'.create']='foreign-container-token';await assert.rejects(f.m.logs(cid),{code:'LOG_REDACTION_UNAVAILABLE'});assert.equal(reads,1);container.Config.Labels[LABEL+'.create']=token;
+ const file=path.join(f.m.releases.dir(f.p.id,verified.id),'release.json'),report=JSON.parse(await fs.readFile(file,'utf8'));assert.equal(JSON.stringify(report).includes(value),false);
+ report.requiresCredentialProof=false;await fs.writeFile(file,JSON.stringify(report));await assert.rejects(f.m.logs(cid),{code:'LOG_REDACTION_UNAVAILABLE'});assert.equal(reads,1);
+ report.requiresCredentialProof=true;delete report.credentialUse;await fs.writeFile(file,JSON.stringify(report));
+ await assert.rejects(f.m.logs(cid),error=>error.code==='LOG_REDACTION_UNAVAILABLE'&&!error.message.includes(value));assert.equal(reads,1);
+});
+test('Compose log redaction follows the actually injected env alias instead of the vault reference name',async t=>{
+ const f=await workflow(t,{withOld:false,compose:true}),value='synthetic-compose-runtime-value',scope={projectId:'synthetic-project',environment:'test',secretPath:'/fixture'};
+ const file=path.join(f.root,'web','compose.json'),compose=JSON.parse(await fs.readFile(file,'utf8'));compose.services.web.environment={RENAMED_TOKEN:'${HARNESS_SECRET:API_TOKEN}'};await fs.writeFile(file,JSON.stringify(compose));
+ f.m.projectSettings(f.p.id,{scope,runtime:{API_TOKEN:'SYNTHETIC_RECORD'},build:{}});f.m.vault.resolve=async(_scope,mapping)=>Object.fromEntries(Object.keys(mapping||{}).map(key=>[key,value]));
+ const verified=await finish(f.m.enqueue(f.p.id,'verify'));assert.equal(verified.status,'passed',verified.error);const cid=f.m.project(f.p.id).containerId,container=f.e.map.get(cid);container.Config.Env=f.e.creates.find(c=>c.id===cid).body.Env;
+ assert(container.Config.Env.includes('RENAMED_TOKEN='+value));assert(!container.Config.Env.some(entry=>entry.startsWith('API_TOKEN=')));f.m.engine.logs=async()=>'ordinary '+value;assert.equal(await f.m.logs(cid),'ordinary [REDACTED]');
+});
+test('historical build-value log redaction is explicitly unavailable instead of returning unredacted output',async t=>{
+ const f=await workflow(t,{withOld:false}),scope={projectId:'synthetic-project',environment:'test',secretPath:'/fixture'};
+ f.m.projectSettings(f.p.id,{scope,runtime:{},build:{BUILD_TOKEN:'SYNTHETIC_BUILD_RECORD'}});f.m.vault.resolve=async(_scope,mapping)=>Object.fromEntries(Object.keys(mapping||{}).map(key=>[key,'synthetic-build-only-value']));
+ const build=f.m.build;f.m.build=async(p,job)=>{await f.m.credentials(p,'build',job);return build(p,job);};
+ const verified=await finish(f.m.enqueue(f.p.id,'verify'));assert.equal(verified.status,'passed',verified.error);assert.equal((await f.m.releases.get(f.p.id,verified.id)).credentialUse.buildUsed,true);
+ let reads=0;f.m.engine.logs=async()=>{reads++;return'synthetic-build-only-value';};await assert.rejects(f.m.logs(f.m.project(f.p.id).containerId),{code:'LOG_REDACTION_UNAVAILABLE'});assert.equal(reads,0);
+});
+test('real download rejects legacy URL replay, mismatched proof identities and altered archive bytes',async t=>{
+ const f=await workflow(t,{withOld:false});assert.equal((await finish(f.m.enqueue(f.p.id,'verify'))).status,'passed');const job=await finish(f.m.enqueue(f.p.id,'export'));assert.equal(job.status,'passed',job.error);
+ const file=f.m.exportFile(job.id).file,bytes=await fs.readFile(file),proof=structuredClone(job.export.credentialCheck),service=createAppsService({...f.cfg,keyFile:path.join(f.root,'download-test.key')},f.m);
+ await new Promise(resolve=>service.server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>service.server.close(resolve)));
+ const url='http://127.0.0.1:'+service.server.address().port+'/export-download?id='+job.id,headers={'x-harness-apps-key':(await fs.readFile(path.join(f.root,'download-test.key'),'utf8')).trim()};
+ const proxy=require('node:http').createServer((_req,res)=>require('./apps-cli.cjs').streamExport(job.id,res,{keyFile:path.join(f.root,'download-test.key'),port:service.server.address().port,contextProjectId:f.p.id}));await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>proxy.close(resolve)));const proxyUrl='http://127.0.0.1:'+proxy.address().port+'/copied-download-url';
+ const good=await fetch(url,{headers});assert.equal(good.status,200);assert.deepEqual(Buffer.from(await good.arrayBuffer()),bytes);
+ const userDownload=await fetch(proxyUrl);assert.equal(userDownload.status,200);assert.deepEqual(Buffer.from(await userDownload.arrayBuffer()),bytes);
+ delete job.export.credentialCheck;
+ const legacyUserDownload=await fetch(proxyUrl);assert.equal(legacyUserDownload.status,409);assert.match(await legacyUserDownload.text(),/Verify and deploy a new release, then Export/);
+ for(let replay=0;replay<2;replay++){const old=await fetch(url,{headers});assert.equal(old.status,409);const response=await old.json();assert.match(response.error,/EXPORT_DOWNLOAD_REVERIFY_REQUIRED.*Verify a new release/);}
+ job.export.credentialCheck={...proof,exportId:'0'.repeat(16)};assert.equal((await fetch(url,{headers})).status,409);
+ job.export.credentialCheck={...proof,projectId:'0'.repeat(16)};assert.equal((await fetch(url,{headers})).status,409);
+ job.export.credentialCheck=proof;const changed=Buffer.from(bytes);changed[0]^=1;await fs.writeFile(file,changed);assert.equal((await fetch(url,{headers})).status,409);
+ await fs.writeFile(file,bytes);const restored=await fetch(url,{headers});assert.equal(restored.status,200);assert.deepEqual(Buffer.from(await restored.arrayBuffer()),bytes);
+});
 test('vault setup protects the idle clock and excludes concurrent application work',async t=>{const{cfg}=await fixture(t);let finishLogin;cfg.vaultFetch=()=>new Promise(resolve=>{finishLogin=resolve;});const m=new AppsManager(cfg,engine(),undefined,hostExecutionBinding()),p=await m.register('web'),pending=m.configureVault({origin:'https://eu.infisical.com',clientId:'fixture-id',clientSecret:'fixture-only-secret'});assert.equal(m.busy,'vault-config');assert.equal(m.canSleep(),false);assert.throws(()=>m.enqueue(p.id,'build'),/operation is running/);const during=JSON.parse(await fs.readFile(path.join(cfg.stateDir,'activity.json'),'utf8'));assert.equal(during.active,1);finishLogin(new Response(JSON.stringify({accessToken:'fixture-token',expiresIn:600})));await pending;assert.equal(m.busy,null);assert.equal(m.canSleep(),true);});
 test('file downloads hold sleep without starting Docker and release the lease once',async t=>{const{cfg}=await fixture(t),m=new AppsManager(cfg,engine(),undefined,hostExecutionBinding()),release=m.beginTransfer();assert.equal(m.previewRequests,1);assert.equal(m.canSleep(),false);release();release();assert.equal(m.previewRequests,0);assert.equal(m.canSleep(),true);const after=JSON.parse(await fs.readFile(path.join(cfg.stateDir,'activity.json'),'utf8'));assert.equal(after.active,0);});
 // Controlled Docker/image/capacity fixtures only. Production verification remains

@@ -299,6 +299,7 @@ function CompletedTurnUsage({ turn }) {
 function apply(ctx,config={}){
  installModelAvailability(ctx);
  installResponseModel(ctx);
+ installGenerationProfilePane(ctx);
  registerRunActivity(ctx);
  registerPreviewResults(ctx);
  ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({

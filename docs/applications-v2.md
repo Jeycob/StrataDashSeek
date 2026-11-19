@@ -58,6 +58,14 @@ Connect the **Application** machine identity in Harness settings. The region, Cl
 
 Per-project settings contain only an Infisical project ID, environment, folder and name mappings:
 
+The model's `project_apps` status exposes only `credentialRefs.runtime` and
+`credentialRefs.build`: the current application's environment-variable names and
+BuildKit secret IDs. It does not expose vault record names, connection identity,
+scope or resolved values. Use those references in application code and keep the
+values in the existing vault; do not paste them into the conversation. The owner
+can edit mappings in the existing project credential settings. Other projects'
+references remain outside the session-bound tool response.
+
 ```json
 {
   "scope": {"projectId": "YOUR_PROJECT_ID", "environment": "prod", "secretPath": "/store"},
@@ -78,7 +86,59 @@ If `/data/harness/root-secrets/vault-runtime.json` exists, the supervisor hydrat
 
 ## Export and remote targets
 
-A successful release can be exported as `.tar.gz` with source, Docker/Compose configuration, required credential **names**, report and browser evidence. The job contains an archive checksum and an owner-authenticated download link. Database contents, actual vault values, machine identities, `.env` files and SSH private keys are excluded. Recreating an image still requires the referenced dependencies/base images unless separately retained in a registry.
+A successful release can be exported as `.tar.gz` with source, Docker/Compose configuration, required credential **names**, report and browser evidence. The job contains an archive checksum and an owner-authenticated download link. Database contents, machine identities, `.env` files and SSH private keys are excluded. Recreating an image still requires the referenced dependencies/base images unless separately retained in a registry.
+
+For projects with credential references, a successful verification checks the
+exportable files against the values actually supplied to that release. It keeps
+a private clean-content witness, without credential values or credential hashes.
+Export checks the current vault values too, then packages the exact private copy
+that was checked. This covers file names and binary/text bytes, including values
+across read boundaries and the same raw, Base64, URI, JSON and dollar-escaped
+forms masked in application job logs. Rotating a key cannot make a previously
+detected leak exportable. The bounded scan accepts at most 128 MiB and 12,001
+regular files; it refuses links and changing files.
+
+`EXPORT_SECRET_DETECTED` means a configured value was found: remove the embedded
+value, run **Verify and deploy**, then **Export** the new release.
+`EXPORT_SECRET_CHECK_UNAVAILABLE` means the proof is absent or no longer matches,
+including older credential-using releases and changed mappings; the same normal
+verification flow creates a fresh proof. `EXPORT_VAULT_UNAVAILABLE` means current
+values could not be checked; retry export when the existing vault is available.
+These failures do not turn an otherwise successful deployment into a failure.
+Newly verified projects without references need no vault access for export.
+Every new release records explicitly whether credential checking is required.
+Older releases lacking that classification and a matching private witness need
+one new **Verify and deploy** before export, even if references are now empty:
+their absence today does not establish what the old release used.
+Previously downloaded links are checked again: newly created archive receipts
+bind the export job, project, release, size and SHA-256 to the credential check.
+The download endpoint verifies those bytes through the same opened file it
+streams. Legacy receipts, mismatched identities and changed archives return
+`EXPORT_DOWNLOAD_REVERIFY_REQUIRED`; use a new **Verify and deploy → Export**.
+Copying an old URL does not bypass this check. This cannot retract files already
+downloaded before the check was introduced.
+Rollback preserves the retained release's credential provenance. Retained
+credential-using or unclassified source/images cannot become exportable merely
+by clearing current references; verify reviewed editable source as a new release.
+
+Container logs use the exact recorded deployment identity and only the names of
+runtime variables actually injected. Their original values are read in memory
+from that same container's trusted inspection and masked, including after vault
+rotation or removal of current references. Inspection and environment values are
+never returned. If historical provenance is missing, retained credentials are
+uncertain, or build-secret values cannot be reconstructed, the log endpoint
+returns `LOG_REDACTION_UNAVAILABLE` before reading raw logs. A fresh verification
+of reviewed source using runtime-only or no credential references restores this
+supported log path. Historical build-secret logs remain unavailable: the current
+vault adapter does not supply versioned historical values. Credential-free,
+newly verified instances retain ordinary readable logs.
+
+This protects configured project credentials in application release exports;
+it is not a detector for all possible secrets. Unknown credentials, arbitrary
+encodings, secrets visible only in screenshots, Docker image/container exports,
+and output outside this application-release export are outside this check.
+Keep values out of prompts and source even when masking is available. Neither
+the private witness nor resolved values are included in export metadata.
 
 Remote targets are optional and owner-configured. The first implementation supports Linux Docker hosts on Tailscale, an SSH user authorized for `/var/run/docker.sock`, a pinned public host key, and a private SSH key referenced from the vault. Keys and known-host data are temporarily materialized in RAM. The SSH transport forwards only the Docker API and the eight application ports; no public unauthenticated Docker socket is created. Applications bind to the chosen target's Tailscale address. The same candidate tests and browser checks run before remote promotion. Target port authorization/firewall rules must already permit access; the Harness does not change remote ACLs or rent hosts.
 

@@ -7,7 +7,7 @@ function sdk(){return modules??=(async()=>{
  return{...cordis,SystemPrompt:prompt.default,Tools:tools.default,...pipeline,...scope,LocalJobs:jobs.default,applyJobTools:jobTools.apply,...adapter};
 })();}
 async function eventually(check){for(let i=0;i<200;i++){if(check())return;await new Promise(r=>setTimeout(r,5));}assert.fail('bounded wait');}
-async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=false,enqueueUncertain=false,recoverEnqueue=false,settlementFailureOnce=false,actualAdmission=false}={}){
+async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=false,enqueueUncertain=false,recoverEnqueue=false,settlementFailureOnce=false,actualAdmission=false,credentials}={}){
  const S=await sdk(),ctx=new S.Context();new S.SystemPrompt(ctx,{});new S.Tools(ctx);
  const agents=new Map(),scopes=[],calls=[],epochs=[],receipts=new Map();let inEpoch=false,polls=0,retained=0,heavyBodies=0,gate,removeAdmission;
  const workspaceRoot=path.resolve('synthetic-apps-workspaces'),root=path.join(workspaceRoot,'owner'),projectId=crypto.createHash('sha256').update(root).digest('hex').slice(0,16),appsId='a'.repeat(16);
@@ -22,7 +22,7 @@ async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=fals
   if(route==='/register')return{id:projectId,name:'own',PRIVATE_SECRET:'drop'};
   if(route==='/project-action'){assert.match(data.requestId,/^[a-f0-9]{32}$/);assert(receipts.has(data.requestId),'receipt durable before POST');if(enqueueUncertain)throw Error('synthetic uncertain response');return{id:appsId,projectId,status:'queued',environment:{SECRET:'drop'}};}
   const u=new URL(route,'http://local');assert.equal(u.searchParams.get('_contextProjectId'),projectId);
-  if(u.pathname==='/state')return{enabled:true,available:true,busy:hold?appsId:null,vault:{SECRET:'drop'},projects:[{id:projectId,name:'own',applicationUrl:'https://preview.example/?appPort=18080',environment:{SECRET:'drop'}},{id:'b'.repeat(16),name:'FOREIGN_PROJECT_SECRET'}],jobs:enqueueUncertain?[]:[{id:appsId,projectId,action:'verify',status:'passed'},{id:'c'.repeat(16),projectId:'b'.repeat(16),action:'verify',status:'passed',error:'FOREIGN_JOB_SECRET'}]};
+  if(u.pathname==='/state')return{enabled:true,available:true,busy:hold?appsId:null,vault:{SECRET:'drop'},projects:[{id:projectId,name:'own',applicationUrl:'https://preview.example/?appPort=18080',environment:{SECRET:'drop'},credentials},{id:'b'.repeat(16),name:'FOREIGN_PROJECT_SECRET',credentials:{runtime:{FOREIGN_REFERENCE:'FOREIGN_VALUE'}}}],jobs:enqueueUncertain?[]:[{id:appsId,projectId,action:'verify',status:'passed'},{id:'c'.repeat(16),projectId:'b'.repeat(16),action:'verify',status:'passed',error:'FOREIGN_JOB_SECRET'}]};
   if(u.pathname==='/job-status'){assert.equal(u.searchParams.get('id'),appsId);polls++;if(settlementFailureOnce){settlementFailureOnce=false;throw Error('synthetic network interruption');}const status=hold||polls<2?'running':passed?'passed':'failed';return{version:1,job:{id:appsId,action:'verify',status,terminal:!['running'].includes(status),passed:status==='passed',workSettled:['passed','failed'].includes(status),PRIVATE_SECRET:'drop'}};}
   if(u.pathname==='/project-request')return{version:1,requestId:u.searchParams.get('requestId'),state:recoverEnqueue?'recorded':'unknown',...(recoverEnqueue?{job:{id:appsId,action:'verify',status:'running'}}:{})};
   if(u.pathname==='/job-log'){assert.equal(u.searchParams.get('id'),appsId);return{text:'synthetic build error\n'.repeat(2000)};}
@@ -46,6 +46,11 @@ async function fixture(t,{jobs=true,passed=true,hold=false,authorityFailure=fals
 }
 test('actual SDK status filters global Apps state and strips credentials, unrelated metadata and raw objects',async t=>{
  const f=await fixture(t),a=f.agent('owner');const result=await f.call(a);assert.equal(result.isError,false,JSON.stringify(result));assert.equal(result.value.projectId,f.projectId);assert.equal(result.value.project.applicationUrl,'https://preview.example/?appPort=18080');assert.equal(result.value.jobs.length,1);assert(!/SECRET|PRIVATE|environment|vault|FOREIGN/.test(JSON.stringify(result)));
+});
+test('actual SDK exposes only own application reference names, never vault bindings or synthetic values',async t=>{
+ const marker='synthetic-private-value-never-a-real-key',f=await fixture(t,{credentials:{scope:{projectId:'PRIVATE_VAULT_ID',environment:'PRIVATE_ENV',secretPath:'/PRIVATE_PATH'},runtime:{DATABASE_URL:marker,API_TOKEN:'PRIVATE_RECORD'},build:{NPM_AUTH:'PRIVATE_BUILD_RECORD'},value:marker}}),a=f.agent('owner');
+ const result=await f.call(a);assert.equal(result.isError,false);assert.deepEqual(result.value.project.credentialRefs,{runtime:['API_TOKEN','DATABASE_URL'],build:['NPM_AUTH']});
+ const visible=JSON.stringify(result);assert.equal(visible.includes(marker),false);assert.doesNotMatch(visible,/PRIVATE_|FOREIGN_|secretPath/);assert.equal(f.calls.length,1);assert.match(f.calls[0].route,/^\/state\?/);
 });
 test('model cannot select path, authority, project or arbitrary CLI; child identity is preserved and readonly refuses mutations',async t=>{
  const f=await fixture(t),owner=f.agent('owner'),child=f.agent('child',{owner});

@@ -7,7 +7,11 @@ async function fixture(t,storage){
  const server=http.createServer((req,res)=>{paths.push(req.url);if(req.url==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><button id="launcher">Monitor</button><script>const originalFetch=fetch.bind(window);window.fetch=(url,init)=>originalFetch(url,window.ignoreAbort?{...init,signal:undefined}:init);</script><script src="/i18n.js"></script><script src="/monitor.js"></script>');}
   if(req.url==='/i18n.js'||req.url==='/monitor.js'){res.setHeader('Content-Type','application/javascript; charset=utf-8');return res.end(fs.readFileSync(path.join(__dirname,req.url==='/i18n.js'?'../shared/i18n.cjs':'monitor.js')));}
   res.on('close',()=>{if(!res.writableEnded)aborted++;});const send=()=>{if(!res.destroyed){res.writeHead(fail?503:200,{'Content-Type':'application/json'});res.end(JSON.stringify(data()));}};if(hold)held=send;else send();
- });await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({headless:true}),page=await browser.newPage({viewport:{width:320,height:844}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(4000);t.after(async()=>{held?.();await browser.close();await new Promise(r=>server.close(r));});await page.goto('http://127.0.0.1:'+server.address().port);await page.evaluate(()=>{HarnessI18n.setLanguage('en');document.getElementById('launcher').onclick=()=>openHarnessMonitor();});return{page,errors,paths,energy:value=>energy=value,fail:()=>fail=true,hold:()=>hold=true,release:()=>{hold=false;held?.();},aborted:()=>aborted};
+ });await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ t.after(async()=>{held?.();server.closeAllConnections();await new Promise(r=>server.close(r));});
+ const browser=await chromium.launch({headless:true,channel:process.env.HARNESS_BROWSER_CHANNEL||undefined});
+ t.after(()=>browser.close());
+ const page=await browser.newPage({viewport:{width:320,height:844}}),errors=[];page.on('pageerror',e=>errors.push(e.message));page.setDefaultTimeout(4000);await page.goto('http://127.0.0.1:'+server.address().port);await page.evaluate(()=>{HarnessI18n.setLanguage('en');document.getElementById('launcher').onclick=()=>openHarnessMonitor();});return{page,errors,paths,energy:value=>energy=value,fail:()=>fail=true,hold:()=>hold=true,release:()=>{hold=false;held?.();},aborted:()=>aborted};
 }
 test('monitor keeps Wh/kWh correct, uses keyed EN/CZ copy, retains raw names and marks unavailable observations stale',async t=>{
  const f=await fixture(t),p=f.page;await p.locator('#launcher').click();await p.locator('#mon-energy').filter({hasText:'8.82 Wh'}).waitFor();assert.match(await p.locator('#monitor-source').innerText(),/^Chyba · Zavřít/);assert.match(await p.locator('#monitor-requests').innerText(),/Chyba[\s\S]*Zavřít/);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
@@ -17,11 +21,32 @@ for(const ignoreAbort of [false,true])test('closing monitor ignores a late sampl
  const f=await fixture(t),p=f.page;await p.locator('#launcher').click();await p.locator('#mon-energy').filter({hasText:'8.82 Wh'}).waitFor();f.hold();f.energy(9999);await p.evaluate(ignore=>{window.ignoreAbort=ignore;openHarnessMonitor();},ignoreAbort);await p.waitForTimeout(80);await p.locator('#monitor-close').click();await p.locator('#server-monitor').waitFor({state:'hidden'});if(!ignoreAbort){const end=Date.now()+3000;while(!f.aborted()&&Date.now()<end)await new Promise(r=>setTimeout(r,20));assert(f.aborted()>0);}f.release();await p.waitForTimeout(120);assert.equal(await p.locator('#mon-energy').innerText(),'8.82 Wh');assert.deepEqual(f.errors,[]);
 });
 test('storage separates host and guest and marks unknown, stale, partial and shared values',async t=>{
- const f=await fixture(t,{version:1,stale:false,volumes:[{scope:'gpu-runtime',availableBytes:1073741824,usedBytes:2147483648,totalBytes:3221225472,inodesFree:10,inodesTotal:100,observedAt:Date.now(),categories:[{id:'cache',bytes:1},{id:'models',bytes:1073741824}]},{scope:'docker-guest',availableBytes:null,usedBytes:null,totalBytes:null,stale:true,detailsTruncated:true,categories:[{id:'images',bytes:10,shared:true,partial:true}]}]}),p=f.page;
- await p.locator('#launcher').click();const host=p.locator('[data-storage-scope="gpu-runtime"]'),guest=p.locator('[data-storage-scope="docker-guest"]');await host.waitFor();assert.match(await host.innerText(),/Available: 1 GiB/);assert.match(await host.locator('li').first().innerText(),/Models/);assert.match(await guest.innerText(),/Available: —/);assert.match(await guest.innerText(),/Partial inventory/);assert.match(await guest.innerText(),/Shared allocation/);assert.match(await guest.innerText(),/out of date/);assert.doesNotMatch(await p.locator('#monitor-storage').innerText(),/NaN|null|undefined/);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(f.errors,[]);
+ const f=await fixture(t,{version:1,stale:false,volumes:[{scope:'gpu-runtime',availableBytes:1073741824,usedBytes:2147483648,totalBytes:3221225472,inodesFree:10,inodesTotal:100,observedAt:Date.now(),categories:[{id:'cache',bytes:1},{id:'models',bytes:1073741824}]},{scope:'docker-guest',availableBytes:null,usedBytes:null,totalBytes:null,stale:true,inventoryObservedAt:Date.now()-600000,inventoryStale:true,detailsTruncated:true,categories:[{id:'volumes',bytes:5},{id:'images',bytes:10,shared:true,partial:true}]}]}),p=f.page;
+ await p.locator('#launcher').click();const host=p.locator('[data-storage-scope="gpu-runtime"]'),guest=p.locator('[data-storage-scope="docker-guest"]');await host.waitFor();assert.match(await host.innerText(),/Available: 1 GiB/);assert.match(await host.locator('li').first().innerText(),/Models/);assert.match(await host.innerText(),/Inventory observed: Not observed/);assert.match(await guest.innerText(),/Available: —/);assert.match(await guest.locator('li').first().innerText(),/Image layers.*Partial inventory.*Shared allocation/);assert.match(await guest.innerText(),/Inventory observed: .*out of date/);assert.match(await p.locator('#monitor-storage').innerText(),/Image import capacity is unknown/);assert.doesNotMatch(await p.locator('#monitor-storage').innerText(),/NaN|null|undefined/);assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(f.errors,[]);
+ await p.evaluate(()=>HarnessI18n.setLanguage('cs'));
+ assert.match(await p.locator('#monitor-storage').innerText(),/Kapacita pro import image zůstává neověřená/);
 });
 test('disabled guest and aggregate stale status do not relabel a fresh host sample or invent missing guest capacity',async t=>{
  const now=Date.now(),f=await fixture(t,{version:1,observedAt:now,stale:true,scanning:false,volumes:[{id:'gpu-data',scope:'gpu-runtime',availableBytes:1073741824,usedBytes:2147483648,totalBytes:3221225472,inodesFree:10,inodesTotal:100,observedAt:now,stale:false,inventoryObservedAt:now-1000,inventoryStale:false,categories:[{id:'tools',bytes:42,partial:false,shared:false}]},{id:'docker-guest',scope:'docker-guest',availableBytes:null,usedBytes:null,totalBytes:null,inodesFree:null,inodesTotal:null,observedAt:now-600000,stale:true,inventoryObservedAt:now-600000,inventoryStale:true,errorCode:'GUEST_DISABLED',categories:[]}]}),p=f.page;
  await p.locator('#launcher').click();const host=p.locator('[data-storage-scope="gpu-runtime"]'),guest=p.locator('[data-storage-scope="docker-guest"]');await host.waitFor();
  assert.doesNotMatch(await host.innerText(),/out of date/);assert.match(await guest.innerText(),/Available: —/);assert.match(await guest.innerText(),/Free inodes: — \/ —/);assert.match(await guest.innerText(),/GUEST_DISABLED/);assert.match(await guest.innerText(),/out of date/);assert.match(await host.innerText(),/Tools/);assert(f.paths.every(url=>!url.includes('wake')));assert.deepEqual(f.errors,[]);
+});
+test('failed monitor refresh marks retained capacity and inventories stale on both sides',async t=>{
+ const now=Date.now();
+ const volumes=['gpu-runtime','docker-guest'].map(scope=>({scope,availableBytes:1024,observedAt:now,stale:false,inventoryObservedAt:now-1000,inventoryStale:false,categories:[{id:scope==='gpu-runtime'?'models':'images',bytes:2048}]}));
+ const f=await fixture(t,{version:1,volumes}),p=f.page;
+ await p.locator('#launcher').click();
+ const summaries=p.locator('[data-storage-scope]');
+ await summaries.first().waitFor();
+ const initial=await summaries.allTextContents();
+ assert.equal(initial.length,2);
+ for(const text of initial)assert.doesNotMatch(text,/out of date/);
+ f.fail();await p.evaluate(()=>openHarnessMonitor());
+ await p.locator('#monitor-phase').filter({hasText:'Monitoring is unavailable'}).waitFor();
+ for(const summary of await summaries.all()){
+  assert.match(await summary.getByText(/^Observed:/).innerText(),/out of date/);
+  assert.match(await summary.getByText(/^Inventory observed:/).innerText(),/out of date/);
+  assert.equal(await summary.locator('li').count(),1);
+ }
+ assert.deepEqual(f.errors,[]);
 });

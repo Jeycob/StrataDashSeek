@@ -1763,6 +1763,61 @@ function installResponseModel(ctx){
  ctx.effect(()=>ctx.slots.inject('conversation.chat.turnTail',()=>ctx.slots.register({name:'conversation.chat.turnTail',id:'homeai.response-model',order:110},CompletedResponseModel)),'native-workbench: response model');
 }
 
+const profileCopy={
+ en:{title:'Strata profiles',help:'Save sampling controls and apply them to the next request in this conversation. The running request keeps its snapshot.',save:'Save as new profile',apply:'Use selected profile',workspace:'Use workspace defaults',name:'Profile name',quant:'Requested quantization',quantHelp:'This is a deployment request, not a switch of the loaded model. Only a measured serving record can confirm quantization.',selected:'Selected sampling profile',next:'Next-request controls',loaded:'Currently loaded model',unknown:'Unknown / not observed',history:'Recorded paired runs',noHistory:'No verified comparison report is available.',empty:'No paired runs have been recorded.',same:'Same frozen task and conditions',different:'Not comparable: task, conditions or pair evidence differ',quantUnknown:'Quantization comparison is not confirmed.',pass:'Passed',fail:'Failed',time:'Submit to accepted result',memory:'Observed memory',source:'Evidence',refresh:'Refresh',maxTokens:'Maximum output tokens',thinkingBudget:'Thinking token budget',temperature:'Temperature',topP:'Top P'},
+ cs:{title:'Profily Strata',help:'Ulož parametry generování a použij je pro příští požadavek této konverzace. Běžící požadavek si ponechá svůj snímek.',save:'Uložit jako nový profil',apply:'Použít vybraný profil',workspace:'Použít výchozí nastavení prostoru',name:'Název profilu',quant:'Požadovaná kvantizace',quantHelp:'Jde o požadavek pro nasazení, nikoli přepnutí načteného modelu. Kvantizaci potvrdí pouze měření obsluhujícího procesu.',selected:'Vybraný profil generování',next:'Parametry příštího požadavku',loaded:'Aktuálně načtený model',unknown:'Neznámé / neověřeno',history:'Zaznamenané párové běhy',noHistory:'Ověřený přehled porovnání není dostupný.',empty:'Zatím nejsou zaznamenané párové běhy.',same:'Stejné zmrazené zadání a podmínky',different:'Nelze porovnat: liší se zadání, podmínky nebo chybí důkaz páru',quantUnknown:'Porovnání kvantizace není potvrzené.',pass:'Splněno',fail:'Nesplněno',time:'Od odeslání k přijatému výsledku',memory:'Pozorovaná paměť',source:'Důkaz',refresh:'Obnovit',maxTokens:'Maximum výstupních tokenů',thinkingBudget:'Rozpočet tokenů uvažování',temperature:'Teplota',topP:'Top P'}
+};
+Object.assign(profileCopy.en,{profileRun:'Profile / run',modelQuant:'Model / quantization',inputs:'Frozen comparison inputs',routes:'Recorded request routes',status:'Run status',controlsScope:'Sampling profiles apply only to the registered Strata route. Thinking stays off when selected; its budget is capped at half the output limit.'});
+Object.assign(profileCopy.cs,{profileRun:'Profil / běh',modelQuant:'Model / kvantizace',inputs:'Zmrazené vstupy porovnání',routes:'Zaznamenané cesty požadavků',status:'Stav běhu',controlsScope:'Profily generování platí jen pro registrovanou cestu Strata. Vypnuté uvažování zůstane vypnuté; jeho rozpočet nepřekročí polovinu výstupního limitu.'});
+function ProfileServingModel({visible,labels}){
+ const [samples,setSamples]=React.useState({}),[now,setNow]=React.useState(Date.now());
+ React.useEffect(()=>{if(!visible||!window.HarnessSettingsHealth)return;const controller=window.HarnessSettingsHealth.createController({onChange:value=>{setSamples(value);setNow(Date.now());}});void controller.refresh();const timer=setInterval(()=>setNow(Date.now()),1000);return()=>{clearInterval(timer);controller.dispose();};},[visible]);
+ const model=window.HarnessSettingsHealth?.project(samples,now).model;
+ return h('p',{'data-profile-serving-model':true},labels.loaded+': '+(model?.state==='available'?model.id+' · '+new Date(model.observedAt).toISOString():labels.unknown));
+}
+function ProfileHistory({history,labels}){
+ const unknown=labels.unknown,seconds=value=>value===null?unknown:(value/1000).toFixed(1)+' s',memory=row=>row.memory?`${row.memory.kind}: RSS ${row.memory.rssBytes===null?'?':row.memory.rssBytes+' B'}, VRAM ${row.memory.vramBytes===null?'?':row.memory.vramBytes+' B'}`:unknown;
+ const stamp=value=>Number.isSafeInteger(value)?new Date(value).toISOString():null;
+ return h('section',{'data-profile-history':true},h('h3',null,labels.history),history?.state!=='available'?h('p',null,labels.noHistory):!history.pairs.length?h('p',null,labels.empty):history.pairs.map(pair=>
+  h('section',{key:pair.id,'data-profile-pair':pair.id},h('h4',null,pair.id),h('p',null,pair.sameInput?labels.same:labels.different),!pair.quantizationComparable&&h('p',null,labels.quantUnknown),
+   h('details',null,h('summary',null,labels.inputs),h('p',null,JSON.stringify(pair.rows.map(row=>({run:row.id,...row.sourceBinding,...row.comparison}))))),
+   h('div',{style:{overflowX:'auto',maxWidth:'100%'}},h('table',null,h('thead',null,h('tr',null,...[labels.profileRun,labels.modelQuant,labels.time,labels.memory,labels.source].map(label=>h('th',{key:label},label)))),
+    h('tbody',null,pair.rows.map(row=>h('tr',{key:row.id},
+     h('td',null,row.arm+' · '+(row.profileName||row.id),h('br'),row.accepted===null?unknown:row.accepted?labels.pass:labels.fail,row.status&&h('p',null,labels.status+': '+row.status)),
+     h('td',null,row.serving?row.serving.provider+' / '+row.serving.model:unknown,h('br'),row.serving?.quantization||unknown,row.requestRoutes&&h('p',null,labels.routes+': '+row.requestRoutes.rows.map(route=>route.provider+' / '+route.model).join(', '))),
+     h('td',null,seconds(row.acceptedMs)),h('td',null,memory(row)),
+     h('td',null,[row.acceptanceEvidence,row.serving?.evidenceId,stamp(row.serving?.observedAt),row.memory?.evidenceId,stamp(row.memory?.observedAt),row.requestRoutes?.evidenceId,...(row.sourceEvidence||[])].filter(Boolean).join(' · ')||unknown)))))))));
+}
+function GenerationProfiles({sessionId,visible}){
+ const labels=profileCopy[useLanguage()]||profileCopy.en,[view,setView]=React.useState(null),[busy,setBusy]=React.useState(false),[error,setError]=React.useState(''),[chosen,setChosen]=React.useState(''),[name,setName]=React.useState(''),[quant,setQuant]=React.useState(''),[controls,setControls]=React.useState({}),owner=React.useRef(null);
+ const request=async(body,active=owner.current)=>{
+  if(!active?.live)return;active.controller?.abort();const controller=new AbortController();active.controller=controller;setBusy(true);setError('');
+  try{const value=await nativeJSON('/api/workbench/model-profiles'+(body?'':'?sessionId='+encodeURIComponent(sessionId)),body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sessionId,...body}),signal:controller.signal}:{signal:controller.signal});if(!active.live||active.controller!==controller)return;if(value.version!==1||value.sessionId!==sessionId)throw Error('Invalid profile response');setView(value);setChosen(value.savedProfileId??value.selected?.profileId??'');if(!body){setControls(value.effectiveSampling);setName(value.selected?.name||'');setQuant(value.selected?.expectedQuantization||'');}}
+  catch(e){if(active.live&&active.controller===controller)setError(e.name==='AbortError'?'The operation was not confirmed. Refresh before retrying.':e.message);}
+  finally{if(active.live&&active.controller===controller){active.controller=null;setBusy(false);}}
+ };
+ React.useEffect(()=>{const active={live:true,controller:null};owner.current=active;if(visible)void request(null,active);return()=>{active.live=false;active.controller?.abort();};},[sessionId,visible]);
+ const inputStyle={display:'block',maxWidth:'100%',boxSizing:'border-box'};
+ const field=(key,min,max,step)=>h('label',{key,style:{display:'block',margin:'8px 0'}},labels[key],h('input',{'aria-label':labels[key],type:'number',min,max,step,value:controls[key]??'',style:inputStyle,disabled:busy,onChange:e=>setControls(old=>({...old,[key]:Number(e.target.value)}))}));
+ const choose=id=>{setChosen(id);const profile=view?.profiles.find(row=>row.id===id);if(profile){setControls(profile.sampling);setName(profile.name);setQuant(profile.expectedQuantization||'');}};
+ return h('section',{className:'harness-native-surface','data-generation-profiles':sessionId,style:{padding:12,overflow:'auto',height:'100%',minWidth:0,maxWidth:'100%',boxSizing:'border-box',overflowWrap:'anywhere'}},
+  h('h2',null,labels.title),h('p',null,labels.help),h('p',null,labels.controlsScope),h(ProfileServingModel,{visible,labels}),
+  h('p',null,labels.selected+': '+(view?.selected?.name||labels.workspace)),h('p',null,labels.quant+': '+(view?.selected?.expectedQuantization||labels.unknown)),
+  h('p',{'data-profile-effective':true},labels.next+': '+(view?JSON.stringify(view.effectiveSampling):labels.unknown)),
+  h('label',null,labels.title,h('select',{'aria-label':labels.title,value:chosen,style:inputStyle,disabled:busy||!view,onChange:e=>choose(e.target.value)},h('option',{value:''},labels.workspace),...(view?.profiles||[]).map(row=>h('option',{key:row.id,value:row.id},row.name)))),
+  h('button',{disabled:busy||!view,onClick:()=>void request({op:'select',id:chosen||null})},labels.apply),
+  h('label',{style:{display:'block'}},labels.name,h('input',{'aria-label':labels.name,value:name,maxLength:80,style:inputStyle,disabled:busy,onChange:e=>setName(e.target.value)})),
+  field('maxTokens',256,32768,1),field('thinkingBudget',128,8192,1),field('temperature',0,2,.1),field('topP',.01,1,.01),
+  h('label',null,labels.quant,h('input',{'aria-label':labels.quant,value:quant,maxLength:80,style:inputStyle,disabled:busy,onChange:e=>setQuant(e.target.value)})),h('p',null,labels.quantHelp),
+  h('button',{disabled:busy||!view||!name.trim(),onClick:()=>void request({op:'save',name,sampling:controls,expectedQuantization:quant})},labels.save),h('button',{disabled:busy,onClick:()=>void request(null)},labels.refresh),error&&h('p',{role:'alert'},error),h(ProfileHistory,{history:view?.history,labels}));
+}
+function installGenerationProfilePane(ctx){
+ const definition={id:'homeai-model-profiles',kind:'homeai-model-profiles',title:()=>profileCopy[window.HarnessI18n.language]?.title||profileCopy.en.title};
+ ctx.effect(()=>ctx.sidebarRightTabs.register(definition));
+ function Pane(props){const info=props.useTabInfo();return h(GenerationProfiles,{sessionId:props.sessionId,visible:info.tab.visible,key:props.sessionId});}
+ ctx.effect(()=>ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:definition.id,inject:sessionId=>({sessionId})},Pane)));
+}
+
 // Native also composes abort signals. Older Safari must have these helpers
 // before any of our panes creates a Native session or starts a request.
 if(typeof AbortSignal.any!=='function')AbortSignal.any=iterable=>{
@@ -2064,6 +2119,7 @@ function CompletedTurnUsage({ turn }) {
 function apply(ctx,config={}){
  installModelAvailability(ctx);
  installResponseModel(ctx);
+ installGenerationProfilePane(ctx);
  registerRunActivity(ctx);
  registerPreviewResults(ctx);
  ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({

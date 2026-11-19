@@ -4,6 +4,8 @@ function createMonitor(){
  const t=key=>copy[window.HarnessI18n?.language==='cs'?'cs':'en'][key]||key;
  Object.assign(copy.en,{storage:'Disk capacity and largest items',hostDisk:'GPU host filesystem',guestDisk:'Managed Docker guest',available:'Available',used:'Used',total:'Total',inodes:'Free inodes',observed:'Observed',scanning:'Inventory scan in progress',unknown:'Not observed',partial:'Partial inventory',shared:'Shared allocation — do not add sizes',inventoryAt:'Inventory observed',storageNote:'Host and Docker guest are separate views of storage. Docker backing files and shared image layers must not be counted twice.',models:'Models',projects:'Projects',logs:'Logs',cache:'Cache',tools:'Tools','logs-runtime':'Runtime logs','docker-storage':'Docker backing storage',images:'Image layers',containers:'Container writable layers',volumes:'Volumes',other:'Other'});
  Object.assign(copy.cs,{storage:'Místo na disku a největší položky',hostDisk:'Souborový systém GPU hostu',guestDisk:'Spravovaný Docker guest',available:'Dostupné',used:'Použité',total:'Celkem',inodes:'Volné inody',observed:'Pozorováno',scanning:'Probíhá inventura',unknown:'Neověřeno',partial:'Částečná inventura',shared:'Sdílená alokace — velikosti nesčítat',inventoryAt:'Inventura z',storageNote:'Host a Docker guest jsou různé pohledy na úložiště. Docker backing soubory a sdílené vrstvy image se nesmějí počítat dvakrát.',models:'Modely',projects:'Projekty',logs:'Logy',cache:'Cache',tools:'Nástroje','logs-runtime':'Provozní logy','docker-storage':'Úložiště Docker guestu',images:'Vrstvy images',containers:'Zapisovatelné vrstvy kontejnerů',volumes:'Volumes',other:'Ostatní'});
+ Object.assign(copy.en,{largestCategories:'Storage categories by size',importCapacityUnknown:'Image import capacity is unknown until peak storage requirements for the planned import are measured on the host and guest.'});
+ Object.assign(copy.cs,{largestCategories:'Kategorie úložiště podle velikosti',importCapacityUnknown:'Kapacita pro import image zůstává neověřená. K posouzení je třeba změřit maximální nároky plánovaného importu na hostu i v guestu.'});
  const panel=document.createElement('dialog');panel.id='server-monitor';panel.hidden=true;panel.setAttribute('role','dialog');
  panel.innerHTML='<div class="monitor-head"><div><h2 data-monitor-copy="title"></h2><p id="monitor-source" data-monitor-copy="source"></p></div><button id="monitor-close" data-monitor-copy="close"></button></div><div class="monitor-state"><b id="monitor-phase" role="status" data-monitor-copy="loading"></b><span id="monitor-idle"></span><progress id="monitor-context" max="100" value="0"></progress><small id="monitor-context-label"></small></div><div class="monitor-cards" id="monitor-cards"></div><div class="monitor-state"><h3 data-monitor-copy="recent"></h3><div class="monitor-table-wrap"><table><thead><tr><th data-monitor-copy="request"></th><th>Prompt</th><th>Cache</th><th data-monitor-copy="output"></th><th>tok/s</th><th data-monitor-copy="time"></th><th data-monitor-copy="result"></th></tr></thead><tbody id="monitor-requests"></tbody></table></div></div><p class="monitor-note" data-monitor-copy="note"></p>';
  document.body.appendChild(panel);
@@ -37,19 +39,34 @@ function createMonitor(){
  }
  function renderStorage(storage){
   const node=(tag,text)=>{const element=document.createElement(tag);element.textContent=text;return element;},bytes=value=>Number.isFinite(value)?fmt(value/1073741824,2)+' GiB':'—';
+  const observation=(key,at,stale)=>{
+   const date=new Date(at);
+   const observed=Number.isFinite(at)&&at>0&&Number.isFinite(date.getTime());
+   const label=observed?date.toLocaleString(window.HarnessI18n?.locale||'en-US'):t('unknown');
+   return node('p',t(key)+': '+label+(observed&&(stale!==false||unavailable)?' · '+t('stale'):''));
+  };
   storagePanel.replaceChildren(node('h3',t('storage')),node('p',t('storageNote')));
   if(!storage||storage.version!==1){storagePanel.append(node('p',t('unknown')));return;}
   if(storage.scanning)storagePanel.append(node('p',t('scanning')));
   for(const volume of storage.volumes||[]){
    const card=node('article','');card.dataset.storageScope=volume.scope;card.className='monitor-storage-volume';
    card.append(node('h4',t(volume.scope==='docker-guest'?'guestDisk':'hostDisk')),node('p',t('available')+': '+bytes(volume.availableBytes)+' · '+t('used')+': '+bytes(volume.usedBytes)+' / '+bytes(volume.totalBytes)),node('p',t('inodes')+': '+fmt(volume.inodesFree,0)+' / '+fmt(volume.inodesTotal,0)));
-   card.append(node('p',t('observed')+': '+(Number.isFinite(volume.observedAt)?new Date(volume.observedAt).toLocaleString(window.HarnessI18n?.locale||'en-US'):t('unknown'))+(volume.stale!==false||unavailable?' · '+t('stale'):'')));
-   if(volume.inventoryObservedAt)card.append(node('p',t('inventoryAt')+': '+new Date(volume.inventoryObservedAt).toLocaleString(window.HarnessI18n?.locale||'en-US')+(volume.inventoryStale?' · '+t('stale'):'')));
+   card.append(observation('observed',volume.observedAt,volume.stale));
+   card.append(observation('inventoryAt',volume.inventoryObservedAt,volume.inventoryStale));
    if(volume.detailsTruncated||volume.categories?.some(c=>c.partial))card.append(node('p',t('partial')));
-   const list=node('ul','');for(const category of [...(volume.categories||[])].sort((a,b)=>(b.bytes??-1)-(a.bytes??-1))){const row=node('li',t(category.id)+': '+bytes(category.bytes)+(category.partial?' · '+t('partial'):'')+(category.shared?' · '+t('shared'):''));list.append(row);}card.append(list);
+   const categories=[...(volume.categories||[])].sort((a,b)=>(b.bytes??-1)-(a.bytes??-1));
+   if(categories.length){
+    const list=node('ul','');
+    for(const category of categories){
+     const row=node('li',t(category.id)+': '+bytes(category.bytes)+(category.partial?' · '+t('partial'):'')+(category.shared?' · '+t('shared'):''));
+     list.append(row);
+    }
+    card.append(node('h5',t('largestCategories')),list);
+   }
    if(volume.errorCode)card.append(node('p',t('unknown')+' · '+String(volume.errorCode).slice(0,80)));
    storagePanel.append(card);
   }
+  storagePanel.append(node('p',t('importCapacityUnknown')));
  }
  function applyCopy(){panel.setAttribute('aria-label',t('title'));for(const element of panel.querySelectorAll('[data-monitor-copy]'))element.textContent=t(element.dataset.monitorCopy);if(lastData)render(lastData);else if(unavailable)document.getElementById('monitor-phase').textContent=t('unavailable');}
  function schedule(){clearTimeout(timer);if(!panel.hidden&&!document.hidden)timer=setTimeout(refreshMonitor,nextDelay+Math.random()*500);}

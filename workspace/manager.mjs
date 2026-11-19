@@ -19,6 +19,7 @@ import { prepareAutomaticRequest, automaticReview, admitAutomaticStep, measuredR
 import {automaticReceipt,reconcileAutomatic,retainAutomaticProcess} from './automatic-recovery.mjs';
 import {resumeConsumedPrestep} from './automatic-consumed-recovery.mjs';
 import { registeredSelection, validateWorkspaceModel } from './model-selection.mjs';
+import { selectedSampling } from './generation-profiles.mjs';
 import { createIndependentProject } from './project-repository.mjs';
 import { bindProjectExecution } from './execution-mode.mjs';
 import privateSource from './source-private.cjs';
@@ -53,7 +54,7 @@ export class WorkspaceManager {
   inOrder(action) { const next = this.serial.then(() => this.checked(action)); this.serial = next.catch(() => {}); return next; }
   save() { this.execution.assertUnchanged(); const snapshot = structuredClone(this.data); const next = this.persistQueue.then(() => this.checked(() => atomicJSON(this.file, snapshot,{durable:true}))); this.persistQueue = next.catch(() => {}); return next; }
   workspaceFor(session) { return this.ctx.workspaceRegistry.list().find(w => w.sessionIds.includes(session.id) || w.path === session.header.cwd); }
-  settings(session) { const workspace = this.workspaceFor(session); return validateSettings(this.data.workspaces[workspace?.id ?? session.header.cwd]?.settings ?? {}); }
+  settings(session) { const workspace = this.workspaceFor(session); return validateSettings({...this.data.workspaces[workspace?.id ?? session.header.cwd]?.settings,...selectedSampling(this.data,session.id)}); }
   async updateSettings(workspaceId, input) {
     return this.inOrder(async () => {
       if (!this.ctx.workspaceRegistry.get(workspaceId)) throw new WorkbenchError('WORKSPACE_NOT_FOUND', 'Workspace not found.', 404);

@@ -11,7 +11,7 @@ function normalizePayload(input,controls={}){
  if(off){delete payload.chat_template_kwargs.reasoning_effort;delete payload.reasoning_budget_tokens;delete payload.thinking_budget_tokens;}
  else {payload.chat_template_kwargs.reasoning_effort=effort;if(payload.reasoning_budget_tokens==null&&payload.thinking_budget_tokens==null)payload.thinking_budget_tokens=Math.min(({minimal:512,low:2048,medium:4096,high:8192})[effort]??4096,Math.max(1,Math.floor((payload.max_tokens||32768)/2)));}
  payload.max_tokens=Math.min(payload.max_tokens??32768,controls.maxTokens??32768,32768);
- if(!off&&controls.effort===effort&&Number.isInteger(controls.thinkingBudget)){payload.thinking_budget_tokens=Math.min(controls.thinkingBudget,Math.max(1,Math.floor(payload.max_tokens/2)));delete payload.reasoning_budget_tokens;}
+ if(!off&&(controls.effort===effort||controls.profileSampling===true)&&Number.isInteger(controls.thinkingBudget)){payload.thinking_budget_tokens=Math.min(controls.thinkingBudget,Math.max(1,Math.floor(payload.max_tokens/2)));delete payload.reasoning_budget_tokens;}
  if(Number.isFinite(controls.temperature))payload.temperature=controls.temperature;
  if(Number.isFinite(controls.topP))payload.top_p=controls.topP;
  payload.temperature??=1;payload.top_p??=.95;payload.top_k??=20;
