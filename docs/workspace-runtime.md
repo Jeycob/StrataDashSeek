@@ -80,9 +80,13 @@ contracts](qwen-quality.md).
 
 Three failed rounds without measurable improvement, or three repeats of the
 same normalized error, pause the run before another inference/tool step. A
-stage also has a bounded step count (default 60). This is enforced by runtime
-hooks, not only by a prompt. **Run review** shows the best source checkpoints
-and requires a changed strategy before resuming. Restoring a checkpoint first
+stage reaches automatic verification after its configured step interval
+(default 60); step counts alone do not require another approval. A new explicit
+owner message starts a fresh repair attempt, including its failure streak and
+repeated-error counters. Measured verification baselines, source checkpoints
+and prior session results remain retained. Internal followups, retries and
+subagents cannot renew this attempt, and an unresolved verification stays
+fenced. **Run review** shows the best source checkpoints. Restoring one first
 saves the current sources; it does not overwrite databases or dependencies.
 Checkpoints include at most 5000 source files/32 MiB, with each file at most
 1 MiB. Larger assets are outside this recovery feature. Superseded checkpoint

@@ -38,6 +38,9 @@ export function prepareAutomaticRequest(record, budget, { turn, messages, owner 
   if (!budget.automatic || fresh) {
     budget.automatic = { version: 1, taskSteps: fresh ? 0 : budget.steps, checks: 0, nextCheckAt: interval,
       phase: 'working', proofSerial: 0, proofs: {}, admitted: {}, interval };
+    // A genuine new owner request starts a new repair attempt. Retain the
+    // measured checks as its baseline, but not the exhausted failure streak.
+    if (fresh) { budget.stalled = 0; budget.errors = {}; }
     if (fresh && ['TASK_BUDGET', 'AUTOMATIC_CHECK_LIMIT', 'AUTOMATIC_NO_PROGRESS', 'AUTOMATIC_VERIFICATION_UNAVAILABLE', 'AUTOMATIC_VERIFICATION_TIMEOUT', 'REPAIR_NO_PROGRESS', 'REPEATED_TOOL_ERROR'].includes(budget.blocked?.code)) budget.blocked = null;
   }
   const a = budget.automatic;

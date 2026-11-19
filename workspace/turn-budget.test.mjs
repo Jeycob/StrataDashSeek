@@ -104,8 +104,19 @@ test('manager child requests cannot renew the owner budget', async () => {
   assert.equal(f.budget.steps, 60); assert.equal(f.record.budgetRequest.messageId, 'first');
   await f.manager.preStep({ ...f.input, step: 2, agent: f.child });assert.equal(f.budget.steps,61);assert.equal(f.budget.automatic.taskSteps,61);assert.equal(f.budget.blocked,null);assert.equal(f.record.budgetRequest.messageId,'first');
 });
-test('a fresh explicit owner request can replan without a strategy form and preserves prior failure evidence', async () => {
-  const f = managedFixture(); f.budget.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Review required' };
+test('a fresh owner request starts a new repair streak while retaining prior verification evidence', async () => {
+  const f = managedFixture(), checks = f.budget.checks;
+  f.budget.stalled = 3; f.budget.errors = { 'prior-failure': 3 };
+  f.budget.blocked = { code: 'REPAIR_NO_PROGRESS', message: 'Review required' };
   await f.manager.preStep({ ...f.input, agent: f.owner });
-  assert.equal(f.budget.blocked, null); assert.equal(f.budget.steps, 1); assert.equal(f.budget.automatic.taskSteps, 1); assert.equal(f.budget.stalled, 2); assert.equal(f.budget.checks.test.bestScore, 4);
+  assert.equal(f.budget.blocked, null); assert.equal(f.budget.steps, 1); assert.equal(f.budget.automatic.taskSteps, 1);
+  assert.equal(f.budget.stalled, 0); assert.deepEqual(f.budget.errors, {}); assert.equal(f.budget.checks, checks); assert.equal(f.budget.checks.test.bestScore, 4); assert.equal(f.budget.stage, 4);
+  const failure = { kind: 'test', exitCode: 1, text: 'AssertionError: projectile remains after impact' };
+  f.budget.observe(failure);
+  assert.equal(f.budget.blocked, null, 'the first repair cannot inherit an exhausted prior streak');
+  await f.manager.preStep({ ...f.input, step: 2, agent: f.owner });
+  assert.equal(f.budget.stalled, 1, 'same human identity cannot renew the repair streak again');
+  f.budget.observe(failure); assert.equal(f.budget.blocked, null);
+  f.budget.observe(failure); assert.equal(f.budget.blocked?.code, 'REPAIR_NO_PROGRESS', 'new genuinely repeated failures remain bounded');
+  assert.equal(f.budget.stage, 4);
 });

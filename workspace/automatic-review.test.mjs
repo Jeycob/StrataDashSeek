@@ -95,8 +95,11 @@ test('legacy task count is accounting rather than a manual gate, including reloa
  assert.equal(await fs.readFile(path.join(f.root,'app.mjs'),'utf8'),'export const value=1;\n');
 });
 test('only a new real human request renews the allowance; subagents cannot do so',async t=>{
- const f=await fixture(t);await f.step(11);assert.equal(prepareAutomaticRequest(f.record,f.budget,{turn:2,messages:[human('second')],owner:false},10),false);assert.equal(f.budget.automatic.taskSteps,11);
- assert.equal(prepareAutomaticRequest(f.record,f.budget,{turn:2,messages:[human('second')],owner:true},10),true);assert.equal(f.budget.automatic.taskSteps,0);assert.equal(f.budget.automatic.checks,0);
+ const f=await fixture(t);await f.step(11);f.budget.stalled=3;f.budget.errors={old:3};const checks=f.budget.checks;
+ for(const input of [{turn:2,messages:[human('second')],owner:false},{turn:2,messages:[{role:'user',id:'internal',source:{kind:'workspace-runtime'}}]},{turn:2,messages:[human('first')]}]){
+  assert.equal(prepareAutomaticRequest(f.record,f.budget,input,10),false);assert.equal(f.budget.automatic.taskSteps,11);assert.equal(f.budget.stalled,3);assert.deepEqual(f.budget.errors,{old:3});
+ }
+ assert.equal(prepareAutomaticRequest(f.record,f.budget,{turn:3,messages:[human('second')],owner:true},10),true);assert.equal(f.budget.automatic.taskSteps,0);assert.equal(f.budget.automatic.checks,0);assert.equal(f.budget.stalled,0);assert.deepEqual(f.budget.errors,{});assert.equal(f.budget.checks,checks);
 });
 test('concurrent child steps share one verification and retries are charged once even when interleaved',async t=>{
  const f=await fixture(t);f.manager.ownerAgent=()=>f.agent;const child=id=>({id,session:{id,header:{origin:'subagent',parentSession:'owner'}}});
