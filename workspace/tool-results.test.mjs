@@ -32,6 +32,24 @@ test('verify_project enters the same final-result budget exactly once and reject
   m.observeToolResult({ ...exec('verify_project'), arguments: {} }, result(JSON.stringify(config), config, false));
   await m.drainToolResults('one'); assert.equal(m.budgets.get('one').stalled, 0); assert.equal(m.data.sessions.one.lastDiagnostic.category, 'configuration');
 });
+test('a single-check retry cannot replace ordinary verification or change its repair budget', async t => {
+  const {manager:m, exec, result} = await fixture(t);
+  const {one:record} = m.data.sessions;
+  const budget = m.budgets.get('one');
+  await m.reportVerification({sessionId:'one',kind:'test',exitCode:0,checksPassed:5,checksTotal:5});
+  record.lastVerification.accepted = true;
+  const before = structuredClone(record.lastVerification);
+  const sourceHash = (await sourceManifest(record.root)).sha256;
+  const report = {passed:true,complete:false,stale:false,sourceHash,checkId:'third',
+    checks:[{id:'third',kind:'test',passed:true,checksPassed:1,checksTotal:1}]};
+  await m.reportVerification({sessionId:'one',kind:'test',checkId:'third',exitCode:0,checksPassed:1,checksTotal:1});
+  m.observeToolResult({...exec('verify_project'),arguments:{kind:'test',checkId:'third'}},result(JSON.stringify(report),report,false));
+  await m.drainToolResults('one');
+  assert.deepEqual(record.lastVerification,before);
+  assert.deepEqual(budget.checks,{});
+  assert.equal(budget.stage,1);
+  assert.equal(record.checkpoints,undefined);
+});
 test('automatic result deduplication requires a real nonempty matching call ID',async t=>{
   const {manager:m,exec,result}=await fixture(t),budget=m.budgets.get('one');
   prepareAutomaticRequest(m.data.sessions.one,budget,{owner:true,turn:1,messages:[{id:'original-human',role:'user',source:{kind:'user'}}]},60);

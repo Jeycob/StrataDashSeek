@@ -16,3 +16,11 @@ test('verification uses fixed guest toolchain, server ports and actual child exe
 test('foreign roots, stale source, legacy projects and invalid ports never reach the runner',async()=>{
  for(const change of [f=>({projectRoot:'/projects/other'}),f=>({sourceHash:'stale'}),f=>{f.record.legacy=true;return{};},f=>{f.record.ports[0]='4000;bad';return{};}]){const f=fixture();await assert.rejects(f.run(change(f)));assert.equal(f.calls.length,0);}
 });
+test('only a valid optional check ID reaches the fixed guest CLI', async () => {
+ const f=fixture();
+ await assert.rejects(f.run({checkId:'x; another command'}),{code:'INVALID_CHECK_ID'});
+ assert.equal(f.calls.length,0);
+ await f.run({kind:'test',checkId:'case-3'});
+ assert.match(f.calls[0].args.command,/'--kind' 'test' '--check-id' 'case-3'$/);
+ assert.equal(f.calls[0].execution,f.execution);
+});

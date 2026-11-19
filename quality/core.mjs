@@ -9,9 +9,16 @@ import privateSource from '../workspace/source-private.cjs';
 import { acquireProcessLock } from '../workspace/process-lock.mjs';
 import {validateBrowserServer} from './browser-server-contract.mjs';
 import {readInspectionDiagnostic} from './browser-server-diagnostic.mjs';
+import {validateCriteria,projectCriteria} from './criteria.mjs';
 const { isPrivateSourcePath } = privateSource;
 
 export const KINDS = ['build', 'test', 'browser', 'acceptance'];
+export const CHECK_ID_PATTERN = '^[a-z][a-z0-9_-]{0,63}$';
+const CHECK_ID = new RegExp(CHECK_ID_PATTERN, 'u');
+export const validCheckId = value => typeof value === 'string' && CHECK_ID.test(value);
+const QUALITY_DIR = '.harness/quality';
+const FULL_REPORT = QUALITY_DIR + '/latest.json';
+const targetedDirectory = runId => QUALITY_DIR + '/targeted/' + runId;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const IGNORED = new Set(['.git', 'node_modules', '.harness', '.harness-quality', '.npmcache', 'dist', 'coverage', 'playwright-report', 'test-results']);
 export class QualityError extends Error {
@@ -40,14 +47,14 @@ export async function readJson(root, relative) {
 }
 
 export function validateContract(c) {
-  if (c && Object.keys(c).some(k => !['version', 'description', 'sources', 'requiredKinds', 'checks'].includes(k))) throw new QualityError('INVALID_CONTRACT', 'Unknown contract option.');
+  if (c && Object.keys(c).some(k => !['version', 'description', 'sources', 'requiredKinds', 'checks', 'criteria'].includes(k))) throw new QualityError('INVALID_CONTRACT', 'Unknown contract option.');
   if (!c || c.version !== 1 || !Array.isArray(c.sources) || !c.sources.length || c.sources.length > 128 || c.sources.some(s => typeof s !== 'string')) throw new QualityError('INVALID_CONTRACT', 'Declare version 1 and a nonempty sources list.');
   if (!Array.isArray(c.requiredKinds) || !c.requiredKinds.length || new Set(c.requiredKinds).size !== c.requiredKinds.length || c.requiredKinds.some(k => !KINDS.includes(k))) throw new QualityError('INVALID_CONTRACT', 'Declare unique requiredKinds.');
   if (!Array.isArray(c.checks) || !c.checks.length || c.checks.length > 32) throw new QualityError('INVALID_CONTRACT', 'Declare 1–32 checks.');
   const ids = new Set();
   for (const check of c.checks) {
     if (check && Object.keys(check).some(k => !['id','kind','command','plan','timeoutMs','cwd','env','artifacts','resultFile','server'].includes(k))) throw new QualityError('INVALID_CHECK', 'Unknown check option.');
-    if (!check || !/^[a-z][a-z0-9_-]{0,63}$/u.test(check.id) || ids.has(check.id) || !KINDS.includes(check.kind)) throw new QualityError('INVALID_CHECK', 'Checks need a unique id and supported kind.');
+    if (!check || !validCheckId(check.id) || ids.has(check.id) || !KINDS.includes(check.kind)) throw new QualityError('INVALID_CHECK', 'Checks need a unique id and supported kind.');
     ids.add(check.id);
     if (check.kind === 'browser') {
       if (typeof check.plan !== 'string' || check.command !== undefined) throw new QualityError('INVALID_BROWSER_CHECK', 'Browser checks use the real built-in driver and a plan, never a replacement command.');
@@ -66,6 +73,7 @@ export function validateContract(c) {
     }
   }
   for (const kind of c.requiredKinds) if (!c.checks.some(x => x.kind === kind)) throw new QualityError('MISSING_REQUIRED_CHECK', `No ${kind} check was declared.`);
+  validateCriteria(c.criteria, c.checks);
   return c;
 }
 
@@ -122,13 +130,16 @@ export async function runProgram(command, { cwd, env = process.env, signal, time
   });
 }
 
-export async function verifyProject({ workspace, contractPath = '.harness-quality.json', kind = 'all', signal, run = runProgram, env = process.env, budgetMs = 110000,serverControl } = {}) {
+export async function verifyProject({ workspace, contractPath = '.harness-quality.json', kind = 'all', checkId, signal, run = runProgram, env = process.env, budgetMs = 110000,serverControl } = {}) {
+  const targeted = checkId !== undefined;
+  if (targeted && !validCheckId(checkId)) throw new QualityError('INVALID_CHECK_ID', 'Use an existing check ID from the quality contract.');
   const root = await fs.realpath(workspace);
   if (kind !== 'all' && !KINDS.includes(kind)) throw new QualityError('INVALID_KIND', 'Unknown verification kind.');
   const contract = validateContract(await readJson(root, contractPath));
-  const selected = contract.checks.filter(c => kind === 'all' || c.kind === kind);
+  const selected = contract.checks.filter(c => (!targeted || c.id === checkId) && (kind === 'all' || c.kind === kind));
+  if (targeted && !selected.length) throw new QualityError('CHECK_ID_NOT_FOUND', 'No check with that ID matches the requested kind.');
   if (!selected.length) throw new QualityError('NO_CHECKS', 'No checks of that kind were declared.');
-  const outputDir = await confined(root, '.harness/quality', { missing: true }); await fs.mkdir(outputDir, { recursive: true });
+  const outputDir = await confined(root, QUALITY_DIR, { missing: true }); await fs.mkdir(outputDir, { recursive: true });
   const lockPath = path.join(outputDir, 'verification.lock'); let lock;
   try { lock = await acquireProcessLock(lockPath, { timeoutMs: 0, signal }); } catch (e) { if (e.code === 'LOCK_BUSY') throw new QualityError('VERIFICATION_BUSY', 'A verification already owns this project.'); throw e; }
   try {
@@ -137,13 +148,36 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
     for (const check of contract.checks) if (check.plan !== undefined) await confined(root, check.plan, { missing: true });
     const inputs = [...contract.sources, contractPath, ...selected.filter(c => c.plan).map(c => c.plan)];
     const before = await fingerprint(root, inputs), startedAt = Date.now(), runId = crypto.randomUUID(), results = [];
+    const evidenceDir = targeted ? targetedDirectory(runId) : QUALITY_DIR;
+    if (targeted) {
+      // Legacy reports could link the producer's mutable resultFile directly.
+      // Keep that proof in place until an ordinary run writes a snapshot.
+      const resultFile = selected[0].resultFile;
+      if (resultFile) {
+        const producerOutput = await confined(root, resultFile, { missing: true });
+        const relative = path.relative(outputDir, producerOutput).split(path.sep).join('/');
+        const reserved = /^(?:targeted|structured|screenshots)(?:\/|$)|^(?:latest\.json|verification\.lock|[^/]+(?:\.log|-browser\.json))$/iu;
+        if (inside(outputDir, producerOutput) && (!relative || reserved.test(relative)))
+          throw new QualityError('TARGETED_OUTPUT_RESERVED', 'Custom results must not write to a verifier-owned evidence path.');
+        const latest = await readJson(root, FULL_REPORT).catch(error => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+        if (latest?.results?.some(result => result.artifactPaths?.some(file => path.resolve(root, file) === producerOutput)))
+          throw new QualityError('TARGETED_LEGACY_EVIDENCE', 'An ordinary verification must first snapshot the previous custom result evidence.');
+      }
+      const parent = await confined(root, QUALITY_DIR + '/targeted', { missing: true });
+      await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+      await fs.mkdir(await confined(root, evidenceDir, { missing: true }), { mode: 0o700 });
+    }
     for (const check of selected) {
       signal?.throwIfAborted();
       const start = Date.now(), diagnostics = [], secondaryDiagnostics = []; let measured = { passed: 0, failed: 1 }, countsMeasured = false, artifacts = [], result, evidenceErrorCode, inspection;
       const remaining = Math.min(startedAt+budgetMs,serverControl?.deadline??Infinity)-start;
       if (remaining < 100) { results.push({ id: check.id, kind: check.kind, passed: false, exitCode: null, checksPassed: 0, checksTotal: 1, diagnostics: ['VERIFICATION_BUDGET_EXHAUSTED'], artifactPaths: [] }); break; }
       const cwd = await confined(root, check.cwd ?? '.');
-      const resultFile = check.kind === 'browser' ? `.harness/quality/${check.id}-browser.json` : check.resultFile;
+      const logPath = `${evidenceDir}/${check.id}.log`;
+      const resultFile = check.kind === 'browser' ? `${evidenceDir}/${check.id}-browser.json` : check.resultFile;
       if (resultFile) await confined(root, resultFile, { missing: true });
       const command = check.kind === 'browser' ? [process.execPath, path.join(HERE, 'browser.mjs'), '--workspace', root, '--plan', check.plan, '--output', resultFile, '--run-id', runId] : check.command;
       const deadline=start+Math.min(check.timeoutMs??30000,remaining);let serverStarted=false;
@@ -160,7 +194,7 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
       if (inspection) diagnostics.push(inspection.code);
       if (result.exitCode !== 0 || result.timedOut) diagnostics.push(result.timedOut ? 'CHECK_TIMEOUT' : `EXIT_${result.exitCode ?? 'UNAVAILABLE'}`);
       if (result.error && result.error !== inspection?.code) diagnostics.push(result.error);
-      await fs.writeFile(path.join(outputDir, check.id + '.log'), result.stdout + '\n[stderr]\n' + result.stderr, { mode: 0o600 });
+      await fs.writeFile(await confined(root, logPath, { missing: true }), result.stdout + '\n[stderr]\n' + result.stderr, { mode: 0o600 });
       try {
         if (resultFile) {
           const reportPath = await confined(root, resultFile), stat = await fs.stat(reportPath), data = await readJson(root, resultFile);
@@ -171,32 +205,56 @@ export async function verifyProject({ workspace, contractPath = '.harness-qualit
           for (const failed of data.results?.filter(r => !r.passed) ?? []) diagnostics.push([failed.code ?? failed.name ?? 'ASSERTION_FAILED', failed.detail].filter(Boolean).join(': ').slice(0,500));
           if (check.kind === 'browser' && (data.engine !== 'chromium' || !data.screenshots?.length)) throw new QualityError('BROWSER_EVIDENCE_MISSING', 'A real Chromium run and screenshots are required.');
           for (const artifact of data.screenshots ?? []) { await confined(root, artifact.path); artifacts.push(artifact.path); }
-          artifacts.push(resultFile);
+          if (check.kind === 'browser') artifacts.push(resultFile);
+          else {
+            const snapshot = `${targeted ? evidenceDir : QUALITY_DIR + '/structured/' + runId}/${check.id}-result.json`;
+            const destination = await confined(root, snapshot, { missing: true });
+            await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+            await fs.writeFile(destination, JSON.stringify(data), { flag: 'wx', mode: 0o600 });
+            artifacts.push(snapshot);
+          }
         } else if (check.kind === 'test' || check.kind === 'acceptance') {
           const counts = parseTestCounts(result.stdout + '\n' + result.stderr);
           countsMeasured = counts !== null; measured = counts ?? { passed: 0, failed: 1 };
         } else { measured = { passed: result.exitCode === 0 ? 1 : 0, failed: result.exitCode === 0 ? 0 : 1 }; countsMeasured = Number.isInteger(result.exitCode); }
         if (!measured.passed) diagnostics.push('NO_POSITIVE_CHECKS');
         if (measured.failed) diagnostics.push(`FAILED_ASSERTIONS_${measured.failed}`);
-        for (const artifact of check.artifacts ?? []) { const p = await confined(root, artifact); if (!(await fs.stat(p)).isFile()) throw new QualityError('ARTIFACT_MISSING', 'Expected a regular output file.'); artifacts.push(artifact); }
+        for (const artifact of check.artifacts ?? []) {
+          const p = await confined(root, artifact);
+          if (!(await fs.stat(p)).isFile()) throw new QualityError('ARTIFACT_MISSING', 'Expected a regular output file.');
+          if (!resultFile || p !== path.resolve(root, resultFile)) artifacts.push(artifact);
+        }
       } catch (e) { evidenceErrorCode = e.code;if(inspection)secondaryDiagnostics.push(/^[A-Z][A-Z0-9_]{1,63}$/.test(e.code??'')?e.code:'EVIDENCE_UNAVAILABLE');else diagnostics.push(e.code ?? e.message); }
       const passed = !diagnostics.length;
       const inspectionRecoveryCode=inspection&&({BROWSER_SERVER_PORTS_UNAVAILABLE:'PORT_UNAVAILABLE',BROWSER_SERVER_IPV4_REQUIRED:'INVALID_BROWSER_URL',BROWSER_SERVER_UNDECLARED:'INVALID_BROWSER_CHECK',BROWSER_SERVER_INSPECTION_FAILED:'QUALITY_RUNNER_FAILED'}[inspection.code]??inspection.code);
       const recovery = classifyToolOutcome({ kind: check.kind, exitCode: result.exitCode, isError: !passed, timedOut: result.timedOut, aborted: result.aborted, errorCode: inspectionRecoveryCode??evidenceErrorCode,
         text: result.stdout + '\n' + result.stderr + '\n' + diagnostics.join('\n') });
-      results.push({ id: check.id, kind: check.kind, passed, category: recovery.category, diagnosticCode: recovery.code, ...(inspection?{primaryDiagnosticCode:inspection.code,inspection,secondaryDiagnostics}:{}), exitCode: result.exitCode, durationMs: Date.now() - start, checksPassed: measured.passed, checksTotal: measured.passed + measured.failed, countsMeasured, outputTruncated: result.truncated, diagnostics: diagnostics.slice(0,8), artifactPaths: artifacts, logPath: `.harness/quality/${check.id}.log` });
+      results.push({ id: check.id, kind: check.kind, passed, category: recovery.category, diagnosticCode: recovery.code, ...(inspection?{primaryDiagnosticCode:inspection.code,inspection,secondaryDiagnostics}:{}), exitCode: result.exitCode, durationMs: Date.now() - start, checksPassed: measured.passed, checksTotal: measured.passed + measured.failed, countsMeasured, outputTruncated: result.truncated, diagnostics: diagnostics.slice(0,8), artifactPaths: artifacts, logPath });
     }
     const after = await fingerprint(root, inputs), stale = before.hash !== after.hash;
     if (stale) for (const r of results) { r.passed = false; r.diagnostics.push('SOURCE_CHANGED_DURING_VERIFICATION'); }
     const passed = results.length === selected.length && results.every(r => r.passed);
-    const verifiedKinds = [...new Set(results.filter(r => r.passed).map(r => r.kind))].filter(k => results.filter(r => r.kind === k).every(r => r.passed));
-    const report = { version: 1, runId, startedAt, finishedAt: Date.now(), sourceHash: after.hash, initialSourceHash: before.hash, contractHash: digest(JSON.stringify(contract)), stale, passed, complete: passed && contract.requiredKinds.every(k => verifiedKinds.includes(k)), verifiedKinds, missingKinds: contract.requiredKinds.filter(k => !verifiedKinds.includes(k)), results };
-    const temp = path.join(outputDir, runId + '.json'); await fs.writeFile(temp, JSON.stringify(report, null, 2), { mode: 0o600 }); await fs.rename(temp, path.join(outputDir, 'latest.json'));
+    const verifiedKinds = targeted ? [] : [...new Set(results.filter(r => r.passed).map(r => r.kind))].filter(k => results.filter(r => r.kind === k).every(r => r.passed));
+    const report = { version: 1, runId, startedAt, finishedAt: Date.now(), sourceHash: after.hash, initialSourceHash: before.hash, contractHash: digest(JSON.stringify(contract)), stale, passed, complete: !targeted && passed && contract.requiredKinds.every(k => verifiedKinds.includes(k)), verifiedKinds, missingKinds: contract.requiredKinds.filter(k => !verifiedKinds.includes(k)), ...(targeted ? {checkId} : {}), results };
+    report.criteria = projectCriteria(contract, report, after.hash);
+    const reportPath = targeted ? evidenceDir + '/report.json' : FULL_REPORT;
+    const temp = path.join(root, evidenceDir, runId + '.tmp');
+    signal?.throwIfAborted();
+    const handle = await fs.open(temp, 'wx', 0o600);
+    try {
+      try { await handle.writeFile(JSON.stringify(report, null, 2)); }
+      finally { await handle.close(); }
+      signal?.throwIfAborted();
+      await fs.rename(temp, path.join(root, reportPath));
+    } finally {
+      await fs.unlink(temp).catch(error => { if (error.code !== 'ENOENT') throw error; });
+    }
     return report;
   } finally { await lock.release(); }
 }
 
 export function compactReport(report) {
-  return { passed: report.passed, complete: report.complete, stale: report.stale, sourceHash: report.sourceHash, missingKinds: report.missingKinds, checks: report.results.map(r => ({ id: r.id, kind: r.kind, passed: r.passed, category: r.category, diagnosticCode: r.diagnosticCode, ...(r.inspection?{primaryDiagnosticCode:r.primaryDiagnosticCode,inspection:r.inspection,secondaryDiagnostics:r.secondaryDiagnostics}:{}), checksPassed: r.checksPassed, checksTotal: r.checksTotal, countsMeasured: r.countsMeasured === true, diagnostics: r.diagnostics, logPath: r.logPath, artifactPaths: r.artifactPaths })), reportPath: '.harness/quality/latest.json' };
+  const targeted = report.checkId !== undefined;
+  return { passed: report.passed, complete: report.complete, stale: report.stale, sourceHash: report.sourceHash, missingKinds: report.missingKinds, criteria: report.criteria ?? [], ...(report.contractHash ? {contractHash: report.contractHash} : {}), ...(targeted ? {checkId: report.checkId, runId: report.runId} : {}), checks: report.results.map(r => ({ id: r.id, kind: r.kind, passed: r.passed, category: r.category, diagnosticCode: r.diagnosticCode, ...(r.inspection?{primaryDiagnosticCode:r.primaryDiagnosticCode,inspection:r.inspection,secondaryDiagnostics:r.secondaryDiagnostics}:{}), checksPassed: r.checksPassed, checksTotal: r.checksTotal, countsMeasured: r.countsMeasured === true, diagnostics: r.diagnostics, logPath: r.logPath, artifactPaths: r.artifactPaths, ...(!r.passed && !report.stale ? {retry: {checkId: r.id}} : {}) })), reportPath: targeted ? targetedDirectory(report.runId) + '/report.json' : FULL_REPORT };
 }
 

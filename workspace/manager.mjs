@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import {finalizeCriteria,visibleCriteria} from '../quality/criteria.mjs';
+import {readJson,validateContract} from '../quality/core.mjs';
 import path from 'node:path';
 import net from 'node:net';
 import crypto from 'node:crypto';
@@ -317,6 +319,8 @@ export class WorkspaceManager {
   async drainToolResults(id) { await this.resultWork.get(id); }
   async toolResult(exec, result, verificationKind, receipt) {
     const id=exec.agent?.id,record = this.data.sessions[id]; if (!record) return;
+    // A single check is diagnostic evidence, never an observation of the whole kind.
+    if (exec.name === 'verify_project' && (exec.arguments?.checkId !== undefined || result.value?.checkId !== undefined)) return;
     const automatic=this.budgets.get(id)?.automatic;
     if(exec.name==='verify_project'&&typeof exec.callId==='string'&&exec.callId.length>0&&automatic?.accountedCallId===exec.callId)return;
     if(!receipt&&automaticReceipt(this,exec,result)){
@@ -380,12 +384,22 @@ export class WorkspaceManager {
       budget.observe({ exitCode, text, isError: result.isError, recovery, operationScope }, this.settings(exec.agent.session).noProgressLimit);
       record.budget = budget; await this.save(); return;
     }
+    const matchingCriteria = structured && typeof exec.callId === 'string' && exec.callId.length > 0 &&
+      record.lastVerification?.verificationCallId === exec.callId && Array.isArray(value?.criteria) && value.criteria.length > 0;
     let manifest;
-    if (recovery.verification) try { manifest = await sourceManifest(record.root, { signal: exec.signal }); } catch (error) { record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
+    if (recovery.verification || matchingCriteria) try { manifest = await sourceManifest(record.root, { signal: exec.signal }); } catch (error) { if (recovery.verification) record.checkpointError = error.code ?? 'CHECKPOINT_FAILED'; }
     if(exec.signal?.aborted)return;
     const proofHash = structured ? value?.stale === false && value?.sourceHash === manifest?.sha256 && (!automatic?.activeCallId||automatic.activeCallId!==exec.callId||automatic.operation?.sourceHash===value.sourceHash) ? manifest?.sha256 : undefined
       : this.budgets.get(exec.agent.id)?.automatic ? undefined : manifest?.sha256;
     if (structured && record.lastVerification && !proofHash) record.lastVerification.accepted = false;
+    if (matchingCriteria) {
+      const moved = manifest && value.sourceHash && manifest.sha256 !== value.sourceHash;
+      const pending = record.lastVerification;
+      const bound = proofHash && proofHash === pending.sourceHash &&
+        typeof pending.criteriaContractHash === 'string' && value.contractHash === pending.criteriaContractHash;
+      record.lastVerification.criteria = finalizeCriteria(value, {projectSourceHash:record.lastVerification.sourceHash,
+        outcome:moved || value.stale ? 'stale' : bound && value.criteriaConfirmed === true && !result.isError ? 'current' : 'unknown'});
+    }
     const budget = this.budgets.get(exec.agent.id);
     const ownedReview = structured && typeof exec.callId === 'string' && automatic?.activeCallId === exec.callId;
     const finalRepair = ownedReview && automatic.operation?.repairFinal && automatic.repairAllowance;
@@ -452,13 +466,30 @@ export class WorkspaceManager {
       if (!keep.has(candidate)) await fs.rm(candidate, { recursive: true, force: true });
     }
   }
-  async review(id, { includeSourceSnapshot = false } = {}) {
+  async review(id, { includeSourceSnapshot = false, signal } = {}) {
     const agent = this.ctx.agents.get(id), owner = agent ? this.ownerAgent(agent) : undefined, record = this.data.sessions[owner?.id ?? id];
     if (!record) return undefined;
-    const restoreRecovery = await this.checkpointRecovery(owner?.id ?? id); const manifest = restoreRecovery.pending ? null : await sourceManifest(record.root);
+    const restoreRecovery = await this.checkpointRecovery(owner?.id ?? id); const manifest = restoreRecovery.pending ? null : await sourceManifest(record.root,{signal});
     return { root: record.root, legacy: Boolean(record.legacy), sourceHash: manifest?.sha256 ?? null,
       ...(includeSourceSnapshot && manifest ? {sourceSnapshot:{files:manifest.files,inventory:manifest.inventory}} : {}),
       restoreRecovery, beforeRestore: record.beforeRestoreInfo ?? restoreRecovery.beforeRestore, budget: record.budget, checkpoints: record.checkpoints, ports: record.ports, databasePath: record.databasePath };
+  }
+  async verificationCriteria(id, signal) {
+    const record = this.data.sessions[id];
+    if (!record || record.legacy || this.data.trash[id]) return [];
+    const root = record.root;
+    return this.checked(async () => {
+      const contract = await readJson(root, '.harness-quality.json').then(validateContract).catch(error => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (!contract?.criteria?.length) return [];
+      signal?.throwIfAborted();
+      const observed = await this.review(id, {signal});
+      signal?.throwIfAborted();
+      if (this.data.sessions[id] !== record || record.root !== root || observed?.root !== root || this.data.trash[id]) return [];
+      return visibleCriteria(contract, record.lastVerification, observed.sourceHash);
+    });
   }
   reconcileAutomatic(id){return reconcileAutomatic(this,id);}
   retainAutomaticProcess(value){return retainAutomaticProcess(this,value);}
@@ -484,6 +515,7 @@ export class WorkspaceManager {
     return {automatic:this.budgets.get(id)?.automatic,blocked:this.budgets.get(id)?.blocked??null,continued:continued===true};
   }
   async reportVerification(report) {
+    if (report.checkId !== undefined) return;
     const agent = this.ctx.agents.get(report.sessionId); if (!agent) throw new WorkbenchError('SESSION_NOT_LIVE', 'A live conversation is required to record verification.');
     if (!['test', 'build', 'browser', 'acceptance', 'all'].includes(report.kind) || !Number.isInteger(report.exitCode)) throw new WorkbenchError('INVALID_VERIFICATION', 'Invalid structured verification result.', 400);
     const owner = this.ownerAgent(agent), record = this.data.sessions[owner.id]; if (!record) throw new WorkbenchError('PROJECT_NOT_READY', 'Project isolation is not ready.');
@@ -497,7 +529,10 @@ export class WorkspaceManager {
     // The final SDK outcome is authoritative for the single repair budget.
     // This internal report only records source-checked evidence; an admission or
     // final policy failure must never be counted twice or earn a stage pass.
-    record.lastVerification = { kind: report.kind, exitCode: report.exitCode, at: Date.now(), sourceHash: report.sourceHash, checksPassed: report.checksPassed, checksTotal: report.checksTotal, accepted: false }; await this.save();
+    record.lastVerification = { kind: report.kind, exitCode: report.exitCode, at: Date.now(), sourceHash: report.sourceHash, checksPassed: report.checksPassed, checksTotal: report.checksTotal, accepted: false,
+      verificationCallId:typeof report.verificationCallId === 'string' && report.verificationCallId.length <= 256 ? report.verificationCallId : undefined,
+      criteriaContractHash:/^[a-f0-9]{64}$/u.test(report.criteriaReport?.contractHash ?? '') ? report.criteriaReport.contractHash : undefined,
+      criteria:finalizeCriteria(report.criteriaReport,{projectSourceHash:report.sourceHash,outcome:'unknown'}) }; await this.save();
   }
   async releaseIfIdle(id) {
     const automatic = this.budgets?.get(id)?.automatic;
@@ -600,9 +635,14 @@ export class WorkspaceManager {
     }
     finally { if (write) await this.locks.release(owner); }
   }
-  async files(id, operation, args, signal) {
+  async files(id, operation, args, signal, { presented = false } = {}) {
     return this.withFiles(id, async (root, policy) => {
-      const relative = args.path === '' && operation === 'list' ? '' : relativeFile(args.path);
+      let filePath = args.path;
+      if (operation === 'download' && presented) {
+        if (!path.isAbsolute(filePath) || !within(root, filePath)) throw new WorkbenchError('OUTSIDE_PROJECT', 'Presented file is outside the project.', 403);
+        filePath = path.relative(root, filePath).split(path.sep).join('/');
+      }
+      const relative = filePath === '' && operation === 'list' ? '' : relativeFile(filePath);
       const file = await this.checked(() => canonicalInside(root, relative, ['write', 'mkdir', 'upload'].includes(operation)));
       if (operation === 'list') {
         const entries = await fs.readdir(file, { withFileTypes: true }); return { path: relative, entries: entries.filter(e => !['.git', '.harness'].includes(e.name)).slice(0,1000).map(e => ({ name: e.name, directory: e.isDirectory(), symlink: e.isSymbolicLink() })) };

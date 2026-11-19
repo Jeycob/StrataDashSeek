@@ -10,6 +10,7 @@ import {createOwnPeerConnector} from './host-peer-connector.mjs';
 import {createPreviewRelay} from './host-preview-relay.mjs';
 import {projectBackgroundSchema} from './project-process.mjs';
 import {hasOwnedRangeProvider} from './owned-range-state.mjs';
+import {previewSnapshotPosition,snapshotOwnedPreview} from './preview-snapshot.mjs';
 import {previewResults} from './host-preview-results.mjs';
 const {EditorOrigins}=createRequire(import.meta.url)('./editor-origins.cjs');
 const {createEditorBroker}=createRequire(import.meta.url)('./editor-broker.cjs');
@@ -36,7 +37,7 @@ export function previewSettings(config){
  }catch{return null;}
 }
 async function bindBroker(broker,endpoint){await new Promise((resolve,reject)=>{broker.server.once('error',reject);broker.server.listen(endpoint.listenerPort,'127.0.0.1',()=>{broker.server.removeListener('error',reject);resolve();});});}
-const defaults={supported:previewSupported,uid:()=>process.getuid(),connector:createOwnPeerConnector,relay:createPreviewRelay,broker:createEditorBroker,origins:(file,config)=>new EditorOrigins(file,config),bind:bindBroker,now:Date.now,operationMs:10000};
+const defaults={supported:previewSupported,uid:()=>process.getuid(),connector:createOwnPeerConnector,relay:createPreviewRelay,broker:createEditorBroker,origins:(file,config)=>new EditorOrigins(file,config),bind:bindBroker,snapshot:snapshotOwnedPreview,now:Date.now,operationMs:10000};
 
 // Trusted source-test factories are never supplied by plugin/browser config.
 export function createHostPreview(ctx,manager,run,config,binding=manager.execution??ctx.projectExecutionMode,trusted={}){
@@ -224,9 +225,9 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
   }finally{pendingReopens.delete(sessionId);}
  }
  async function operation(input,{agent,ownerControl=false,signal}={}){
-  check();need(input&&typeof input==='object'&&!Array.isArray(input)&&['open','status','close','restart','reopen'].includes(input.operation),'PREVIEW_REQUEST_INVALID');
-  const allowed={open:['operation','sessionId','jobId'],status:['operation','sessionId'],close:['operation','sessionId'],restart:['operation','sessionId','previewId','generation','requestId'],reopen:['operation','sessionId','resultId']}[input.operation];need(Object.keys(input).every(key=>allowed.includes(key)),'PREVIEW_REQUEST_INVALID');
-  if(!ownerControl)need(input.sessionId===undefined&&!['restart','reopen'].includes(input.operation)&&agent,'PREVIEW_REQUEST_INVALID');
+  check();need(input&&typeof input==='object'&&!Array.isArray(input)&&['open','status','close','restart','reopen','snapshot'].includes(input.operation),'PREVIEW_REQUEST_INVALID');
+  const allowed={open:['operation','sessionId','jobId'],status:['operation','sessionId'],close:['operation','sessionId'],restart:['operation','sessionId','previewId','generation','requestId'],reopen:['operation','sessionId','resultId'],snapshot:['operation','sessionId','previewId','generation','layout','route','scrollY']}[input.operation];need(Object.keys(input).every(key=>allowed.includes(key)),'PREVIEW_REQUEST_INVALID');
+  if(!ownerControl)need(input.sessionId===undefined&&!['restart','reopen','snapshot'].includes(input.operation)&&agent,'PREVIEW_REQUEST_INVALID');
   const sessionId=ownerControl?input.sessionId:manager.ownerAgent(agent)?.id;need(ID.test(sessionId??''),'PREVIEW_SESSION_INVALID');
   if(input.operation==='close'){const current=entries.get(sessionId);if(ownerControl)pendingReopens.get(sessionId)?.abort();if(current&&(ownerControl||current.owner===agent?.id))revoke(current);}
   return ordered(sessionId,async()=>{
@@ -237,6 +238,23 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
    if(input.operation==='open'){need(typeof input.jobId==='string'&&input.jobId.length<=256,'PREVIEW_JOB_REQUIRED');return bounded(s=>open(sessionId,input.jobId,access,s),f.now()+f.operationMs,signal);}
    if(input.operation==='restart'){need(entry,'PREVIEW_NOT_OPEN');return restart(entry,input,signal);}
    if(input.operation==='reopen')return reopen(sessionId,input.resultId,entry,signal);
+   if(input.operation==='snapshot'){
+    need(entry?.state==='ready'&&entry.id===input.previewId&&entry.generation===input.generation&&
+     ['mobile','desktop'].includes(input.layout),'PREVIEW_SNAPSHOT_BINDING_CHANGED');
+    const position=previewSnapshotPosition(input.route,input.scrollY);
+    await validateEntry(entry);
+    const capture=entry.capture,target=entry.target;
+    const assertCurrent=()=>{
+     assertEntry(entry);
+     need(entry.capture===capture&&entry.target===target&&!target.signal.aborted,'PREVIEW_SNAPSHOT_BINDING_CHANGED');
+    };
+    const image=await bounded(s=>f.snapshot({
+     socketPath:entry.relay.socketPath,origin:entry.endpoint.origin,layout:input.layout,
+     ...position,signal:s,assertCurrent,
+    }),Math.min(entry.deadline,f.now()+f.operationMs),signal?AbortSignal.any([signal,target.signal]):target.signal);
+    assertCurrent();
+    return {version:1,sessionId,previewId:entry.id,generation:entry.generation,image};
+   }
    const project=await context(sessionId,access);
    if(entry?.state==='ready')await validateEntry(entry);
    const value=entry?(ownerControl?ownerStatus(entry):view(entry)):{version:1,sessionId,state:'closed',workSettled:true};

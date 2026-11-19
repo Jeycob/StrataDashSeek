@@ -1,7 +1,35 @@
 'use strict';
 const fs=require('node:fs'),MIB=1024**2;
 const fail=(code,details)=>Object.assign(Error(code),{code,status:409,details});
-function amount(value,name){if(!Number.isSafeInteger(value)||value<0)throw fail('DEPLOYMENT_CAPACITY_UNKNOWN',{field:name});return value;}
+const resources={hostBytes:'host',guestBytes:'guest',hostInodes:'host',guestInodes:'guest',memoryBytes:null};
+const known=value=>Number.isSafeInteger(value)&&value>=0;
+// Public job projection only. Never copy arbitrary error text, paths or details.
+function capacityDiagnosticFor(error){
+ const code=error?.code;
+ if(code!=='DEPLOYMENT_CAPACITY_INSUFFICIENT'&&code!=='DEPLOYMENT_CAPACITY_UNKNOWN')return;
+ const unknown={version:1,code,reason:'unknown',items:[]};
+ if(code==='DEPLOYMENT_CAPACITY_UNKNOWN'){
+  const field=error.details?.field;
+  if(typeof field!=='string')return unknown;
+  if(Object.hasOwn(resources,field)){
+   const item={resource:field,required:null,available:null,missing:null,observedAt:null};
+   return{...unknown,reason:'measurement_unknown',items:[item]};
+  }
+  return{...unknown,reason:field==='isolated-worker'?'worker_unverified':'budget_unknown'};
+ }
+ const items=[];
+ for(const[resource,sampleSource]of Object.entries(resources)){
+  const row=error.details?.[resource];
+  if(row===undefined)continue;
+  if(!row||![row.required,row.available,row.missing].every(known)||row.available>=row.required||row.missing!==row.required-row.available)return unknown;
+  const observed=sampleSource===null?null:error.capacityObservedAt?.[sampleSource];
+  const observedAt=known(observed)&&observed>0&&observed<=8640000000000000?observed:null;
+  const{required,available,missing}=row;
+  items.push({resource,required,available,missing,observedAt});
+ }
+ return items.length?{...unknown,reason:'insufficient',items}:unknown;
+}
+function amount(value,name){if(!known(value))throw fail('DEPLOYMENT_CAPACITY_UNKNOWN',{field:name});return value;}
 function budget({images,auxiliaryImages=[],candidateMemoryMiB,existingMemoryMiB,testMemoryMiB=512,sourceBytes,dataBytes=0,sourceFiles=0,containerCount=1,hostReserveBytes=2*1024**3,guestReserveBytes=512*MIB}={}){
  if(!Array.isArray(images)||!images.length||images.length>8)throw fail('DEPLOYMENT_CAPACITY_UNKNOWN',{field:'images'});
  let imageBytes=0,imageInodes=0;for(const image of images){if(!/^sha256:[a-f0-9]{64}$/.test(image?.Id||''))throw fail('DEPLOYMENT_CAPACITY_UNKNOWN',{field:'imageId'});const size=amount(image.Size,'image.Size'),inodes=amount(image.InodeCount,'image.InodeCount');if(!size||!inodes)throw fail('DEPLOYMENT_CAPACITY_UNKNOWN',{field:'image.footprint'});imageBytes+=size;imageInodes+=inodes;}
@@ -33,8 +61,15 @@ async function verifyCapacity(manager,job,options){
  const required=budget({...options,hostReserveBytes:manager.cfg.minFreeBytes??2*1024**3});
  const worker=manager.worker,status=worker?.status();
  if(!worker||status?.phase!=='ready'||status.controlIsolation?.verified!==true)throw fail('DEPLOYMENT_CAPACITY_UNKNOWN',{field:'isolated-worker'});
- const guestBytes=await worker.diskFree(),host=fs.statfsSync(manager.cfg.stateDir),profile=worker.status().profile;
+ const guestBytes=await worker.diskFree(),guestObservedAt=worker.diskCheckedAt;
+ const host=fs.statfsSync(manager.cfg.stateDir),hostObservedAt=Date.now(),profile=worker.status().profile;
  const sample={guestBytes,guestInodes:worker.freeInodes,hostBytes:host.bavail*host.bsize,hostInodes:host.ffree,memoryBytes:profile?.memoryMiB*MIB};
- const proof=admit(required,sample);manager.log(job,'Deployment capacity admitted: '+JSON.stringify(proof)+'\n');return proof;
+ let proof;
+ try{proof=admit(required,sample);}
+ catch(error){
+  if(error.code==='DEPLOYMENT_CAPACITY_INSUFFICIENT')error.capacityObservedAt={host:hostObservedAt,guest:guestObservedAt};
+  throw error;
+ }
+ manager.log(job,'Deployment capacity admitted: '+JSON.stringify(proof)+'\n');return proof;
 }
-module.exports={budget,admit,verifyCapacity};
+module.exports={budget,admit,verifyCapacity,capacityDiagnosticFor};

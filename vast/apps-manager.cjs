@@ -2,6 +2,7 @@
 const fs=require('node:fs'),fsp=require('node:fs/promises'),path=require('node:path'),crypto=require('node:crypto'),cp=require('node:child_process');
 const {DockerEngine,LABEL}=require('./apps-engine.cjs');
 const {startManagedContainer,assertStartOutcomesKnown,diagnosticFor}=require('./apps-managed-resources.cjs');
+const {capacityDiagnosticFor}=require('./apps-deployment-capacity.cjs');
 const {projectAt,snapshot,inside}=require('./apps-project.cjs');
 const {StringDecoder}=require('node:string_decoder');
 const {DockerVM}=require('./apps-vm.cjs');
@@ -86,7 +87,7 @@ class AppsManager {
  jobLog(id){if(!/^[a-f0-9]{16}$/.test(id)||!this.store.jobs.some(j=>j.id===id))throw Object.assign(Error('Unknown job'),{status:404});const file=path.join(this.cfg.stateDir,id+'.log');return fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';}
  enqueue(id,action){this.requireEnabled();const p=this.project(id);if(!['build','deploy','check'].includes(action))throw Error('Invalid project action');if(this.busy)throw Object.assign(Error('Another application operation is running'),{status:409});this.acceptActivity();
   const job={id:crypto.randomBytes(8).toString('hex'),projectId:id,action,status:'queued',startedAt:Date.now()};this.setBusy(job.id);this.store.jobs.push(job);this.save();
-  queueMicrotask(async()=>{job.status='running';this.save();try{assertAppsExecution(this);if(action==='build')await require('./apps-cleanup.cjs').ensureCapacity(this,0,job);await this.ready();const project=await projectAt(p.path,this.cfg);if(project.id!==id)throw Error('Project path changed');if(action==='build')await this.build(project,job);else if(action==='deploy')await this.deploy(project,job);else await this.check(project,job);job.status='passed';}catch(e){job.resourceDiagnostic=diagnosticFor(e);job.status='failed';job.error=redact(e.message,this.redactions?.get(job.id)||[]);this.log(job,'\nERROR: '+job.error+'\n');}finally{try{await this.worker?.remember();}catch(e){this.log(job,'Worker state warning: '+e.message+'\n');}this.redactions?.delete(job.id);job.endedAt=Date.now();this.setBusy(null);this.save();}});
+  queueMicrotask(async()=>{job.status='running';this.save();try{assertAppsExecution(this);if(action==='build')await require('./apps-cleanup.cjs').ensureCapacity(this,0,job);await this.ready();const project=await projectAt(p.path,this.cfg);if(project.id!==id)throw Error('Project path changed');if(action==='build')await this.build(project,job);else if(action==='deploy')await this.deploy(project,job);else await this.check(project,job);job.status='passed';}catch(e){job.resourceDiagnostic=diagnosticFor(e);job.capacityDiagnostic=capacityDiagnosticFor(e);job.status='failed';job.error=redact(e.message,this.redactions?.get(job.id)||[]);this.log(job,'\nERROR: '+job.error+'\n');}finally{try{await this.worker?.remember();}catch(e){this.log(job,'Worker state warning: '+e.message+'\n');}this.redactions?.delete(job.id);job.endedAt=Date.now();this.setBusy(null);this.save();}});
   return job;
  }
  async build(p,job){

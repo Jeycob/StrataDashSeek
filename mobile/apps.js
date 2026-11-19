@@ -588,6 +588,18 @@
   'apps.start_not_published':{en:'Only the currently published generation can be started. Review its release report.',cs:'Spustit lze pouze aktuálně nasazenou generaci. Podrobnosti najdeš ve zprávě nasazení.'},
   'apps.last_completed_deployment':{en:'Last completed deployment: ',cs:'Poslední dokončené nasazení: '}
  });
+ Object.assign(messages,{
+  'apps.capacity.title':{en:'Capacity check failed',cs:'Kontrola kapacity neprošla'},
+  'apps.capacity.saved':{en:'Recorded during this operation’s capacity check. Required values are conservative deployment budgets.',cs:'Hodnoty pocházejí z kontroly kapacity této operace. Požadované hodnoty jsou konzervativní rozpočty nasazení.'},
+  'apps.capacity.hostBytes':{en:'Host disk',cs:'Disk hostu'},'apps.capacity.guestBytes':{en:'Docker guest disk',cs:'Disk Docker guestu'},
+  'apps.capacity.hostInodes':{en:'Host inodes',cs:'Inody hostu'},'apps.capacity.guestInodes':{en:'Docker guest inodes',cs:'Inody Docker guestu'},
+  'apps.capacity.memoryBytes':{en:'Worker memory allocation',cs:'Přidělená paměť workeru'},
+  'apps.capacity.required':{en:'Required budget',cs:'Požadovaný rozpočet'},'apps.capacity.available':{en:'Available',cs:'Dostupné'},'apps.capacity.missing':{en:'Missing',cs:'Chybí'},
+  'apps.capacity.observed':{en:'Observed',cs:'Změřeno'},'apps.capacity.unknown':{en:'Unknown',cs:'Neověřeno'},'apps.capacity.stale':{en:'Observation is out of date',cs:'Měření je zastaralé'},
+  'apps.capacity.measurement_unknown':{en:'Capacity measurements are not confirmed.',cs:'Měření kapacity není potvrzené.'},
+  'apps.capacity.budget_unknown':{en:'The required deployment budget is not known.',cs:'Požadovaný rozpočet nasazení není známý.'},
+  'apps.capacity.worker_unverified':{en:'Docker guest capacity has not been verified.',cs:'Kapacita Docker guestu není ověřená.'}
+ });
  const tApps=key=>messages[key]?.[window.HarnessI18n?.language==='cs'?'cs':'en']||key;
  const appsLocale=()=>window.HarnessI18n?.language==='cs'?'cs-CZ':'en-GB';
 
@@ -783,6 +795,7 @@
  #apps-add,#apps-preview-settings{margin-top:20px;padding:18px;background:white;border:1px solid #dce5e9;border-radius:12px}#apps-add label,#apps-preview-settings summary{font-weight:600}#apps-preview-settings summary{cursor:pointer}#apps-preview-settings p{font-size:13px;color:#64777e}#apps-preview-enabled{width:18px;height:18px;vertical-align:middle;margin:0 8px 0 0}#apps-add>div{display:flex;gap:10px;margin:10px 0}#apps-path{flex:1;min-width:0;max-width:none;letter-spacing:0;font:inherit;padding:10px;border:1px solid #aebbd1;border-radius:8px}#apps-error{color:#a52222;white-space:pre-wrap}
  #harness-apps .apps-project{background:white;border:1px solid #dce5e9;border-radius:12px;padding:18px;margin:12px 0}#harness-apps .apps-project h4{font-size:17px;margin:0 0 6px}#harness-apps .apps-project p{font-size:13px;color:#64777e;overflow-wrap:anywhere}#harness-apps .apps-actions{display:flex;gap:8px;flex-wrap:wrap}#harness-apps .apps-actions a{padding:10px 4px}#harness-apps .apps-project .apps-actions button:first-child{background:#235dd7;color:white;border-color:#235dd7}
  #harness-apps .apps-scroll{overflow:auto}#harness-apps table{width:100%;border-collapse:collapse;background:white;font-size:13px}#harness-apps th,#harness-apps td{text-align:left;border-bottom:1px solid #dce5e9;padding:12px;white-space:nowrap}#harness-apps td button{font-size:12px;margin-right:6px}#apps-log{background:#12202c;color:#deedf4;padding:18px;border-radius:10px;max-height:45vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace}#harness-apps .apps-job{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #dce5e9;padding:10px 0;font-size:13px}#apps-connection{padding:12px 16px;background:white;border-left:4px solid #168b72;border-radius:6px}
+ #harness-apps .apps-capacity-diagnostic{flex-basis:100%;min-width:0;overflow-wrap:anywhere}
  @media(max-width:550px){#harness-apps .apps-head h2{font-size:22px}#apps-add>div{flex-direction:column}#harness-apps .apps-actions button{flex:1}#harness-apps .apps-job{align-items:start}#harness-apps th,#harness-apps td{padding:9px}}
  `;
  panel.innerHTML=panel.innerHTML.replace(/(id|for|aria-labelledby)="([^"]+)"/g,(_,attr,id)=>attr+'="'+prefix+id+'"');
@@ -885,6 +898,53 @@
   const phases={starting:tApps("apps.waking_docker_26386a"),restoring:tApps("apps.restoring_containers_f049e7"),recovering:tApps("apps.reconnecting_to_docker_5a1dc2"),saving:tApps("apps.saving_containers_and_putting_docker_to_slee_edd8c5")};
   setConnectionText(!state.enabled?tApps("apps.docker_is_not_enabled_yet_78cfd8"):managed&&phase==='asleep'?tApps("apps.docker_is_asleep_building_testing_or_opening_e982c4"):phases[phase]||(!state.available?tApps("apps.docker_is_unavailable_2ad119")+(state.error||state.worker?.error||tApps("apps.check_the_connection_aabcf8")):busy?tApps("apps.an_application_operation_is_running_2bd37d"):tApps("apps.docker_is_ready_9d8fb6")));
  }
+ function renderCapacityDiagnostic(job){
+  const diagnostic=job.capacityDiagnostic;
+  const resources=['hostBytes','guestBytes','hostInodes','guestInodes','memoryBytes'];
+  const validAmount=value=>value===null||Number.isSafeInteger(value)&&value>=0;
+  if(!job.error||diagnostic?.version!==1||!['DEPLOYMENT_CAPACITY_INSUFFICIENT','DEPLOYMENT_CAPACITY_UNKNOWN'].includes(diagnostic.code))return;
+  const {items,reason}=diagnostic;
+  if(!Array.isArray(items)||items.length>resources.length||new Set(items.map(item=>item?.resource)).size!==items.length)return;
+  if(items.some(item=>!resources.includes(item?.resource)||![item.required,item.available,item.missing].every(validAmount)))return;
+  const panel=node('div',undefined,'apps-capacity-diagnostic');
+  panel.dataset.appsCapacityDiagnostic=job.id;
+  panel.append(node('strong',tApps('apps.capacity.title')),node('p',tApps('apps.capacity.saved')));
+  if(reason!=='insufficient'){
+   const message=['budget_unknown','worker_unverified'].includes(reason)?reason:'measurement_unknown';
+   panel.append(node('p',tApps('apps.capacity.'+message)));
+  }
+  const locale=appsLocale();
+  for(const {resource,required,available,missing,observedAt} of items){
+   const item=node('p');
+   item.dataset.capacityResource=resource;
+   item.append(node('strong',tApps('apps.capacity.'+resource)));
+   for(const [label,value] of [['required',required],['available',available],['missing',missing]]){
+    let amount=tApps('apps.capacity.unknown');
+    if(value!==null){
+     amount=value.toLocaleString(locale);
+     if(resource.endsWith('Bytes'))amount=(value/1024**3).toLocaleString(locale,{maximumFractionDigits:2})+' GiB ('+amount+' B)';
+    }
+    item.append(node('span',' · '+tApps('apps.capacity.'+label)+': '+amount));
+   }
+   const hasObservation=Number.isSafeInteger(observedAt)&&observedAt>0&&observedAt<=8640000000000000;
+   const observation=hasObservation?new Date(observedAt).toLocaleString(locale):tApps('apps.capacity.unknown');
+   item.append(node('small',' · '+tApps('apps.capacity.observed')+': '+observation));
+   if(hasObservation){
+    const stale=node('small',' · '+tApps('apps.capacity.stale'));
+    stale.dataset.capacityObservedAt=observedAt;
+    item.append(stale);
+   }
+   panel.append(item);
+  }
+  return panel;
+ }
+ function refreshCapacityObservationAge(){
+  const now=Date.now();
+  for(const stale of el('apps-jobs').querySelectorAll('[data-capacity-observed-at]')){
+   const age=now-Number(stale.dataset.capacityObservedAt);
+   stale.hidden=age>=0&&age<=30000;
+  }
+ }
  function render(){
   if(!alive())return;
   const phase=state.worker?.phase,managed=state.worker?.managed,busy=!!state.busy||phase==='saving'||contextInvalid;if(!addPanelInitialized){el('apps-add-panel').open=!embedded&&!state.projects.length;addPanelInitialized=true;}if(view.scope==='project')el('apps-add-panel').hidden=true;
@@ -910,10 +970,21 @@
   }
   const visibleContainers=state.containers.filter(c=>{const p=state.projects.find(p=>p.id===c.projectId);return!p||c.state==='running'||(c.service?c.releaseId===p.releaseId:c.id===p.containerId);});
   const containers=el('apps-containers');containers.replaceChildren();for(const c of visibleContainers){const row=node('tr');row.dataset.appsContainer=c.id;row.append(node('td',(state.projects.find(p=>p.id===c.projectId)?.name||c.name)+(c.service?' / '+c.service:'')),node('td',c.state==='running'?tApps("apps.running_13df22"):status()[c.state]||c.state),node('td',c.ports.map(p=>p.public+' → '+p.private).join(', ')||'—'));const controls=node('td'),power=mutationButton(c.state==='running'?tApps("apps.stop_74083f"):tApps("apps.start_7e4cda"),()=>act('container-action',{id:c.id,action:c.state==='running'?'stop':'start'}),unavailable||busy);if(c.state!=='running')power.dataset.appStartId=c.id;controls.append(button(tApps("apps.logs_0a8f97"),()=>showLog('container',c.id),!state.enabled),power);row.append(controls);containers.append(row);}if(!visibleContainers.length){const row=node('tr'),cell=lnode('td',"apps.no_managed_containers_27f350");cell.colSpan=4;row.append(cell);containers.append(row);}
-  const jobs=el('apps-jobs');jobs.replaceChildren();for(const j of state.jobs.slice().reverse()){const row=node('div',undefined,'apps-job');row.dataset.appsJob=j.id;row.append(node('span',(actionNames()[j.action]||j.action)+' · '+(status()[['recovery_required','promoting','publishing'].includes(j.deploymentPhase)?j.deploymentPhase:j.status]||j.status)+(j.stage?' · '+j.stage:'')+(j.verification==='http-only'?tApps("apps.http_availability_only_fbdc91"):'')+(j.error?' · '+j.error:'')),button(tApps("apps.view_log_186b71"),()=>showLog('job',j.id)));if(j.export&&j.status==='passed'){const a=lnode('a',"apps.download_bundle_33c9b2");a.href=contextURL('export-download?id='+encodeURIComponent(j.id));a.dataset.appExport=a.getAttribute('href');a.onclick=event=>{if(recoveryRequired())event.preventDefault();};a.download=j.export.filename;row.append(a);}jobs.append(row);}if(!state.jobs.length)jobs.append(lnode('p',"apps.no_operations_yet_75f8ec"));applySafety();
+  const jobs=el('apps-jobs');jobs.replaceChildren();
+  for(const j of state.jobs.slice().reverse()){
+   const row=node('div',undefined,'apps-job');row.dataset.appsJob=j.id;
+   row.append(node('span',(actionNames()[j.action]||j.action)+' · '+(status()[['recovery_required','promoting','publishing'].includes(j.deploymentPhase)?j.deploymentPhase:j.status]||j.status)+(j.stage?' · '+j.stage:'')+(j.verification==='http-only'?tApps("apps.http_availability_only_fbdc91"):'')+(j.error?' · '+j.error:'')),button(tApps("apps.view_log_186b71"),()=>showLog('job',j.id)));
+   const diagnostic=renderCapacityDiagnostic(j);
+   if(diagnostic)row.append(diagnostic);
+   if(j.export&&j.status==='passed'){const a=lnode('a',"apps.download_bundle_33c9b2");a.href=contextURL('export-download?id='+encodeURIComponent(j.id));a.dataset.appExport=a.getAttribute('href');a.onclick=event=>{if(recoveryRequired())event.preventDefault();};a.download=j.export.filename;row.append(a);}
+   jobs.append(row);
+  }
+  if(!state.jobs.length)jobs.append(lnode('p',"apps.no_operations_yet_75f8ec"));
+  refreshCapacityObservationAge();applySafety();
  }
  async function refresh({afterMutation=false}={}){
   if(!alive()||document.hidden||(embedded&&options.visible&&!options.visible()))return;
+  refreshCapacityObservationAge();
   if(view.scope==='project'&&!view.sessionId){setConnectionText(ct('select'));renderContext();return;}
   if(loading){if(afterMutation)refreshAfterMutation=true;return;}
   loading=true;const epoch=stateEpoch;

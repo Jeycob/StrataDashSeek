@@ -32,7 +32,7 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,5));
 async function until(check){for(let n=0;n<200;n++){if(await check())return;await tick();}assert.fail('bounded fixture wait');}
 const config={enabled:true,ownerOrigin:'https://same.test',endpoints:[{origin:'https://same.test:8443',listenerPort:18190},{origin:'https://same.test:8444',listenerPort:18191}]};
 const args={command:'node fixture-server.mjs',description:'Start own synthetic app',run_in_background:true,timeoutMs:60000};
-async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=false,bindWait,noAckAt=-1,completionDelivery}={}){
+async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=false,bindWait,noAckAt=-1,completionDelivery,snapshot}={}){
  const S=await sdk(),directory=await fs.mkdtemp(path.join(os.tmpdir(),'host-preview-sdk-')),projects=path.join(directory,'projects'),state=path.join(directory,'state');
  await fs.mkdir(projects);await fs.mkdir(state);
  const ctx=new S.Context();new S.SystemPrompt(ctx,{});new S.Tools(ctx);
@@ -63,7 +63,7 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
  const pipeline=new S.ToolExecutionPipeline(ctx);ctx.tools.setExecutor({describe:defs=>({schemas:defs.map(({name,description,parameters})=>({name,description,parameters}))}),execute:input=>S.executeToolBatch(input,pipeline,()=>1)});
  if(heavy)await applyEfficiency(ctx,{stateDirectory:path.join(directory,'efficiency'),engineMetrics:false});
  let rejectPeer=false;
- const trusted={supported:()=>true,uid:()=>1001,operationMs,
+ const trusted={supported:()=>true,uid:()=>1001,operationMs,...(snapshot?{snapshot}:{}),
   connector({binding,custodyFor}){return{async connect(options){options.signal?.throwIfAborted();const target=await binding();target.assertCurrent();assert(Object.isFrozen(target));const capture=await custodyFor(target.jobId,target.owner);assert.equal(capture.identity.generation,target.generation);targets.push(target);if(rejectPeer)throw Object.assign(Error('foreign peer PRIVATE_MESSAGE_SENTINEL'),{code:'PEER_UNATTRIBUTED',peerDiagnostic:{phase:'peer-proof',dialAttempts:1,established:true,lastConnectCode:null},privateDetail:'PRIVATE_DETAIL_SENTINEL'});let finish;
    if(transport){const socket=new net.Socket();socket.pause();socket.on('error',()=>{});const done=new Promise(resolve=>socket.once('close',resolve));const close=()=>socket.destroy();options.signal?.addEventListener('abort',close,{once:true});target.signal.addEventListener('abort',close,{once:true});void capture.done.then(close);socket.once('close',()=>{options.signal?.removeEventListener('abort',close);target.signal.removeEventListener('abort',close);});await new Promise((resolve,reject)=>{socket.once('error',reject);socket.connect(target.port,'127.0.0.1',resolve);});options.signal?.throwIfAborted();target.assertCurrent();assert.equal(socket.bytesWritten,0);return{socket,done,close};}
    return{socket:{bytesWritten:0},done:new Promise(resolve=>{finish=resolve;}),close(){finish();}};}};},
@@ -236,6 +236,35 @@ test('strict model/control schemas cannot choose a host port, root, URL, PID, se
  const f=await fixture(t),a=await f.agent('owner');
  for(const extra of [{port:3090},{host:'127.0.0.1'},{root:'/data'},{pid:1},{url:'http://127.0.0.1:3090'},{sessionId:'foreign'},{operation:'restart',command:'evil'}])assert.equal((await f.call(a,'project_preview',{operation:'status',...extra})).isError,true);
  for(const extra of [{port:3090},{command:'evil'},{jobId:'foreign'}])await assert.rejects(f.control({operation:'status',sessionId:a.id,...extra}),{code:'PREVIEW_REQUEST_INVALID'});assert.equal(f.targets.length,0);
+});
+test('only owner preview selection can capture its current generation through the existing relay',async t=>{
+ const renders=[], image={width:390,height:720,png:'synthetic',regions:[]};
+ const f=await fixture(t,{snapshot:async input=>{
+  input.assertCurrent();
+  renders.push({socketPath:input.socketPath,origin:input.origin,layout:input.layout,route:input.route,scrollY:input.scrollY});
+  return image;
+ }});
+ const own=await f.agent('owner'),foreign=await f.agent('other'),ready=await open(f,own,await start(f,own));
+ const request={operation:'snapshot',sessionId:own.id,previewId:ready.previewId,generation:ready.generation,
+  layout:'mobile',route:'/catalog/details',scrollY:540};
+ for(const drift of [{sessionId:foreign.id},{generation:'old'},{previewId:'old'}]){
+  await assert.rejects(f.control({...request,...drift}),{code:'PREVIEW_SNAPSHOT_BINDING_CHANGED'});
+ }
+ await assert.rejects(f.control({...request,url:'https://unexpected.test/'}),{code:'PREVIEW_REQUEST_INVALID'});
+ for(const route of ['https://unexpected.test/','//unexpected.test/','/a/../admin','/%2fhost','/__preview/claim','/a?key=private','/a#section','/a\r\n']){
+  await assert.rejects(f.control({...request,route}),{code:'PREVIEW_SNAPSHOT_POSITION_INVALID'});
+ }
+ for(const scrollY of [-1,20001,0.5,'540']){
+  await assert.rejects(f.control({...request,scrollY}),{code:'PREVIEW_SNAPSHOT_POSITION_INVALID'});
+ }
+ assert.equal((await f.call(own,'project_preview',{operation:'snapshot'})).isError,true);
+ assert.deepEqual(renders,[]);
+ assert.deepEqual(await f.control(request),{version:1,sessionId:own.id,previewId:ready.previewId,generation:ready.generation,image});
+ assert.deepEqual(renders,[{socketPath:f.relays[0].socketPath,origin:'https://same.test:8443',layout:'mobile',route:'/catalog/details',scrollY:540}]);
+ assert.equal(f.calls.length,1);
+ await f.control({operation:'close',sessionId:own.id});
+ await assert.rejects(f.control(request),{code:'PREVIEW_SNAPSHOT_BINDING_CHANGED'});
+ assert.equal(renders.length,1);
 });
 test('canonical context, workspace membership and duplicate assigned ports fail before peer connection',async t=>{
  const f=await fixture(t),a=await f.agent('owner'),b=await f.agent('foreign'),id=await start(f,a),record=f.manager.data.sessions[a.id];

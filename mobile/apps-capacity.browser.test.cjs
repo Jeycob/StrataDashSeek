@@ -1,0 +1,26 @@
+'use strict';
+// Actual source Apps DOM with controlled state and real capacity-error projection.
+// Loopback only; no Docker, guest, provider, model or production request.
+const test=require('node:test'),assert=require('node:assert/strict'),http=require('node:http'),fs=require('node:fs'),path=require('node:path');
+const {chromium}=require(process.env.HARNESS_PLAYWRIGHT_MODULE||'playwright');
+const {admit,capacityDiagnosticFor}=require('../vast/apps-deployment-capacity.cjs'),GIB=1024**3,id='a'.repeat(16);
+function diagnostic(at){try{admit({hostBytes:8*GIB,guestBytes:4*GIB,hostInodes:100,guestInodes:100,memoryBytes:GIB},{hostBytes:2*GIB,guestBytes:GIB,hostInodes:100,guestInodes:100,memoryBytes:GIB});}catch(error){error.capacityObservedAt={host:at,guest:at};return capacityDiagnosticFor(error);}throw Error('Expected controlled deficit');}
+for(const language of ['en','cs'])for(const width of [1280,390])test(`capacity job error ${language} ${width}: separate recorded host/guest deficits, stale and unknown without effects`,{timeout:20000},async t=>{
+ const at=Date.now(),state={enabled:false,available:false,busy:null,worker:null,previewSettings:{configured:false,enabled:false},holdUntil:0,vault:{configured:false},remoteTargets:[],features:{},projects:[],containers:[],jobs:[{id,action:'verify',status:'failed',error:'DEPLOYMENT_CAPACITY_INSUFFICIENT',capacityDiagnostic:diagnostic(at)}]},context={scope:'global',workspaceId:null,sessionId:null,projectId:null},requests=[],mutations=[];
+ const root=path.resolve(__dirname,'..'),server=http.createServer((req,res)=>{const url=new URL(req.url,'http://fixture');requests.push(url.pathname);if(req.method!=='GET')mutations.push(url.pathname);if(url.pathname==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><div id="app"></div><script src="/i18n.js"></script><script src="/apps.js"></script>');}if(url.pathname==='/i18n.js'||url.pathname==='/apps.js'){res.setHeader('Content-Type','text/javascript; charset=utf-8');return res.end(fs.readFileSync(path.join(root,url.pathname==='/i18n.js'?'shared/i18n.cjs':'mobile/apps.js')));}res.setHeader('Content-Type','application/json; charset=utf-8');res.end(JSON.stringify({...url.pathname.endsWith('/state')?state:{},context}));});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+ const launch={headless:true};if(process.env.HARNESS_BROWSER_CHANNEL)launch.channel=process.env.HARNESS_BROWSER_CHANNEL;
+ const browser=await chromium.launch(launch);t.after(()=>browser.close());
+ const page=await browser.newPage({viewport:{width,height:950}}),errors=[];page.on('pageerror',error=>errors.push(error.message));page.setDefaultTimeout(5000);
+ await page.goto('http://127.0.0.1:'+server.address().port);await page.evaluate(language=>{HarnessI18n.setLanguage(language);window.view=HarnessApps.mount(document.querySelector('#app'),{scope:'global'});},language);
+ const panel=page.locator('[data-apps-capacity-diagnostic="'+id+'"]'),host=panel.locator('[data-capacity-resource="hostBytes"]'),guest=panel.locator('[data-capacity-resource="guestBytes"]');await host.waitFor();
+ assert.match(await host.innerText(),language==='en'?/Host disk/:/Disk hostu/);assert.match(await guest.innerText(),language==='en'?/Docker guest disk/:/Disk Docker guestu/);assert.match(await host.innerText(),/2 GiB/);assert.match(await guest.innerText(),/1 GiB/);assert.match(await panel.innerText(),language==='en'?/conservative deployment budgets/:/konzervativní rozpočty/);assert.doesNotMatch(await panel.innerText(),language==='en'?/out of date/:/zastaralé/);
+ await host.evaluate(element=>window.savedHostRow=element);await page.evaluate(()=>{const original=Date.now;Date.now=()=>original()+60000;});await page.evaluate(()=>view.refresh());
+ assert.match(await host.innerText(),language==='en'?/out of date/:/zastaralé/);assert.equal(await host.evaluate(element=>element===savedHostRow),true);
+ state.jobs[0].error='DEPLOYMENT_CAPACITY_UNKNOWN';state.jobs[0].capacityDiagnostic=capacityDiagnosticFor({code:'DEPLOYMENT_CAPACITY_UNKNOWN',details:{field:'guestBytes'}});await page.evaluate(()=>view.refresh());
+ assert.match(await panel.innerText(),language==='en'?/not confirmed/:/není potvrzené/);assert.match(await panel.locator('[data-capacity-resource="guestBytes"]').innerText(),language==='en'?/Unknown/:/Neověřeno/);assert.doesNotMatch(await panel.innerText(),/0 GiB|NaN|undefined/);
+ state.jobs[0].capacityDiagnostic={version:1,code:'DEPLOYMENT_CAPACITY_INSUFFICIENT',reason:'/private/DO_NOT_COPY',items:[{resource:'/private/DO_NOT_COPY',required:1,available:0,missing:1}]};await page.evaluate(()=>view.refresh());assert.equal(await panel.count(),0);assert(!await page.locator('body').innerText().then(text=>text.includes('DO_NOT_COPY')));
+ delete state.jobs[0].capacityDiagnostic;await page.evaluate(()=>view.refresh());
+ assert.match(await page.locator('[data-apps-job="'+id+'"]').innerText(),/DEPLOYMENT_CAPACITY_UNKNOWN/);
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(mutations,[]);assert(requests.every(p=>!p.includes('wake')));assert.deepEqual(errors,[]);
+});

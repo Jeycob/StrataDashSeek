@@ -178,6 +178,25 @@ test('guest verification refuses reported success with a real nonzero exit, and 
   const f=await fixture(t,{guest:async()=>{const value=reply({passed:true,complete:true,stale:false,checks:[{passed:true,checksPassed:1,checksTotal:1}]});if(change==='exit')value.result.exitCode=19;return value;}});f.manager.data.sessions.owner.root=path.resolve('/projects/owner');let reviews=0;f.manager.review=async()=>({root:f.manager.data.sessions.owner.root,sourceHash:++reviews>=3&&change==='source'?'source-v2':'source-v1',checkpoints:{}});f.compose();const value=await f.call('verify_project',{kind:'test'});assert.equal(value.isError,false,JSON.stringify(value));assert.equal(value.value.passed,false);assert.equal(value.value.complete,false);if(change==='source'){assert.equal(value.value.stale,true);assert.equal(value.value.code,'STALE_SOURCE');}assert.equal(f.state.hostShell,0);
  }
 });
+test('SDK targeted verification uses the guest command and emits no canonical result event',async t=>{
+ const runId='12345678-abcd-4321-abcd-123456789abc';
+ const report={passed:true,complete:false,stale:false,checkId:'third',runId,
+  reportPath:`.harness/quality/targeted/${runId}/report.json`,checks:[{id:'third',kind:'test',passed:true}]};
+ const f=await fixture(t,{guest:async()=>reply(report)});
+ f.manager.data.sessions.owner.root=path.resolve('/projects/owner');
+ f.manager.review=async()=>({root:f.manager.data.sessions.owner.root,sourceHash:'source-v1',checkpoints:{}});
+ const canonical=[];
+ f.ctx.on('workspace-runtime/verification',value=>canonical.push(value));
+ f.compose();
+ const result=await f.call('verify_project',{kind:'test',checkId:'third'});
+ assert.equal(result.isError,false,JSON.stringify(result));
+ assert.equal(result.value.passed,true);
+ assert.equal(result.value.complete,false);
+ assert.equal(result.value.checkId,'third');
+ assert.match(f.state.commands[0].command,/'--kind' 'test' '--check-id' 'third'$/);
+ assert.equal(f.state.hostShell,0);
+ assert.deepEqual(canonical,[]);
+});
 test('guest background uses trusted executor and keeps the SDK lease until exact guest stop settles',async t=>{
  const f=await fixture(t);let running=true,releaseStop,admitted,host=0;const settled=deferred(),rows=receipts();
  const real=createGuestProjectCommandRunner(f.ctx,f.manager,{appsConfig:{enabled:true,vm:{enabled:true},projectRuntime:{enabled:true}},receiptStore:rows,pollMs:1,wait:pause,async callApps(route,data){

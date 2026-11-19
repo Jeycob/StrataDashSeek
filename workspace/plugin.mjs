@@ -6,6 +6,7 @@ import { WorkspaceManager } from './manager.mjs';
 import { WorkbenchError, DEFAULTS } from './policy.mjs';
 import { composeProjectExecution } from './execution-composition.mjs';
 import { sameRequestOrigin, boundedJSON } from './http.mjs';
+import { workspaceDownload } from './download.mjs';
 import { createRequire } from 'node:module';
 import { createRuntimeCapabilities } from './runtime-capabilities.mjs';
 import { registerRuntimeCapabilities } from './runtime-tool.mjs';
@@ -111,7 +112,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
     const workspaces = ctx.workspaceRegistry.list().map(w => ({ id: w.id, title: w.title, path: w.path, sessionIds: w.sessionIds, settings: manager.data.workspaces[w.id]?.settings }));
     const projects = Object.fromEntries(Object.entries(manager.data.sessions).map(([id, p]) => [id, { root: p.root, ports: p.ports, databasePath: p.databasePath, baseCommit: p.baseCommit, nativeWorktree: p.nativeWorktree, legacy: p.legacy, budget: p.budget ? { ...p.budget, automatic: automaticReviewView(p.budget.automatic) } : p.budget, checkpoints: Object.fromEntries(Object.entries(p.checkpoints ?? {}).map(([k, c]) => [k, { score: c.score, at: c.at, files: c.files }])), checkpointError: p.checkpointError, verification: p.lastVerification ? Object.fromEntries(['kind','exitCode','checksPassed','checksTotal','accepted','at'].map(k=>[k,p.lastVerification[k]])) : undefined, diagnostic: p.lastDiagnostic ? Object.fromEntries(['code','category','at'].map(k=>[k,p.lastDiagnostic[k]])) : undefined }]));
     const update = await fs.readFile(!config.updateReport || config.updateReport === '/data/harness/state/startup-update.json' ? '/data/harness/runtime-status/startup-update.json' : config.updateReport, 'utf8').then(JSON.parse).then(value => Object.fromEntries(['version','enabled','phase','checkedAt','appliedCommit','targetCommit','error','signatureVerified','bootstrapUpgradeRequired'].map(key => [key,value[key]]))).catch(() => null);
-    return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, managedShellVersion: 1, projectBackgroundVersion: 1, projectMemoryVersion: 1, changesVersion: 1, update, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
+    return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, managedShellVersion: 1, projectBackgroundVersion: 1, projectMemoryVersion: 1, criteriaVersion: 1, changesVersion: 1, update, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
   }
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench', methods: ['GET', 'POST'], requestBody: 'buffered', fetch: async request => {
     try {
@@ -122,6 +123,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
       if (data.op === 'settings') return reply(await manager.updateSettings(data.workspaceId, data.settings));
       if (data.op === 'run-activity') return reply(await readRunActivity(manager, id));
       if (data.op === 'file') return reply(await manager.files(id, data.operation, data.args ?? {}, request.signal));
+      if (data.op === 'verification-criteria') return reply({version:1,criteria:await manager.verificationCriteria(id,request.signal)});
       if (data.op === 'changes') return reply(await manager.projectChanges(id, data.operation ?? 'list', data.args ?? {}, request.signal));
       if (data.op === 'trash') return reply(await manager.inOrder(() => manager.trashSession(id)));
       if (data.op === 'restore') return reply(await manager.inOrder(() => manager.restoreSession(id)));
@@ -136,7 +138,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
     } catch (error) { return reply({ code: error.code ?? 'WORKBENCH_FAILED', error: error.message }, error.status ?? (String(error.code).includes('STALE') ? 409 : 400)); }
   } }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/download', methods: ['GET'], requestBody: 'buffered', fetch: async request => {
-    try { const q = new URL(request.url).searchParams, value = await manager.files(q.get('sessionId'), 'download', { path: q.get('path') }, request.signal); return new Response(value.bytes, { headers: { 'Content-Type': 'application/octet-stream', 'Content-Disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(value.name), 'Cache-Control': 'no-store', 'Content-Security-Policy': "sandbox; default-src 'none'", 'X-Content-Type-Options': 'nosniff' } }); }
+    try { return await workspaceDownload(ctx, manager, request); }
     catch (error) { return reply({ error: error.message }, error.status ?? 400); }
   } }));
   // Kept as a separate static contribution for a native client in addition to /phone/.

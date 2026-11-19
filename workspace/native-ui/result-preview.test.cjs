@@ -9,14 +9,15 @@ const {once} = require('node:events');
 const {pathToFileURL} = require('node:url');
 const {createSourceFixture} = require('./test-bundle.cjs');
 
-function makeSessions(ctx) {
+function makeSessions(ctx, roots, files) {
  return ['Preview chat', 'File chat'].map((name, index) => {
-  const session = ctx.sessions.create(undefined, {meta:{cwd:process.cwd()}});
+  const session = ctx.sessions.create(undefined, {meta:{cwd:roots[index]}});
   for (let turn = 1; turn <= (index === 0 ? 2 : 1); turn++) {
    session.append('turn/start', {turn});
    session.append('user/message', {id:name+'-question-'+turn, role:'user', source:{kind:'user'},
     content:[{type:'text', text:'Open the result'}]}, {surfaceOp:'append'});
    session.append('step/start', {turn, step:1});
+   if (index === 1) session.append('deliverables/presented', {turn, callId:'fixture-present', files});
    session.append('assistant/message', {turn, step:1, stream:[], message:{
     id:name+'-answer-'+turn, role:'assistant', source:{kind:'model', provider:'fixture', model:'fixture'},
     content:[{type:'text', text:name+' reply '+turn}],
@@ -28,15 +29,23 @@ function makeSessions(ctx) {
  });
 }
 
-test('Native chat restores its saved preview on click and keeps files scoped after reload', {timeout:90000}, async () => {
+test('Native chat retries a lost reopen and downloads presented results directly before and after reload', {timeout:90000}, async () => {
  const cli = process.env.HARNESS_NATIVE_CLI;
  assert(cli, 'The pinned Native CLI is required');
  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'homeai-result-preview-'));
- let child, browser, exited;
+ let child, browser, exited, releaseStatus;
  try {
   const plugin = path.join(directory, 'seed');
   const sessionFile = path.join(directory, 'sessions.json');
-  const downloadLog = path.join(directory, 'downloads.jsonl');
+  const projectRoots = ['preview-project','file-project'].map(name => path.join(directory,name));
+  for (const root of projectRoots) await fs.mkdir(root);
+  const files = {'result.csv':'item,count\nexample,2\n','result.json':'{"count":2}\n'};
+  const presented = [];
+  for (const [name, contents] of Object.entries(files)) {
+   const file = path.join(projectRoots[1],name);
+   await fs.writeFile(file,contents);
+   presented.push({path:file});
+  }
   await fs.mkdir(plugin);
   await fs.writeFile(path.join(plugin, 'package.json'), JSON.stringify({
    name:'result-preview-fixture', type:'module',
@@ -44,19 +53,21 @@ test('Native chat restores its saved preview on click and keeps files scoped aft
    dsh:{client:{platform:'web'}},
   }));
   await fs.writeFile(path.join(plugin, 'index.mjs'), `
-   import {appendFileSync, writeFileSync} from 'node:fs';
-   export const inject = ['sessions', 'connection'];
+   import {writeFileSync} from 'node:fs';
+   import {WorkspaceManager} from ${JSON.stringify(pathToFileURL(path.resolve(__dirname,'../manager.mjs')).href)};
+   import {workspaceDownload} from ${JSON.stringify(pathToFileURL(path.resolve(__dirname,'../download.mjs')).href)};
+   import {hostExecutionBinding} from ${JSON.stringify(pathToFileURL(path.resolve(__dirname,'../fixtures/execution-binding.mjs')).href)};
+   export const inject = ['sessions','sessionQuery','sessionPersistence','workingDirectory','fs','connection'];
    export function apply(ctx) {
-    const ids = (${makeSessions.toString()})(ctx);
+    const roots = ${JSON.stringify(projectRoots)};
+    const ids = (${makeSessions.toString()})(ctx, roots, ${JSON.stringify(presented)});
+    const manager = new WorkspaceManager(ctx, {stateRoot:${JSON.stringify(path.join(directory,'workbench-state'))}}, hostExecutionBinding());
+    manager.data = {sessions:Object.fromEntries(ids.map((id,index)=>[id,{root:roots[index]}]))};
     writeFileSync(${JSON.stringify(sessionFile)}, JSON.stringify(ids));
     ctx.effect(() => ctx.connection.fetch.register({
-     path:'/api/workbench/download', methods:['GET'], requestBody:'buffered', fetch(request) {
-      const params = new URL(request.url).searchParams;
-      appendFileSync(${JSON.stringify(downloadLog)}, JSON.stringify(Object.fromEntries(params))+'\\n');
-      if (params.get('sessionId') !== ids[1] || params.get('path') !== 'result.txt') return new Response(null, {status:404});
-      return new Response('saved file bytes', {headers:{
-       'Content-Type':'application/octet-stream', 'Content-Disposition':'attachment; filename="result.txt"',
-      }});
+     path:'/api/workbench/download', methods:['GET'], requestBody:'buffered', async fetch(request) {
+      try { return await workspaceDownload(ctx, manager, request); }
+      catch (error) { return new Response(error.message, {status:error.status ?? 400}); }
      },
     }));
    }
@@ -97,7 +108,9 @@ test('Native chat restores its saved preview on click and keeps files scoped aft
   const requests = [], prompts = [];
   const previewOrigin = 'https://result-preview.test';
   const resultId = 'a'.repeat(32), nextId = 'b'.repeat(32), jobId = 'own-result-job';
-  let expiresAt = 0, openGrants = 0;
+  let expiresAt = 0, openGrants = 0, lostReopen = false, observeStatus;
+  const statusRequested = new Promise(resolve => { observeStatus = resolve; });
+  const statusAllowed = new Promise(resolve => { releaseStatus = resolve; });
   await context.route('**/api/workbench/preview', async route => {
    const body = route.request().postDataJSON();
    requests.push(body);
@@ -107,9 +120,17 @@ test('Native chat restores its saved preview on click and keeps files scoped aft
     return route.fulfill({json:{...sight, sessionId:previewSession, state:'closed', result:{id:resultId, canReopen:true}}});
    }
    if (body.operation === 'status') {
+    if (lostReopen && !openGrants) {
+     observeStatus();
+     await statusAllowed;
+    }
     const ready = expiresAt > Date.now();
     return route.fulfill({json:{...sight, state:ready?'ready':'closed', jobId, expiresAt, url:previewOrigin+'/',
      result:{id:openGrants ? nextId : resultId, canReopen:!ready}}});
+   }
+   if (body.operation === 'reopen' && !lostReopen) {
+    lostReopen = true;
+    return route.abort();
    }
    if (body.operation === 'reopen') expiresAt = Date.now()+5000;
    openGrants++;
@@ -125,14 +146,8 @@ test('Native chat restores its saved preview on click and keeps files scoped aft
   });
   await context.route('**/api/workbench/execution', route => route.fulfill({json:{version:1,mode:'host-compat',available:true}}));
   await context.route('**/api/workbench', route => {
-   const data = route.request().postDataJSON();
-   if (data?.op === 'file') {
-    assert.equal(data.sessionId, fileSession);
-    return route.fulfill({json:data.operation === 'list' ? {entries:[{name:'result.txt',directory:false}]} :
-     {path:'result.txt', text:'saved file bytes', version:'v1'}});
-   }
    return route.fulfill({json:{running:[], trash:{}, workspaces:[{id:'w1',title:'Fixture',sessionIds:[fileSession],settings:{}}],
-    projects:{[fileSession]:{root:'/data/harness/workspaces/projects/fixture'}}}});
+    projects:{[fileSession]:{root:projectRoots[1]}}}});
   });
 
   const page = await context.newPage();
@@ -152,6 +167,13 @@ test('Native chat restores its saved preview on click and keeps files scoped aft
   await page.reload();
   await restore.waitFor();
   assert(requests.every(body => body.operation === 'status'));
+  await restore.click();
+  await Promise.all([statusRequested,card.getByRole('button',{name:'Refresh preview status',exact:true}).waitFor()]);
+  assert.equal(await restore.count(),0);
+  assert.equal(openGrants,0);
+  releaseStatus();
+  await restore.waitFor();
+  assert.equal(requests.filter(body => body.operation === 'reopen').length,1);
 
   async function clickPreview(button, sequence) {
    const [popup] = await Promise.all([context.waitForEvent('page'), button.click()]);
@@ -165,6 +187,7 @@ test('Native chat restores its saved preview on click and keeps files scoped aft
   await restore.waitFor();
   assert.deepEqual(requests.filter(body => body.operation !== 'status'), [
    {operation:'reopen', sessionId:previewSession, resultId},
+   {operation:'reopen', sessionId:previewSession, resultId},
    {operation:'open', sessionId:previewSession, jobId},
   ]);
 
@@ -175,16 +198,36 @@ test('Native chat restores its saved preview on click and keeps files scoped aft
   ]);
   await page.getByText('File chat reply 1', {exact:true}).waitFor();
   assert.equal(await card.count(), 0);
-  await page.evaluate(id => window.HarnessNativeUI.openFiles(id), fileSession);
-  await page.getByRole('button', {name:'result.txt',exact:true}).click();
-  const [download] = await Promise.all([page.waitForEvent('download'),page.getByRole('button', {name:'Download',exact:true}).click()]);
-  assert.equal(download.suggestedFilename(), 'result.txt');
-  assert.equal(await fs.readFile(await download.path(), 'utf8'), 'saved file bytes');
-  const downloads = (await fs.readFile(downloadLog, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
-  assert.deepEqual(downloads, [{sessionId:fileSession,path:'result.txt'}]);
+
+  async function downloadResult(name, index) {
+   const file = page.locator('[data-presented-file]').filter({hasText:name});
+   const link = file.getByRole('link',{name:'Download file',exact:true});
+   await link.waitFor();
+   assert.equal(await file.evaluate(element=>element.closest('[data-turn-tail]').dataset.turnTail),'1');
+   const href = new URL(await link.getAttribute('href'),url);
+   assert.equal(href.pathname,'/api/workbench/download');
+   assert.equal(href.searchParams.get('sessionId'),fileSession);
+   assert.equal(href.searchParams.get('index'),String(index));
+   assert.match(href.searchParams.get('seq'),/^\d+$/);
+   const [download] = await Promise.all([page.waitForEvent('download'),link.click()]);
+   assert.equal(download.suggestedFilename(),name);
+   assert.equal(await fs.readFile(await download.path(),'utf8'),files[name]);
+   return href;
+  }
+  const firstCsv = await downloadResult('result.csv',0);
+  await page.reload();
+  const secondCsv = await downloadResult('result.csv',0);
+  const json = await downloadResult('result.json',1);
+  assert.equal(firstCsv.href,secondCsv.href);
+  assert.equal(firstCsv.searchParams.get('seq'),json.searchParams.get('seq'));
+  json.searchParams.set('sessionId',previewSession);
+  assert.equal((await context.request.get(json.href)).ok(),false);
+  firstCsv.searchParams.set('path','result.json');
+  assert.equal((await context.request.get(firstCsv.href)).status(),400);
   assert.deepEqual(prompts, []);
   assert.deepEqual(errors, []);
  } finally {
+  releaseStatus?.();
   if (browser) await browser.close();
   if (child) {
    if (child.exitCode === null && child.signalCode === null) child.kill();

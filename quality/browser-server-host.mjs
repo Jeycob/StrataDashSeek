@@ -27,7 +27,7 @@ export function browserServerSocketPath(projectRoot,nonce,platform=process.platf
 
 // Private source composition only. No config, model tool or HTTP surface may
 // supply these factories, an execution, a command, a port or a producer handle.
-export async function createBrowserServerChannel(ctx,manager,run,{execution,projectRoot,sourceHash,kind,deadline},trusted=production){
+export async function createBrowserServerChannel(ctx,manager,run,{execution,projectRoot,sourceHash,kind,checkId,deadline},trusted=production){
   const f={...production,...trusted},nonce=randomBytes(32).toString('hex'),controller=new AbortController();
   const owner=manager.ownerAgent(execution.agent),record=manager.data.sessions[owner?.id];
   const check=()=>{
@@ -49,6 +49,7 @@ export async function createBrowserServerChannel(ctx,manager,run,{execution,proj
       need(Object.keys(message).sort().join(',')==='checkId,type'&&active?.checkId===message.checkId,'BROWSER_SERVER_REQUEST_INVALID');await settleActive();return{stopped:true};
     }
     need(['all','browser'].includes(kind)&&message.type==='start'&&Object.keys(message).sort().join(',')==='checkId,contractHash,contractPath,deadline,planHash,type'&&!active&&!attempted.has(message.checkId)&&/^[a-z][a-z0-9_-]{0,63}$/.test(message.checkId)&&/^[a-f0-9]{64}$/.test(message.contractHash)&&/^[a-f0-9]{64}$/.test(message.planHash)&&Number.isSafeInteger(message.deadline)&&message.deadline<=deadline&&message.deadline>Date.now(),'BROWSER_SERVER_REQUEST_INVALID');
+    need(checkId===undefined||message.checkId===checkId,'BROWSER_SERVER_REQUEST_INVALID');
     attempted.add(message.checkId);
     need(f.supported(ctx),'BROWSER_SERVER_UNAVAILABLE');
     const review=await manager.review(owner.id);check();need(review?.sourceHash===sourceHash,'STALE_VERIFICATION');

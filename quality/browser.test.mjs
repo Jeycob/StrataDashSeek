@@ -77,7 +77,17 @@ test('real Chromium distinguishes working shop from four known UI regressions', 
   plan.flows[0].steps[0].path='/?bug=fixed';
   await fs.writeFile(path.join(root,'plan.json'),JSON.stringify(plan));
   await fs.writeFile(path.join(root,'.harness-quality.json'),JSON.stringify({version:1,sources:['plan.json'],requiredKinds:['browser'],checks:[{id:'ui',kind:'browser',plan:'plan.json',timeoutMs:20000}]}));
-  const result=await verifyProject({workspace:root,env:{...process.env,HARNESS_QUALITY_ALLOWED_PORTS:String(server.address().port)}});
+  const env={...process.env,HARNESS_QUALITY_ALLOWED_PORTS:String(server.address().port)};
+  const result=await verifyProject({workspace:root,env});
   assert.equal(result.complete,true,JSON.stringify(result));assert.equal(result.stale,false);
   assert.equal(result.results[0].artifactPaths.filter(p=>p.endsWith('.png')).length,2);
+  const fullBrowser=await fs.readFile(path.join(root,'.harness/quality/ui-browser.json'));
+  const targeted=await verifyProject({workspace:root,checkId:'ui',env});
+  assert.equal(targeted.passed,true,JSON.stringify(targeted));
+  assert.equal(targeted.complete,false);
+  const evidence=targeted.results[0].artifactPaths.find(file=>file.endsWith('-browser.json'));
+  assert.match(evidence,new RegExp(targeted.runId+'/ui-browser.json$'));
+  assert.equal(JSON.parse(await fs.readFile(path.join(root,evidence),'utf8')).runId,targeted.runId);
+  assert(targeted.results[0].artifactPaths.some(file=>file.includes(targeted.runId)&&file.endsWith('.png')));
+  assert.deepEqual(await fs.readFile(path.join(root,'.harness/quality/ui-browser.json')),fullBrowser);
 });

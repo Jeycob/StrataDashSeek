@@ -735,6 +735,18 @@
   'apps.start_not_published':{en:'Only the currently published generation can be started. Review its release report.',cs:'Spustit lze pouze aktuálně nasazenou generaci. Podrobnosti najdeš ve zprávě nasazení.'},
   'apps.last_completed_deployment':{en:'Last completed deployment: ',cs:'Poslední dokončené nasazení: '}
  });
+ Object.assign(messages,{
+  'apps.capacity.title':{en:'Capacity check failed',cs:'Kontrola kapacity neprošla'},
+  'apps.capacity.saved':{en:'Recorded during this operation’s capacity check. Required values are conservative deployment budgets.',cs:'Hodnoty pocházejí z kontroly kapacity této operace. Požadované hodnoty jsou konzervativní rozpočty nasazení.'},
+  'apps.capacity.hostBytes':{en:'Host disk',cs:'Disk hostu'},'apps.capacity.guestBytes':{en:'Docker guest disk',cs:'Disk Docker guestu'},
+  'apps.capacity.hostInodes':{en:'Host inodes',cs:'Inody hostu'},'apps.capacity.guestInodes':{en:'Docker guest inodes',cs:'Inody Docker guestu'},
+  'apps.capacity.memoryBytes':{en:'Worker memory allocation',cs:'Přidělená paměť workeru'},
+  'apps.capacity.required':{en:'Required budget',cs:'Požadovaný rozpočet'},'apps.capacity.available':{en:'Available',cs:'Dostupné'},'apps.capacity.missing':{en:'Missing',cs:'Chybí'},
+  'apps.capacity.observed':{en:'Observed',cs:'Změřeno'},'apps.capacity.unknown':{en:'Unknown',cs:'Neověřeno'},'apps.capacity.stale':{en:'Observation is out of date',cs:'Měření je zastaralé'},
+  'apps.capacity.measurement_unknown':{en:'Capacity measurements are not confirmed.',cs:'Měření kapacity není potvrzené.'},
+  'apps.capacity.budget_unknown':{en:'The required deployment budget is not known.',cs:'Požadovaný rozpočet nasazení není známý.'},
+  'apps.capacity.worker_unverified':{en:'Docker guest capacity has not been verified.',cs:'Kapacita Docker guestu není ověřená.'}
+ });
  const tApps=key=>messages[key]?.[window.HarnessI18n?.language==='cs'?'cs':'en']||key;
  const appsLocale=()=>window.HarnessI18n?.language==='cs'?'cs-CZ':'en-GB';
 
@@ -930,6 +942,7 @@
  #apps-add,#apps-preview-settings{margin-top:20px;padding:18px;background:white;border:1px solid #dce5e9;border-radius:12px}#apps-add label,#apps-preview-settings summary{font-weight:600}#apps-preview-settings summary{cursor:pointer}#apps-preview-settings p{font-size:13px;color:#64777e}#apps-preview-enabled{width:18px;height:18px;vertical-align:middle;margin:0 8px 0 0}#apps-add>div{display:flex;gap:10px;margin:10px 0}#apps-path{flex:1;min-width:0;max-width:none;letter-spacing:0;font:inherit;padding:10px;border:1px solid #aebbd1;border-radius:8px}#apps-error{color:#a52222;white-space:pre-wrap}
  #harness-apps .apps-project{background:white;border:1px solid #dce5e9;border-radius:12px;padding:18px;margin:12px 0}#harness-apps .apps-project h4{font-size:17px;margin:0 0 6px}#harness-apps .apps-project p{font-size:13px;color:#64777e;overflow-wrap:anywhere}#harness-apps .apps-actions{display:flex;gap:8px;flex-wrap:wrap}#harness-apps .apps-actions a{padding:10px 4px}#harness-apps .apps-project .apps-actions button:first-child{background:#235dd7;color:white;border-color:#235dd7}
  #harness-apps .apps-scroll{overflow:auto}#harness-apps table{width:100%;border-collapse:collapse;background:white;font-size:13px}#harness-apps th,#harness-apps td{text-align:left;border-bottom:1px solid #dce5e9;padding:12px;white-space:nowrap}#harness-apps td button{font-size:12px;margin-right:6px}#apps-log{background:#12202c;color:#deedf4;padding:18px;border-radius:10px;max-height:45vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:12px/1.6 ui-monospace,monospace}#harness-apps .apps-job{display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #dce5e9;padding:10px 0;font-size:13px}#apps-connection{padding:12px 16px;background:white;border-left:4px solid #168b72;border-radius:6px}
+ #harness-apps .apps-capacity-diagnostic{flex-basis:100%;min-width:0;overflow-wrap:anywhere}
  @media(max-width:550px){#harness-apps .apps-head h2{font-size:22px}#apps-add>div{flex-direction:column}#harness-apps .apps-actions button{flex:1}#harness-apps .apps-job{align-items:start}#harness-apps th,#harness-apps td{padding:9px}}
  `;
  panel.innerHTML=panel.innerHTML.replace(/(id|for|aria-labelledby)="([^"]+)"/g,(_,attr,id)=>attr+'="'+prefix+id+'"');
@@ -1032,6 +1045,53 @@
   const phases={starting:tApps("apps.waking_docker_26386a"),restoring:tApps("apps.restoring_containers_f049e7"),recovering:tApps("apps.reconnecting_to_docker_5a1dc2"),saving:tApps("apps.saving_containers_and_putting_docker_to_slee_edd8c5")};
   setConnectionText(!state.enabled?tApps("apps.docker_is_not_enabled_yet_78cfd8"):managed&&phase==='asleep'?tApps("apps.docker_is_asleep_building_testing_or_opening_e982c4"):phases[phase]||(!state.available?tApps("apps.docker_is_unavailable_2ad119")+(state.error||state.worker?.error||tApps("apps.check_the_connection_aabcf8")):busy?tApps("apps.an_application_operation_is_running_2bd37d"):tApps("apps.docker_is_ready_9d8fb6")));
  }
+ function renderCapacityDiagnostic(job){
+  const diagnostic=job.capacityDiagnostic;
+  const resources=['hostBytes','guestBytes','hostInodes','guestInodes','memoryBytes'];
+  const validAmount=value=>value===null||Number.isSafeInteger(value)&&value>=0;
+  if(!job.error||diagnostic?.version!==1||!['DEPLOYMENT_CAPACITY_INSUFFICIENT','DEPLOYMENT_CAPACITY_UNKNOWN'].includes(diagnostic.code))return;
+  const {items,reason}=diagnostic;
+  if(!Array.isArray(items)||items.length>resources.length||new Set(items.map(item=>item?.resource)).size!==items.length)return;
+  if(items.some(item=>!resources.includes(item?.resource)||![item.required,item.available,item.missing].every(validAmount)))return;
+  const panel=node('div',undefined,'apps-capacity-diagnostic');
+  panel.dataset.appsCapacityDiagnostic=job.id;
+  panel.append(node('strong',tApps('apps.capacity.title')),node('p',tApps('apps.capacity.saved')));
+  if(reason!=='insufficient'){
+   const message=['budget_unknown','worker_unverified'].includes(reason)?reason:'measurement_unknown';
+   panel.append(node('p',tApps('apps.capacity.'+message)));
+  }
+  const locale=appsLocale();
+  for(const {resource,required,available,missing,observedAt} of items){
+   const item=node('p');
+   item.dataset.capacityResource=resource;
+   item.append(node('strong',tApps('apps.capacity.'+resource)));
+   for(const [label,value] of [['required',required],['available',available],['missing',missing]]){
+    let amount=tApps('apps.capacity.unknown');
+    if(value!==null){
+     amount=value.toLocaleString(locale);
+     if(resource.endsWith('Bytes'))amount=(value/1024**3).toLocaleString(locale,{maximumFractionDigits:2})+' GiB ('+amount+' B)';
+    }
+    item.append(node('span',' · '+tApps('apps.capacity.'+label)+': '+amount));
+   }
+   const hasObservation=Number.isSafeInteger(observedAt)&&observedAt>0&&observedAt<=8640000000000000;
+   const observation=hasObservation?new Date(observedAt).toLocaleString(locale):tApps('apps.capacity.unknown');
+   item.append(node('small',' · '+tApps('apps.capacity.observed')+': '+observation));
+   if(hasObservation){
+    const stale=node('small',' · '+tApps('apps.capacity.stale'));
+    stale.dataset.capacityObservedAt=observedAt;
+    item.append(stale);
+   }
+   panel.append(item);
+  }
+  return panel;
+ }
+ function refreshCapacityObservationAge(){
+  const now=Date.now();
+  for(const stale of el('apps-jobs').querySelectorAll('[data-capacity-observed-at]')){
+   const age=now-Number(stale.dataset.capacityObservedAt);
+   stale.hidden=age>=0&&age<=30000;
+  }
+ }
  function render(){
   if(!alive())return;
   const phase=state.worker?.phase,managed=state.worker?.managed,busy=!!state.busy||phase==='saving'||contextInvalid;if(!addPanelInitialized){el('apps-add-panel').open=!embedded&&!state.projects.length;addPanelInitialized=true;}if(view.scope==='project')el('apps-add-panel').hidden=true;
@@ -1057,10 +1117,21 @@
   }
   const visibleContainers=state.containers.filter(c=>{const p=state.projects.find(p=>p.id===c.projectId);return!p||c.state==='running'||(c.service?c.releaseId===p.releaseId:c.id===p.containerId);});
   const containers=el('apps-containers');containers.replaceChildren();for(const c of visibleContainers){const row=node('tr');row.dataset.appsContainer=c.id;row.append(node('td',(state.projects.find(p=>p.id===c.projectId)?.name||c.name)+(c.service?' / '+c.service:'')),node('td',c.state==='running'?tApps("apps.running_13df22"):status()[c.state]||c.state),node('td',c.ports.map(p=>p.public+' → '+p.private).join(', ')||'—'));const controls=node('td'),power=mutationButton(c.state==='running'?tApps("apps.stop_74083f"):tApps("apps.start_7e4cda"),()=>act('container-action',{id:c.id,action:c.state==='running'?'stop':'start'}),unavailable||busy);if(c.state!=='running')power.dataset.appStartId=c.id;controls.append(button(tApps("apps.logs_0a8f97"),()=>showLog('container',c.id),!state.enabled),power);row.append(controls);containers.append(row);}if(!visibleContainers.length){const row=node('tr'),cell=lnode('td',"apps.no_managed_containers_27f350");cell.colSpan=4;row.append(cell);containers.append(row);}
-  const jobs=el('apps-jobs');jobs.replaceChildren();for(const j of state.jobs.slice().reverse()){const row=node('div',undefined,'apps-job');row.dataset.appsJob=j.id;row.append(node('span',(actionNames()[j.action]||j.action)+' · '+(status()[['recovery_required','promoting','publishing'].includes(j.deploymentPhase)?j.deploymentPhase:j.status]||j.status)+(j.stage?' · '+j.stage:'')+(j.verification==='http-only'?tApps("apps.http_availability_only_fbdc91"):'')+(j.error?' · '+j.error:'')),button(tApps("apps.view_log_186b71"),()=>showLog('job',j.id)));if(j.export&&j.status==='passed'){const a=lnode('a',"apps.download_bundle_33c9b2");a.href=contextURL('export-download?id='+encodeURIComponent(j.id));a.dataset.appExport=a.getAttribute('href');a.onclick=event=>{if(recoveryRequired())event.preventDefault();};a.download=j.export.filename;row.append(a);}jobs.append(row);}if(!state.jobs.length)jobs.append(lnode('p',"apps.no_operations_yet_75f8ec"));applySafety();
+  const jobs=el('apps-jobs');jobs.replaceChildren();
+  for(const j of state.jobs.slice().reverse()){
+   const row=node('div',undefined,'apps-job');row.dataset.appsJob=j.id;
+   row.append(node('span',(actionNames()[j.action]||j.action)+' · '+(status()[['recovery_required','promoting','publishing'].includes(j.deploymentPhase)?j.deploymentPhase:j.status]||j.status)+(j.stage?' · '+j.stage:'')+(j.verification==='http-only'?tApps("apps.http_availability_only_fbdc91"):'')+(j.error?' · '+j.error:'')),button(tApps("apps.view_log_186b71"),()=>showLog('job',j.id)));
+   const diagnostic=renderCapacityDiagnostic(j);
+   if(diagnostic)row.append(diagnostic);
+   if(j.export&&j.status==='passed'){const a=lnode('a',"apps.download_bundle_33c9b2");a.href=contextURL('export-download?id='+encodeURIComponent(j.id));a.dataset.appExport=a.getAttribute('href');a.onclick=event=>{if(recoveryRequired())event.preventDefault();};a.download=j.export.filename;row.append(a);}
+   jobs.append(row);
+  }
+  if(!state.jobs.length)jobs.append(lnode('p',"apps.no_operations_yet_75f8ec"));
+  refreshCapacityObservationAge();applySafety();
  }
  async function refresh({afterMutation=false}={}){
   if(!alive()||document.hidden||(embedded&&options.visible&&!options.visible()))return;
+  refreshCapacityObservationAge();
   if(view.scope==='project'&&!view.sessionId){setConnectionText(ct('select'));renderContext();return;}
   if(loading){if(afterMutation)refreshAfterMutation=true;return;}
   loading=true;const epoch=stateEpoch;
@@ -1185,7 +1256,9 @@ function mountResourceInventory(anchor,adapter){
  },at=key=>automaticCopy[I.language]?.[key]||automaticCopy.en[key]||key;
  Object.assign(automaticCopy.en,{queued:'Same-task continuation accepted',freshCheck:'A fresh verification is required',freshCheckNeeded:'The previous verifier ended, but its result is unknown. A new bounded check is required before further task work.',freshCheckRunning:'The previous verifier result is unknown. A fresh check is now running; no successful result has been established.'});
  Object.assign(automaticCopy.cs,{queued:'Pokračování původní úlohy bylo přijato',freshCheck:'Je potřeba nové ověření',freshCheckNeeded:'Předchozí ověření skončilo, ale jeho výsledek není známý. Před další prací je nutná nová omezená kontrola.',freshCheckRunning:'Výsledek předchozího ověření není známý. Nyní probíhá nová kontrola; úspěšný výsledek zatím není doložený.'});
- const reviewCopy={en:{preview:'Review checkpoint restore',previewHelp:'Review the exact file changes. Applying uses this source version; a later edit invalidates this preview.',writes:'Files to write',deletes:'Files to delete',preserved:'Files kept unchanged',excluded:'Excluded files kept',protected:'Protected files block this restore',legacyOverlay:'Legacy checkpoint: only saved files can be restored; deletion inventory is incomplete.',apply:'Apply restore',cancel:'Cancel',restored:'Checkpoint restore verified.',uncertain:'Restore is not confirmed. Inspect recovery status before continuing.',recover:'Recover interrupted restore',recovered:'Interrupted restore rolled back. The requested checkpoint has not been applied.',recoveryPending:'An interrupted restore needs recovery. Do not start another restore.',conflicts:'Recovery conflicts',beforeRestore:'Version before the last restore',source:'Source version',staging:'Required staging space',pending:'Restore recovery status',readFailed:'Recovery status could not be verified.'},cs:{preview:'Kontrola obnovy uložené verze',previewHelp:'Zkontroluj přesné změny souborů. Obnova platí pro tuto verzi zdrojů; pozdější změna náhled zneplatní.',writes:'Soubory k zápisu',deletes:'Soubory ke smazání',preserved:'Soubory ponechané beze změny',excluded:'Vynechané soubory zůstanou',protected:'Chráněné soubory brání obnově',legacyOverlay:'Starší verze: obnovit lze pouze uložené soubory; přehled pro mazání není úplný.',apply:'Provést obnovu',cancel:'Zrušit',restored:'Obnova uložené verze ověřena.',uncertain:'Obnova není potvrzená. Než budeš pokračovat, ověř stav zotavení.',recover:'Zotavit přerušenou obnovu',recovered:'Přerušená obnova byla vrácena. Požadovaná verze nebyla aplikována.',recoveryPending:'Přerušená obnova vyžaduje zotavení. Nespouštěj další obnovu.',conflicts:'Konflikty zotavení',beforeRestore:'Verze před poslední obnovou',source:'Verze zdrojů',staging:'Potřebné místo pro přípravu',pending:'Stav zotavení obnovy',readFailed:'Stav zotavení se nepodařilo ověřit.'}};
+  Object.assign(automaticCopy.en,{criteria:'Completion conditions',criteriaHistory:'Review the checks for each condition. If the source changed, verify again.',criteriaAbsent:'No completion conditions have been declared.',criteriaUnavailable:'Completion conditions could not be loaded.',criterionVerified:'Mapped checks passed',criterionFailed:'A mapped check failed',criterionUnknown:'Not verified',criterionStale:'Older source or changed conditions',criterionSource:'Recorded source',criterionAt:'Checked'});
+  Object.assign(automaticCopy.cs,{criteria:'Podmínky dokončení',criteriaHistory:'Tady jsou kontroly pro jednotlivé podmínky. Pokud se zdroje změnily, spusť ověření znovu.',criteriaAbsent:'Podmínky dokončení zatím nejsou uvedené.',criteriaUnavailable:'Podmínky dokončení se nepodařilo načíst.',criterionVerified:'Navázané kontroly prošly',criterionFailed:'Navázaná kontrola selhala',criterionUnknown:'Neověřeno',criterionStale:'Starší zdroje nebo změněné podmínky',criterionSource:'Zaznamenaná verze',criterionAt:'Ověřeno'});
+  const reviewCopy={en:{preview:'Review checkpoint restore',previewHelp:'Review the exact file changes. Applying uses this source version; a later edit invalidates this preview.',writes:'Files to write',deletes:'Files to delete',preserved:'Files kept unchanged',excluded:'Excluded files kept',protected:'Protected files block this restore',legacyOverlay:'Legacy checkpoint: only saved files can be restored; deletion inventory is incomplete.',apply:'Apply restore',cancel:'Cancel',restored:'Checkpoint restore verified.',uncertain:'Restore is not confirmed. Inspect recovery status before continuing.',recover:'Recover interrupted restore',recovered:'Interrupted restore rolled back. The requested checkpoint has not been applied.',recoveryPending:'An interrupted restore needs recovery. Do not start another restore.',conflicts:'Recovery conflicts',beforeRestore:'Version before the last restore',source:'Source version',staging:'Required staging space',pending:'Restore recovery status',readFailed:'Recovery status could not be verified.'},cs:{preview:'Kontrola obnovy uložené verze',previewHelp:'Zkontroluj přesné změny souborů. Obnova platí pro tuto verzi zdrojů; pozdější změna náhled zneplatní.',writes:'Soubory k zápisu',deletes:'Soubory ke smazání',preserved:'Soubory ponechané beze změny',excluded:'Vynechané soubory zůstanou',protected:'Chráněné soubory brání obnově',legacyOverlay:'Starší verze: obnovit lze pouze uložené soubory; přehled pro mazání není úplný.',apply:'Provést obnovu',cancel:'Zrušit',restored:'Obnova uložené verze ověřena.',uncertain:'Obnova není potvrzená. Než budeš pokračovat, ověř stav zotavení.',recover:'Zotavit přerušenou obnovu',recovered:'Přerušená obnova byla vrácena. Požadovaná verze nebyla aplikována.',recoveryPending:'Přerušená obnova vyžaduje zotavení. Nespouštěj další obnovu.',conflicts:'Konflikty zotavení',beforeRestore:'Verze před poslední obnovou',source:'Verze zdrojů',staging:'Potřebné místo pro přípravu',pending:'Stav zotavení obnovy',readFailed:'Stav zotavení se nepodařilo ověřit.'}};
  const rt=key=>reviewCopy[I.language]?.[key]||reviewCopy.en[key]||key;
  const settingsCopy={en:{inherited:'Server default',override:'Saved workspace value',draft:'Unsaved workspace value',reset:'Use server default',resetPending:'Will use server default after saving',taskLanguage:'Default task language',savedNewer:'Earlier settings saved. Newer edits remain unsaved.',savedUnverified:'Settings saved. Refresh could not be verified.'},cs:{inherited:'Výchozí hodnota serveru',override:'Uložená hodnota pracovního prostoru',draft:'Neuložená hodnota pracovního prostoru',reset:'Použít výchozí hodnotu serveru',resetPending:'Po uložení se použije výchozí hodnota serveru',taskLanguage:'Výchozí jazyk úloh',savedNewer:'Předchozí nastavení uloženo. Novější změny zůstávají neuložené.',savedUnverified:'Nastavení uloženo. Obnovení stavu se nepodařilo ověřit.'}},st=key=>settingsCopy[I.language]?.[key]||settingsCopy.en[key]||key;
  const editorText=key=>({en:{recheck:'Recheck saved file',saving:'Saving…',savedNewer:'Saved earlier revision. Newer edits remain unsaved.',renameHelp:'Rename moves the saved file. Your unsaved draft stays in the editor and can be saved at the new path.',renamePath:'New project path',cancel:'Cancel',renamePartial:'The destination was created but the original file was not removed. Your draft is retained.',renameUnknown:'The rename could not be fully confirmed. Your draft is retained; refresh before saving.',pending:'Wait for the current file operation to finish.',uncertain:'The previous save was interrupted. Your draft is retained; the server may already contain that saved revision.'},cs:{recheck:'Znovu ověřit uložený soubor',saving:'Ukládám…',savedNewer:'Předchozí verze byla uložena. Novější změny zůstávají neuložené.',renameHelp:'Přejmenování přesune uložený soubor. Rozepsané změny zůstanou v editoru a můžeš je uložit pod novým názvem.',renamePath:'Nová cesta v projektu',cancel:'Zrušit',renamePartial:'Cílový soubor vznikl, ale původní soubor nebyl odstraněn. Rozepsané změny zůstávají zachované.',renameUnknown:'Přejmenování se nepodařilo úplně potvrdit. Rozepsané změny zůstávají zachované; před uložením obnov stav.',pending:'Počkej na dokončení aktuální operace se souborem.',uncertain:'Předchozí ukládání bylo přerušeno. Rozepsané změny zůstávají zachované; server už může obsahovat ukládanou verzi.'}}[I.language==='cs'?'cs':'en'][key]);
@@ -1480,13 +1553,36 @@ function mountResourceInventory(anchor,adapter){
   if(result.restored!==true||result.recovery?.pending)throw Error(rt('uncertain'));
   await refresh();if(valid())el('wb-message').textContent=rt('restored');
  }
- function renderReview(reconcile=true){
+  function renderCriteria(raw,unconfirmed){
+   const section=node('section');section.dataset.completionCriteria='true';section.append(node('h4',at('criteria')),node('p',at('criteriaHistory')));
+   const valid=Array.isArray(raw)&&raw.length<=8&&raw.every(row=>row&&typeof row.id==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(row.id)&&typeof row.text==='string'&&row.text.length>0&&row.text.length<=240&&Array.isArray(row.checks)&&row.checks.length>0&&row.checks.length<=32&&row.checks.every(check=>check&&typeof check.id==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(check.id)));
+   if(!valid||!raw.length){section.append(node('p',at(raw===undefined||valid?'criteriaAbsent':'criteriaUnavailable')));return section;}
+   const labels={verified:'criterionVerified',failed:'criterionFailed',stale:'criterionStale',unknown:'criterionUnknown'},list=node('ol');
+   for(const row of raw){
+    let status=Object.hasOwn(labels,row.state)?row.state:'unknown';if(status==='verified'&&!row.checks.every(check=>check.state==='verified'))status='unknown';if(unconfirmed&&status!=='stale')status='unknown';
+    const item=node('li');item.dataset.criterionId=row.id;item.dataset.criterionState=status;item.append(node('strong',row.text),node('p',at(labels[status])));
+    const checks=node('ul');for(const check of row.checks){const state=unconfirmed&&check.state!=='stale'?'unknown':Object.hasOwn(labels,check.state)?check.state:'unknown';const measured=Number.isSafeInteger(check.checksTotal)&&check.checksTotal>0&&Number.isSafeInteger(check.checksPassed)&&check.checksPassed>=0&&check.checksPassed<=check.checksTotal;checks.append(node('li',check.id+' · '+at(labels[state])+(measured?' · '+check.checksPassed+' / '+check.checksTotal:'')));}item.append(checks);
+    const source=row.projectSourceHash??row.sourceHash;if(typeof source==='string'&&/^[a-f0-9]{64}$/.test(source))item.append(node('small',at('criterionSource')+': '+source.slice(0,12)));
+    if(Number.isSafeInteger(row.observedAt)&&row.observedAt>0)item.append(node('small',' · '+at('criterionAt')+': '+new Date(row.observedAt).toLocaleString(I.locale)));
+    list.append(item);
+   }
+   section.append(list);return section;
+  }
+  function renderReview(reconcile=true){
   const content=el('wb-content');content.replaceChildren();const sessionId=selectedSession,p=state.projects[sessionId],b=p?.budget,revision=fileNavigation;
   const epoch=renderReview.epoch=(renderReview.epoch||0)+1,valid=()=>alive()&&tab==='review'&&selectedSession===sessionId&&revision===fileNavigation;
   // User checkpoint operations survive their own refresh and a background
   // status repaint. Only reconcile reads must also match the current render.
   const freshRead=()=>valid()&&epoch===renderReview.epoch;
-  if(!b){content.append(node('p',t('notRun')));return;}
+  function loadCriteria(host, unconfirmed) {
+   if(state.criteriaVersion!==1||!p?.root)return;
+   const placeholder=node('p',t('loading'));
+   host.append(placeholder);
+   void api({op:'verification-criteria',sessionId}).then(value=>{
+    if(freshRead()&&placeholder.isConnected)placeholder.replaceWith(renderCriteria(value?.version===1?value.criteria:null,unconfirmed));
+   }).catch(()=>{if(freshRead()&&placeholder.isConnected)placeholder.replaceWith(renderCriteria(null,true));});
+  }
+  if(!b){content.append(node('p',t('notRun')));loadCriteria(content,false);return;}
   const automatic=b.automatic,automaticRecovery=automatic?.recovery,phase=automatic?.phase||'working',running=state.running.includes(sessionId),legacyCount=['TASK_BUDGET','AUTOMATIC_CHECK_LIMIT','STAGE_BUDGET'].includes(b.blocked?.code);
   const uncertain=b.blocked?.code==='AUTOMATIC_VERIFICATION_UNCERTAIN'||automatic?.reason==='AUTOMATIC_VERIFICATION_UNCERTAIN'&&!(automaticRecovery?.state==='recovered'&&automaticRecovery.canContinue===true&&automatic.terminalAcknowledged===true);
   const continuationAccepted=renderReview.acceptance?.sessionId===sessionId&&renderReview.acceptance.automatic===automatic&&renderReview.acceptance.continued===true;
@@ -1501,7 +1597,8 @@ function mountResourceInventory(anchor,adapter){
   else if(automaticRecovery?.state==='recovered')card.append(node('p',at(recoveryConfirmed?'recoveryReady':'recoveryHeld')));
   if(automatic?.lastVerified)card.append(node('p',at('lastVerified')+': '+automatic.lastVerified.kind+' · '+new Date(automatic.lastVerified.at).toLocaleString(I.locale)));
   if(p.verification)card.append(node('p',at('verificationResult')+': '+p.verification.kind+' · '+p.verification.checksPassed+' / '+p.verification.checksTotal));
-  if(p.verification&&(uncertain||automaticRecovery?.state==='blocked'||outcomeUnknown))card.append(node('p',at('verificationNotMatched')));
+   if(p.verification&&(uncertain||automaticRecovery?.state==='blocked'||outcomeUnknown))card.append(node('p',at('verificationNotMatched')));
+  if(!reconcile)loadCriteria(card,uncertain||recoveryBlocked||outcomeUnknown);
   if(automatic?.lastCheck?.checks?.some(check=>!check.passed)){const failed=node('ul');for(const check of automatic.lastCheck.checks.filter(check=>!check.passed))failed.append(node('li',check.id));card.append(failed);}
   const reason=b.blocked?.code||automaticRecovery?.code||automatic?.reason;
   if(b.blocked||recoveryBlocked||uncertain){
@@ -1538,7 +1635,7 @@ function mountResourceInventory(anchor,adapter){
     const next=result?.automatic,r=next?.recovery;
     if(!(next===null||next&&typeof next.terminalAcknowledged==='boolean'&&(r===undefined||r&&['pending','reconciling','recovered','blocked'].includes(r.state)&&typeof r.canContinue==='boolean'))||!(result.blocked===null||result.blocked&&typeof result.blocked.code==='string')||typeof result.continued!=='boolean')throw Object.assign(Error('Invalid automatic recovery response'),{code:'AUTOMATIC_RECOVERY_RESPONSE_INVALID'});
     p.budget.automatic=next;p.budget.blocked=result.blocked;renderReview.acceptance={sessionId,automatic:next,continued:result.continued};renderReview(false);
-   }).catch(error=>{if(freshRead()&&notice.isConnected){notice.textContent=at('reconciliationUnavailable')+' '+(error.code||error.message);notice.setAttribute('role','alert');}});
+   }).catch(error=>{if(freshRead()&&notice.isConnected){notice.textContent=at('reconciliationUnavailable')+' '+(error.code||error.message);notice.setAttribute('role','alert');loadCriteria(card,true);}});
   }
  }
  function renderEnvironment(){const content=el('wb-content');content.replaceChildren();const e=state.environment;if(!e){content.append(node('p',t('notRun')));return;}for(const [label,value]of [[t('browser'),e.browser?.ok?t('ready')+' · '+e.browser.version:t('unavailable')],[t('console'),e.browser?.consoleVerified&&!e.browser.consoleErrors?.length?t('passed'):t('unavailable')],[t('webgl'),e.browser?.webgl?.available?t('ready')+' · '+t('software'):t('unavailable')],[t('dotnet'),e.dotnet?.available?e.dotnet.version:t('unavailable')]]){const row=node('div');row.className='wb-row';row.append(node('strong',label),node('span',value));content.append(row);}}
@@ -1682,7 +1779,7 @@ if(typeof AbortSignal.timeout!=='function')AbortSignal.timeout=milliseconds=>{
  if(!Number.isSafeInteger(milliseconds)||milliseconds<0)throw new RangeError('Invalid timeout');
  const controller=new AbortController();setTimeout(()=>controller.abort(new DOMException('The operation timed out','TimeoutError')),Math.min(milliseconds,2147483647));return controller.signal;
 };
-const inject=['slots','sidebarRightTabs','sidebarRight','uiWorkspace','locale'];
+const inject=['slots','sidebarRightTabs','sidebarRight','uiWorkspace','locale','conversation'];
 const h=React.createElement;
 const copy={en:{docker:'Applications and Docker',workspaces:'Workspace defaults',notifications:'Notifications',newDocker:'Prepare Docker from this project',noRoot:'Open a conversation with a project inside the application workspace.',outsideRoot:'This project is outside the application workspace. Choose a project from the configured workspace.',preparing:'Preparing…',language:'Language',files:'Workspace files',filesHelp:'Browse, edit, upload and delete files in this conversation’s isolated project.',dockerHelp:'Containers, logs and releases. Reading status does not wake Docker.',openPhone:'Open the installed Harness app to configure iPhone notifications.',workspace:'Workspace',noWorkspace:'Create a workspace first.',ready:'Docker project prepared.'},cs:{docker:'Aplikace a Docker',workspaces:'Výchozí nastavení projektů',notifications:'Oznámení',newDocker:'Připravit Docker z tohoto projektu',noRoot:'Otevři konverzaci s projektem ve složce aplikací.',outsideRoot:'Projekt je mimo složku aplikací. Vyber projekt v nastaveném pracovním prostoru.',preparing:'Připravuji…',language:'Jazyk',files:'Soubory projektu',filesHelp:'Procházení, úpravy, nahrávání a mazání souborů odděleného projektu této konverzace.',dockerHelp:'Kontejnery, logy a vydání. Čtení stavu Docker neprobouzí.',openPhone:'Pro nastavení oznámení na iPhonu otevři nainstalovanou aplikaci Harness.',workspace:'Pracovní prostor',noWorkspace:'Nejprve vytvoř pracovní prostor.',ready:'Docker projektu je připravený.'}};
 const text=key=>copy[window.HarnessI18n.language][key]||copy.en[key]||key;
@@ -2117,20 +2214,23 @@ function apply(ctx,config={}){
  ctx.effect(()=>()=>{for(const view of views)view.destroy();views.clear();},'native-workbench: cleanup');
 }
 
-// This slot shows the session's current saved preview once, beside its latest
-// terminal reply. Native Deliverables and Files continue to own file actions.
+// The session's current saved preview appears beside its latest terminal reply.
 const previewResultCopy = {
  en: {
   title: 'Application result', open: 'Open preview', reopen: 'Restore preview',
+  download: 'Download file',
   pending: 'Opening preview…', waiting: 'Preview is not ready to reopen yet.',
   refresh: 'Refresh preview status', failed: 'Could not confirm the preview. Check its current status before trying again.',
   popup: 'Allow pop-ups for this site to open the preview.',
+  selectionChanged: 'The preview changed. Open the current preview and select the element again.',
  },
  cs: {
   title: 'Výsledek aplikace', open: 'Otevřít náhled', reopen: 'Obnovit náhled',
+  download: 'Stáhnout soubor',
   pending: 'Otevírám náhled…', waiting: 'Náhled zatím nelze obnovit.',
   refresh: 'Obnovit stav náhledu', failed: 'Náhled se nepodařilo potvrdit. Před dalším pokusem ověř stav.',
   popup: 'Pro otevření náhledu povol tomuto webu vyskakovací okna.',
+  selectionChanged: 'Náhled se změnil. Otevři aktuální náhled a vyber prvek znovu.',
  },
 };
 
@@ -2141,7 +2241,11 @@ function previewResultStatus(value) {
  const result = typeof value.result?.id === 'string' && /^[a-f0-9]{32}$/.test(value.result.id)
   ? { id: value.result.id, canReopen: value.result.canReopen === true }
   : null;
- return ready || result ? { ready, jobId, expiresAt, result } : null;
+ const binding = ready && /^[a-f0-9]{32}$/.test(value.previewId ?? '') &&
+  typeof value.generation === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value.generation)
+  ? {previewId:value.previewId,generation:value.generation,expiresAt}
+  : null;
+ return ready || result ? { ready, jobId, expiresAt, result, binding } : null;
 }
 
 async function requestPreviewResult(body, signal) {
@@ -2169,7 +2273,7 @@ function previewGrant(value) {
  return url.href;
 }
 
-function SavedPreviewResult({sessionId}) {
+function SavedPreviewResult({sessionId,inputActions,conversation}) {
  const labels = previewResultCopy[useLanguage()] ?? previewResultCopy.en;
  const [preview, setPreview] = React.useState(null);
  const [action, setAction] = React.useState(null);
@@ -2185,6 +2289,8 @@ function SavedPreviewResult({sessionId}) {
    if (state.pending !== request || !state.active) return;
    const current = previewResultStatus(value);
    state.known = current !== null;
+   if (current?.result?.canReopen && current.result.id === state.lastReopen) state.lastReopen = null;
+   if (current?.ready || current?.result?.canReopen) setNotice(previous => previous === 'failed' ? null : previous);
    setPreview(current);
   } catch {
    if (state.active && state.pending === request && state.known) {
@@ -2225,7 +2331,9 @@ function SavedPreviewResult({sessionId}) {
   : preview?.result?.canReopen && preview.result.id !== state.lastReopen ? 'reopen' : null;
 
  async function openResult() {
-  if (!state.active || !operation || state.pending?.kind === 'open') return;
+  const resultId = preview.result?.id;
+  if (!state.active || !operation || state.pending?.kind === 'open' ||
+      (operation === 'reopen' && resultId === state.lastReopen)) return;
   // Open within the user gesture. No application URL is assigned until a
   // fresh server grant is verified for the same still-mounted session.
   const popup = window.open('', '_blank');
@@ -2236,7 +2344,6 @@ function SavedPreviewResult({sessionId}) {
   state.pending = request;
   setAction(operation);
   setNotice(null);
-  const resultId = preview.result?.id;
   if (operation === 'reopen') state.lastReopen = resultId;
   const body = operation === 'open'
    ? {operation, sessionId, jobId:preview.jobId}
@@ -2258,7 +2365,18 @@ function SavedPreviewResult({sessionId}) {
   }
  }
 
- if (!preview) return null;
+ function selectionChanged(value) {
+  if (state.pending?.kind === 'status') {
+   state.pending.controller.abort();
+   state.pending = null;
+  }
+  const current = previewResultStatus(value);
+  state.known = current !== null;
+  setPreview(current);
+  setNotice('selectionChanged');
+ }
+
+ if (!preview) return notice === 'selectionChanged' ? h('p',{role:'status'},labels.selectionChanged) : null;
  return h('section', {'aria-label':labels.title, 'data-harness-preview-result':sessionId},
   operation
    ? h('button', {type:'button', className:'harness-native-action', disabled:action !== null,
@@ -2267,19 +2385,276 @@ function SavedPreviewResult({sessionId}) {
     onClick:() => void refresh()}, labels.refresh),
   action || notice || !operation
    ? h('span', {role:'status', style:{display:'block'}}, labels[action ? 'pending' : notice ?? 'waiting'])
-   : null);
+   : null,
+  operation === 'open' && action === null && preview.binding && inputActions && conversation
+   ? h(PreviewElementSelection,{
+    key:preview.binding.previewId+':'+preview.binding.generation, sessionId, binding:preview.binding, inputActions, conversation,
+    onPreviewChanged:selectionChanged, onSelectionStart:() => setNotice(previous => previous === 'selectionChanged' ? null : previous),
+   }) : null);
 }
 
-function CurrentPreviewResult({sessionId, turn, useChat}) {
+function CurrentPreviewResult({sessionId, turn, useChat, inputActions, conversation}) {
  const latest = useChat(snapshot => snapshot.timeline.turnOrder.at(-1));
  if (turn.turn !== latest || !turn.end) return null;
- return h(SavedPreviewResult, {key:sessionId, sessionId});
+ return h(SavedPreviewResult, {key:sessionId, sessionId,inputActions,conversation});
+}
+
+function PresentedFileDownload({actionUrl}) {
+ const labels = previewResultCopy[useLanguage()] ?? previewResultCopy.en;
+ const prefix = 'api/present.open?';
+ if (!actionUrl.startsWith(prefix)) return null;
+ const coordinates = new URLSearchParams(actionUrl.slice(prefix.length));
+ return h('a', {className:'harness-native-action', href:'/api/workbench/download?'+coordinates, download:''}, labels.download);
 }
 
 function registerPreviewResults(ctx) {
+ ctx.effect(() => ctx.slots.inject('deliverables.file.actions', () => ctx.slots.register({
+  name:'deliverables.file.actions', id:'harness.presented-download',
+ }, PresentedFileDownload)), 'native-workbench: presented file download');
  ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
   name:'conversation.chat.turnTail', id:'harness.application-result', order:70,
+  inject:()=>({conversation:ctx.conversation}),
  }, CurrentPreviewResult)), 'native-workbench: application result');
+}
+
+const previewSelectionCopy = {
+ en: {
+  start:'Select an element', heading:'Select an element from the preview snapshot',
+  loading:'Rendering the preview…', image:'Preview snapshot. Tap an element to select it.',
+  route:'Application path', show:'Show page', up:'Show previous section', down:'Show next section',
+  noElements:'No selectable elements in this section.',
+  routeHelp:'Use a path such as /catalog/details.',
+  choose:'Choose an element', empty:'Select an element', crop:'Selected element screenshot',
+  attach:'Add to next message', cancel:'Close selection',
+  confirming:'Checking the current preview…',
+  unconfirmed:'Could not confirm the preview. Select the element again.',
+  failure:'Could not capture this preview. Check that the preview is open and try again.',
+  draft:'The draft changed before the selection could be attached. Try again.',
+ },
+ cs: {
+  start:'Vybrat prvek', heading:'Vyber prvek ze snímku náhledu',
+  loading:'Vykresluji náhled…', image:'Snímek náhledu. Klepnutím vyber prvek.',
+  route:'Cesta v aplikaci', show:'Zobrazit stránku', up:'Zobrazit předchozí část', down:'Zobrazit další část',
+  noElements:'V této části nejsou prvky k výběru.',
+  routeHelp:'Zadej cestu, například /catalog/details.',
+  choose:'Výběr prvku', empty:'Vyber prvek', crop:'Výřez vybraného prvku',
+  attach:'Přidat k příští zprávě', cancel:'Zavřít výběr',
+  confirming:'Ověřuji aktuální náhled…',
+  unconfirmed:'Náhled se nepodařilo ověřit. Vyber prvek znovu.',
+  failure:'Náhled se nepodařilo zachytit. Ověř, že stále běží, a zkus to znovu.',
+  draft:'Rozepsaná zpráva se změnila dřív, než se podařilo přidat výběr. Zkus to znovu.',
+ },
+};
+
+function imageBlob(image) {
+ if (!image || typeof image.png !== 'string' || image.png.length > 1_400_000 ||
+     !Number.isSafeInteger(image.width) || image.width < 1 || image.width > 960 ||
+     !Number.isSafeInteger(image.height) || image.height < 1 || image.height > 720 ||
+     !Array.isArray(image.regions) || image.regions.length > 120) {
+  throw Error('PREVIEW_SNAPSHOT_INVALID');
+ }
+ const bytes = Uint8Array.from(atob(image.png), char => char.charCodeAt(0));
+ if (bytes.length < 24 || bytes.length > 1024 * 1024 ||
+     ![137,80,78,71,13,10,26,10].every((byte,index) => bytes[index] === byte) ||
+     new DataView(bytes.buffer).getUint32(16) !== image.width ||
+     new DataView(bytes.buffer).getUint32(20) !== image.height) throw Error('PREVIEW_SNAPSHOT_INVALID');
+ if (!image.regions.every(region => typeof region.selector === 'string' && /^[A-Za-z0-9_#> :()-]{1,256}$/.test(region.selector) &&
+     ['x','y','width','height'].every(key => Number.isSafeInteger(region[key])) &&
+     region.x >= 0 && region.y >= 0 && region.width > 0 && region.height > 0 &&
+     region.x+region.width <= image.width && region.y+region.height <= image.height)) throw Error('PREVIEW_SNAPSHOT_INVALID');
+ return new Blob([bytes], {type:'image/png'});
+}
+
+function cropPreviewElement(image, region) {
+ const canvas = document.createElement('canvas');
+ const scale = Math.min(1, 512 / Math.max(region.width, region.height));
+ canvas.width = Math.max(1, Math.floor(region.width*scale));
+ canvas.height = Math.max(1, Math.floor(region.height*scale));
+ const painter = canvas.getContext('2d');
+ if (!painter) return Promise.reject(Error('PREVIEW_CROP_UNAVAILABLE'));
+ painter.drawImage(image,region.x,region.y,region.width,region.height,0,0,canvas.width,canvas.height);
+ return new Promise((resolve,reject) => canvas.toBlob(blob => {
+  if (blob && blob.size <= 1024 * 1024) resolve(blob);
+  else reject(Error('PREVIEW_CROP_UNAVAILABLE'));
+ },'image/png'));
+}
+
+function PreviewElementSelection({sessionId, binding, inputActions, conversation, onPreviewChanged, onSelectionStart}) {
+ const labels = previewSelectionCopy[useLanguage()] ?? previewSelectionCopy.en;
+ const [open,setOpen] = React.useState(false);
+ const [capture,setCapture] = React.useState(null);
+ const [chosen,setChosen] = React.useState(null);
+ const [message,setMessage] = React.useState(null);
+ const [loading,setLoading] = React.useState(false);
+ const [confirming,setConfirming] = React.useState(false);
+ const [routeDraft,setRouteDraft] = React.useState('/');
+ const state = React.useRef({request:null, revision:0, snapshotUrl:null, cropUrl:null, position:{route:'/',scrollY:0}}).current;
+ const image = React.useRef(null);
+
+ const clear = React.useCallback(() => {
+  state.request?.abort();
+  state.request = null;
+  ++state.revision;
+  if (state.snapshotUrl) URL.revokeObjectURL(state.snapshotUrl);
+  if (state.cropUrl) URL.revokeObjectURL(state.cropUrl);
+  state.snapshotUrl = null;
+  state.cropUrl = null;
+ }, [state]);
+ React.useLayoutEffect(() => clear, [clear]);
+
+ async function show(event, {route,scrollY}) {
+  if (!event.nativeEvent.isTrusted || state.request || binding.expiresAt <= Date.now()) return;
+  onSelectionStart();
+  clear();
+  const request = new AbortController();
+  state.request = request;
+  setOpen(true);
+  setLoading(true);
+  setMessage(null);
+  setCapture(null);
+  setChosen(null);
+  try {
+   const result = await requestPreviewResult({
+    operation:'snapshot', sessionId, previewId:binding.previewId, generation:binding.generation,
+    layout:window.innerWidth < 640 ? 'mobile' : 'desktop', route, scrollY,
+   }, request.signal);
+   if (state.request !== request || Date.now() >= binding.expiresAt) return;
+   if (result.previewId !== binding.previewId || result.generation !== binding.generation) throw Error('PREVIEW_BINDING_CHANGED');
+   const {width,height,regions,route:renderedRoute,scrollY:actualY,maxScrollY,scrollStep} = result.image;
+   if (renderedRoute !== route || !Number.isSafeInteger(actualY) || !Number.isSafeInteger(maxScrollY) ||
+       !Number.isSafeInteger(scrollStep) || actualY < 0 || actualY > maxScrollY ||
+       maxScrollY > 20000 || scrollStep < 1 || scrollStep > 1000) throw Error('PREVIEW_POSITION_CHANGED');
+   state.snapshotUrl = URL.createObjectURL(imageBlob(result.image));
+   state.position = {route,scrollY:actualY};
+   setRouteDraft(route);
+   setCapture({width,height,regions,route,scrollY:actualY,maxScrollY,scrollStep,url:state.snapshotUrl});
+  } catch {
+   if (state.request === request) setMessage('failure');
+  } finally {
+   if (state.request === request) {state.request = null;setLoading(false);}
+  }
+ }
+
+ async function choose(index) {
+  const rendered = image.current;
+  const region = capture?.regions[index];
+  if (state.request || !rendered || !region || !rendered.complete || !rendered.naturalWidth) return;
+  const revision = ++state.revision;
+  if (state.cropUrl) URL.revokeObjectURL(state.cropUrl);
+  state.cropUrl = null;
+  setChosen(null);
+  setMessage(null);
+  try {
+   const blob = await cropPreviewElement(rendered, region);
+   if (state.revision !== revision || Date.now() >= binding.expiresAt) return;
+   state.cropUrl = URL.createObjectURL(blob);
+   setChosen({index, region, blob, revision, url:state.cropUrl});
+  } catch {
+   if (state.revision === revision) setMessage('failure');
+  }
+ }
+
+ function chooseFromImage(event) {
+  if (!event.nativeEvent.isTrusted) return;
+  const box = event.currentTarget.getBoundingClientRect();
+  const x = (event.clientX-box.left) * capture.width / box.width;
+  const y = (event.clientY-box.top) * capture.height / box.height;
+  let smallest = Infinity, index;
+  capture.regions.forEach((region,i) => {
+   const area = region.width * region.height;
+   if (x >= region.x && x < region.x+region.width && y >= region.y && y < region.y+region.height && area <= smallest) {
+    smallest = area;
+    index = i;
+   }
+  });
+  if (index !== undefined) void choose(index);
+ }
+
+ async function attach(event) {
+  if (!event.nativeEvent.isTrusted || state.request || !chosen ||
+      chosen.revision !== state.revision || Date.now() >= binding.expiresAt) return;
+  const request = new AbortController();
+  state.request = request;
+  setConfirming(true);
+  let current;
+  try {
+   current = await requestPreviewResult({operation:'status', sessionId}, request.signal);
+  } catch {
+   // Discard an unverified crop. The next user action starts with a new capture.
+  }
+  if (state.request !== request) return;
+  state.request = null;
+  setConfirming(false);
+  if (current?.state !== 'ready' || current.previewId !== binding.previewId ||
+      current.generation !== binding.generation || current.expiresAt !== binding.expiresAt ||
+      Date.now() >= binding.expiresAt) {
+   clear();
+   setCapture(null);
+   setChosen(null);
+   setMessage('unconfirmed');
+   if (current) onPreviewChanged(current);
+   return;
+  }
+  const file = new File([chosen.blob],'preview-element.png',{type:'image/png'});
+  const [draft] = conversation.createDrafts(sessionId,[file],false);
+  if (!draft) { setMessage('draft'); return; }
+  if (!inputActions.addAttachments([draft.id])) {
+   conversation.releaseDraftAttachment(draft.id);
+   setMessage('draft');
+   return;
+  }
+  const [width,height] = [capture.width,capture.height];
+  const details = 'Selected application element (preview snapshot): `'+chosen.region.selector+
+   '` on `'+capture.route+'` at '+width+' × '+height+' px, scroll Y '+capture.scrollY+
+   ' CSS px. See the attached crop.';
+  if (!inputActions.insertQuote(details)) {
+   inputActions.removeAttachment(draft.id);
+   conversation.releaseDraftAttachment(draft.id);
+   setMessage('draft');
+   return;
+  }
+  clear();
+  setOpen(false);
+  setCapture(null);
+  setChosen(null);
+ }
+
+ const button = (label, onClick, disabled=false) => h('button',{
+  type:'button', className:'harness-native-action', onClick, disabled,
+ },label);
+ if (!open) return button(labels.start,event=>void show(event,state.position));
+ return h('section', {'aria-label':labels.heading, 'data-preview-element-picker':sessionId},
+  h('p',null,labels.heading),
+  h('label',null,labels.route,' ',h('input',{
+   type:'text', value:routeDraft, placeholder:'/catalog/details', maxLength:512,
+   spellCheck:false, autoCapitalize:'none', disabled:loading || confirming, onChange:event=>setRouteDraft(event.target.value),
+  })),
+  button(labels.show,event=>void show(event,{route:routeDraft.trim(),scrollY:0}),loading || confirming || !routeDraft.trim().startsWith('/')),
+  h('small',{style:{display:'block'}},labels.routeHelp),
+  capture && h('p',{style:{display:'flex',flexWrap:'wrap',gap:'4px'}},
+   button(labels.up,event=>void show(event,{route:capture.route,scrollY:Math.max(0,capture.scrollY-capture.scrollStep)}),confirming || capture.scrollY===0),
+   button(labels.down,event=>void show(event,{route:capture.route,scrollY:Math.min(capture.maxScrollY,capture.scrollY+capture.scrollStep)}),confirming || capture.scrollY===capture.maxScrollY),
+  ),
+  (loading || confirming) && h('p',{role:'status'},labels[loading ? 'loading' : 'confirming']),
+  capture && h('img',{
+   src:capture.url, ref:image, alt:labels.image, onClick:chooseFromImage,
+   'data-preview-route':capture.route, 'data-preview-scroll-y':capture.scrollY,
+   style:{display:'block',width:'100%',maxWidth:capture.width+'px',height:'auto',cursor:'crosshair'},
+  }),
+  capture?.regions.length === 0 && h('p',{role:'status'},labels.noElements),
+  capture && capture.regions.length > 0 && h('label',null,labels.choose,
+   h('select',{value:chosen?.index ?? '', disabled:confirming, onChange:event => {
+    if (event.nativeEvent.isTrusted && event.target.value !== '') void choose(Number(event.target.value));
+   },style:{display:'block',maxWidth:'100%'}},
+   h('option',{value:'',disabled:true},labels.empty),
+   capture.regions.map((region,index)=>h('option',{key:index,value:index},region.selector)))),
+  chosen && h('figure', {style:{margin:'8px 0'}},
+   h('img',{src:chosen.url, alt:labels.crop,style:{display:'block',maxWidth:'100%',height:'auto'}}),
+   h('figcaption',null,h('code',null,chosen.region.selector))),
+  message && h('p',{role:'status'},labels[message]),
+  chosen && button(labels.attach,event=>void attach(event),confirming),
+  button(labels.cancel,()=>{clear();setOpen(false);setLoading(false);setConfirming(false);setCapture(null);setChosen(null);}),
+ );
 }
 
 return {inject,apply};

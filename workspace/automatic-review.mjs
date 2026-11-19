@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {finalizeCriteria} from '../quality/criteria.mjs';
 import { changedApplicationCode } from './verification-guidance.mjs';
 import {acknowledgeAutomatic,recoveryState} from './automatic-recovery.mjs';
 import {watchAutomaticCancellation,releaseAutomaticCancellation} from './automatic-cancellation.mjs';
@@ -224,6 +225,7 @@ export async function automaticReview(manager, input, record, budget, settings, 
     const report = settled.value;
     a.recoveryFailures=0;
     a.lastCheck = { at: Date.now(), passed: report?.passed === true, stale: report?.stale === true,
+      criteria:finalizeCriteria(report,{projectSourceHash:a.lastAutomaticOutcome.sourceHash,outcome:report?.criteriaConfirmed===true&&a.lastAutomaticOutcome.sourceHash===report?.sourceHash?'current':report?.stale?'stale':'unknown'}),
       checks: Array.isArray(report?.checks) ? report.checks.slice(0,24).filter(check => check && typeof check.id === 'string').map(check => ({ id: check.id.slice(0,80), passed: check.passed === true })) : [] };
     const outcome = JSON.stringify({ passed: report?.passed, complete: report?.complete, stale: report?.stale,
       code: /^[A-Z0-9_]{1,80}$/.test(report?.code ?? '') ? report.code : undefined,

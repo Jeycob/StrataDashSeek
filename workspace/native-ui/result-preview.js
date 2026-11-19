@@ -1,17 +1,20 @@
-// This slot shows the session's current saved preview once, beside its latest
-// terminal reply. Native Deliverables and Files continue to own file actions.
+// The session's current saved preview appears beside its latest terminal reply.
 const previewResultCopy = {
  en: {
   title: 'Application result', open: 'Open preview', reopen: 'Restore preview',
+  download: 'Download file',
   pending: 'Opening preview…', waiting: 'Preview is not ready to reopen yet.',
   refresh: 'Refresh preview status', failed: 'Could not confirm the preview. Check its current status before trying again.',
   popup: 'Allow pop-ups for this site to open the preview.',
+  selectionChanged: 'The preview changed. Open the current preview and select the element again.',
  },
  cs: {
   title: 'Výsledek aplikace', open: 'Otevřít náhled', reopen: 'Obnovit náhled',
+  download: 'Stáhnout soubor',
   pending: 'Otevírám náhled…', waiting: 'Náhled zatím nelze obnovit.',
   refresh: 'Obnovit stav náhledu', failed: 'Náhled se nepodařilo potvrdit. Před dalším pokusem ověř stav.',
   popup: 'Pro otevření náhledu povol tomuto webu vyskakovací okna.',
+  selectionChanged: 'Náhled se změnil. Otevři aktuální náhled a vyber prvek znovu.',
  },
 };
 
@@ -22,7 +25,11 @@ function previewResultStatus(value) {
  const result = typeof value.result?.id === 'string' && /^[a-f0-9]{32}$/.test(value.result.id)
   ? { id: value.result.id, canReopen: value.result.canReopen === true }
   : null;
- return ready || result ? { ready, jobId, expiresAt, result } : null;
+ const binding = ready && /^[a-f0-9]{32}$/.test(value.previewId ?? '') &&
+  typeof value.generation === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value.generation)
+  ? {previewId:value.previewId,generation:value.generation,expiresAt}
+  : null;
+ return ready || result ? { ready, jobId, expiresAt, result, binding } : null;
 }
 
 async function requestPreviewResult(body, signal) {
@@ -50,7 +57,7 @@ function previewGrant(value) {
  return url.href;
 }
 
-function SavedPreviewResult({sessionId}) {
+function SavedPreviewResult({sessionId,inputActions,conversation}) {
  const labels = previewResultCopy[useLanguage()] ?? previewResultCopy.en;
  const [preview, setPreview] = React.useState(null);
  const [action, setAction] = React.useState(null);
@@ -66,6 +73,8 @@ function SavedPreviewResult({sessionId}) {
    if (state.pending !== request || !state.active) return;
    const current = previewResultStatus(value);
    state.known = current !== null;
+   if (current?.result?.canReopen && current.result.id === state.lastReopen) state.lastReopen = null;
+   if (current?.ready || current?.result?.canReopen) setNotice(previous => previous === 'failed' ? null : previous);
    setPreview(current);
   } catch {
    if (state.active && state.pending === request && state.known) {
@@ -106,7 +115,9 @@ function SavedPreviewResult({sessionId}) {
   : preview?.result?.canReopen && preview.result.id !== state.lastReopen ? 'reopen' : null;
 
  async function openResult() {
-  if (!state.active || !operation || state.pending?.kind === 'open') return;
+  const resultId = preview.result?.id;
+  if (!state.active || !operation || state.pending?.kind === 'open' ||
+      (operation === 'reopen' && resultId === state.lastReopen)) return;
   // Open within the user gesture. No application URL is assigned until a
   // fresh server grant is verified for the same still-mounted session.
   const popup = window.open('', '_blank');
@@ -117,7 +128,6 @@ function SavedPreviewResult({sessionId}) {
   state.pending = request;
   setAction(operation);
   setNotice(null);
-  const resultId = preview.result?.id;
   if (operation === 'reopen') state.lastReopen = resultId;
   const body = operation === 'open'
    ? {operation, sessionId, jobId:preview.jobId}
@@ -139,7 +149,18 @@ function SavedPreviewResult({sessionId}) {
   }
  }
 
- if (!preview) return null;
+ function selectionChanged(value) {
+  if (state.pending?.kind === 'status') {
+   state.pending.controller.abort();
+   state.pending = null;
+  }
+  const current = previewResultStatus(value);
+  state.known = current !== null;
+  setPreview(current);
+  setNotice('selectionChanged');
+ }
+
+ if (!preview) return notice === 'selectionChanged' ? h('p',{role:'status'},labels.selectionChanged) : null;
  return h('section', {'aria-label':labels.title, 'data-harness-preview-result':sessionId},
   operation
    ? h('button', {type:'button', className:'harness-native-action', disabled:action !== null,
@@ -148,17 +169,34 @@ function SavedPreviewResult({sessionId}) {
     onClick:() => void refresh()}, labels.refresh),
   action || notice || !operation
    ? h('span', {role:'status', style:{display:'block'}}, labels[action ? 'pending' : notice ?? 'waiting'])
-   : null);
+   : null,
+  operation === 'open' && action === null && preview.binding && inputActions && conversation
+   ? h(PreviewElementSelection,{
+    key:preview.binding.previewId+':'+preview.binding.generation, sessionId, binding:preview.binding, inputActions, conversation,
+    onPreviewChanged:selectionChanged, onSelectionStart:() => setNotice(previous => previous === 'selectionChanged' ? null : previous),
+   }) : null);
 }
 
-function CurrentPreviewResult({sessionId, turn, useChat}) {
+function CurrentPreviewResult({sessionId, turn, useChat, inputActions, conversation}) {
  const latest = useChat(snapshot => snapshot.timeline.turnOrder.at(-1));
  if (turn.turn !== latest || !turn.end) return null;
- return h(SavedPreviewResult, {key:sessionId, sessionId});
+ return h(SavedPreviewResult, {key:sessionId, sessionId,inputActions,conversation});
+}
+
+function PresentedFileDownload({actionUrl}) {
+ const labels = previewResultCopy[useLanguage()] ?? previewResultCopy.en;
+ const prefix = 'api/present.open?';
+ if (!actionUrl.startsWith(prefix)) return null;
+ const coordinates = new URLSearchParams(actionUrl.slice(prefix.length));
+ return h('a', {className:'harness-native-action', href:'/api/workbench/download?'+coordinates, download:''}, labels.download);
 }
 
 function registerPreviewResults(ctx) {
+ ctx.effect(() => ctx.slots.inject('deliverables.file.actions', () => ctx.slots.register({
+  name:'deliverables.file.actions', id:'harness.presented-download',
+ }, PresentedFileDownload)), 'native-workbench: presented file download');
  ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
   name:'conversation.chat.turnTail', id:'harness.application-result', order:70,
+  inject:()=>({conversation:ctx.conversation}),
  }, CurrentPreviewResult)), 'native-workbench: application result');
 }
