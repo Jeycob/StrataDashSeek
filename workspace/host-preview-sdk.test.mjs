@@ -85,6 +85,61 @@ async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=fa
 }
 async function start(f,agent){const result=await f.call(agent,'project_exec',args);assert.equal(result.isError,false,JSON.stringify(result));return result.value.jobId;}
 async function open(f,agent,jobId){const result=await f.call(agent,'project_preview',{operation:'open',jobId});assert.equal(result.isError,false,JSON.stringify(result));return result.value;}
+function foreground(f,beforeResult=()=>{}){
+ const execute=f.ctx.shell.execute,commands=[];
+ f.ctx.shell.execute=async spec=>{
+  if(spec.stdin)return execute(spec);
+  commands.push(spec.command);
+  return{async result(){await beforeResult(spec);return{exitCode:0,stdout:{text:''},stderr:{text:''},timedOut:false};}};
+ };
+ return commands;
+}
+const command=(f,a,value,signal)=>f.call(a,'project_exec',{command:value,description:'Synthetic foreground admission check'},signal);
+
+test('verified own preview releases queued copy and URL checks while its SDK producer remains alive',{timeout:10000},async t=>{
+ const f=await fixture(t,{heavy:true}),a=await f.agent('owner'),commands=foreground(f),id=await start(f,a),capture=await f.run.custodyFor(id,a.id),cancel=new AbortController();
+ let guarded=0;f.ctx.tools.guard(exec=>{if(exec.name==='project_exec'&&!exec.arguments.run_in_background)guarded++;});
+ const pending=[command(f,a,'cp source.txt copy.txt',cancel.signal),command(f,a,'curl --fail http://127.0.0.1:21000/',cancel.signal)];
+ try{
+  await until(()=>guarded===2);await tick();await tick();assert.equal(commands.length,0);
+  await open(f,a,id);await until(()=>commands.length===2);
+  for(const result of await Promise.all(pending))assert.equal(result.isError,false,JSON.stringify(result));
+  assert(commands.some(value=>value.includes('cp source.txt copy.txt')));assert(commands.some(value=>value.includes('curl --fail http://127.0.0.1:21000/')));
+  capture.assertCurrent();assert.equal(f.processes[0].status,'running');assert.equal(f.processes[0].kills,0);
+ }finally{cancel.abort();await Promise.allSettled(pending);}
+});
+
+test('foreign, stale-context and failed-peer preview opens retain the producer heavy admission',{timeout:10000},async t=>{
+ const f=await fixture(t,{heavy:true}),a=await f.agent('owner'),b=await f.agent('foreign'),commands=foreground(f),id=await start(f,a),cancel=new AbortController();
+ let guarded=0;f.ctx.tools.guard(exec=>{if(exec.name==='project_exec'&&!exec.arguments.run_in_background)guarded++;});
+ const pending=command(f,a,'cp source.txt copy.txt',cancel.signal);
+ try{
+  await until(()=>guarded===1);await tick();await tick();assert.equal(commands.length,0);
+  assert.equal((await f.call(b,'project_preview',{operation:'open',jobId:id})).isError,true);
+  const record=f.manager.data.sessions[a.id],workspace=f.workspaces[0],workspaceId=record.workspaceId;
+  record.workspaceId=workspace.id='changed-workspace';
+  try{assert.equal((await f.call(a,'project_preview',{operation:'open',jobId:id})).isError,true);}finally{record.workspaceId=workspace.id=workspaceId;}
+  assert.equal(f.targets.length,0);assert.equal(commands.length,0);
+  f.rejectPeer=true;assert.equal((await f.call(a,'project_preview',{operation:'open',jobId:id})).isError,true);
+  await tick();await tick();assert.equal(commands.length,0);assert.equal(f.processes[0].status,'running');assert.equal(f.processes[0].kills,0);
+  f.rejectPeer=false;await open(f,a,id);await until(()=>commands.length===1);assert.equal((await pending).isError,false);
+  assert.equal(f.processes[0].status,'running');
+ }finally{cancel.abort();await Promise.allSettled([pending]);}
+});
+
+test('reopening and cleaning a handed-off preview cannot release another active heavy command',{timeout:10000},async t=>{
+ const f=await fixture(t,{heavy:true}),a=await f.agent('owner'),id=await start(f,a);await open(f,a,id);
+ let release;const hold=new Promise(resolve=>{release=resolve;}),commands=foreground(f,spec=>spec.command.includes('cp source.txt copy.txt')?hold:undefined),cancel=new AbortController();
+ const holding=command(f,a,'cp source.txt copy.txt',cancel.signal);let queued;
+ try{
+  await until(()=>commands.length===1);
+  let guarded=0;f.ctx.tools.guard(exec=>{if(exec.name==='project_exec')guarded++;});
+  queued=command(f,a,'curl --fail http://127.0.0.1:21000/',cancel.signal);await until(()=>guarded===1);await tick();await tick();assert.equal(commands.length,1);
+  await open(f,a,id);await tick();assert.equal(commands.length,1);assert.equal(f.processes[0].status,'running');
+  const closed=await f.control({operation:'close',sessionId:a.id});assert.equal(closed.workSettled,true);assert.equal(f.processes[0].status,'killed');await tick();assert.equal(commands.length,1);
+  release();await until(()=>commands.length===2);for(const result of await Promise.all([holding,queued]))assert.equal(result.isError,false,JSON.stringify(result));
+ }finally{release();cancel.abort();await Promise.allSettled([holding,queued]);}
+});
 
 for(const mode of ['complete','cli-exit','owner-stop','readiness-failure','stale-contract'])test('one actual SDK verify execution owns server and channel through '+mode, {timeout:10000},async t=>{
  const f=await fixture(t,{heavy:true}),a=await f.agent('owner'),root=f.manager.data.sessions[a.id].root;
@@ -160,8 +215,10 @@ test('actual SDK browser verification queues behind its own live producer until 
 });
 
 test('actual scoped SDK tool registers an own preview with Apps absent and no public authority arguments',async t=>{
- const f=await fixture(t),a=await f.agent('owner'),id=await start(f,a),opened=await open(f,a,id);
+ const f=await fixture(t),a=await f.agent('owner'),id=await start(f,a),result=await f.call(a,'project_preview',{operation:'open',jobId:id}),opened=result.value;assert.equal(result.isError,false,JSON.stringify(result));
  assert.equal(opened.state,'ready');assert.match(opened.url,/https:\/\/same.test:8443\/__preview\/bootstrap#/);assert.equal(opened.generation,(await f.run.custodyFor(id,a.id)).identity.generation);assert.equal(f.targets.length,1);assert.equal(f.targets[0].port,21000);assert.equal(f.targets[0].owner,a.id);assert.equal(f.targets[0].workspaceId,'workspace-owner');assert(!('pid'in opened));
+ const rendered=result.content.map(block=>block.text??'').join('\n');assert(rendered.includes('Opening link valid until: '+new Date(opened.grantExpiresAt).toISOString()));assert(rendered.includes('Preview server available until: '+new Date(opened.expiresAt).toISOString()));
+ const status=await f.call(a,'project_preview',{operation:'status'});assert.equal(status.isError,false,JSON.stringify(status));assert(!status.content.some(block=>block.text?.includes('Opening link valid until:')));
  const closed=await f.call(a,'project_preview',{operation:'close'});assert.equal(closed.value.workSettled,true);assert.equal(f.processes[0].kills,1);assert(f.brokers[0].closed>0);
 });
 test('disabled configuration is unavailable without connector, broker, listener or process effects',async t=>{
@@ -195,8 +252,8 @@ test('restart waits actual old done, uses one hidden SDK admitted spec, preserve
  assert.equal(restarted.state,'ready');assert.equal(f.calls.length,2);assert.equal(restarted.previewId,opened.previewId);assert.equal(restarted.expiresAt,opened.expiresAt);assert.equal(restarted.url,new URL(opened.url).origin+'/');assert.notEqual(restarted.generation,opened.generation);
  assert.equal(f.calls[1].command,f.calls[0].command);assert(f.calls[1].timeoutMs<=f.calls[0].timeoutMs);assert.notEqual(f.calls[1].stdin,f.calls[0].stdin);
  await f.control(input);assert.equal(f.calls.length,2);await assert.rejects(f.control({...input,requestId:'stale-new'}),{code:'PREVIEW_RESTART_STALE'});
- const b=await f.agent('other');let foreignStarted=false;const queued=start(f,b).then(value=>{foreignStarted=true;return value;});await tick();await tick();assert.equal(foreignStarted,false);
- await f.control({operation:'close',sessionId:a.id});await queued;assert.equal(foreignStarted,true);
+ const b=await f.agent('other'),other=await start(f,b);await until(()=>f.processes.length===3);assert.equal(f.processes[1].status,'running');assert.equal(f.processes[2].status,'running');
+ await f.control({operation:'close',sessionId:a.id});assert.equal(f.processes[1].status,'killed');assert.equal(f.processes[2].kills,0);(await f.run.custodyFor(other,b.id)).assertCurrent();
 });
 test('unknown old settlement blocks restart; no new admitted command or lease extension',async t=>{
  const f=await fixture(t,{operationMs:40}),a=await f.agent('owner'),id=await start(f,a),opened=await open(f,a,id);f.processes[0].hold=true;

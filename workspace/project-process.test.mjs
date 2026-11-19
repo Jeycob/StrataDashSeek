@@ -132,6 +132,24 @@ test('actual pinned SDK jobs pump only filtered app output for a trusted custody
  f.ctx.jobs.kill(result.jobId,owner.id);await capture.done;assert.throws(capture.assertCurrent,{code:'PROJECT_CUSTODY_EXPIRED'});
 });
 
+test('preview admission release requires private current custody and never releases another holder on cleanup',async t=>{
+ const f=await fixture(t,{custody:true}),owner=f.agent('preview-owner'),gate=new FairGate();
+ const execution={agent:owner,callId:'preview-admission',signal:new AbortController().signal};
+ const releaseCall=bindHeavyToolLease(execution,await gate.acquire({rootId:owner.id}));t.after(releaseCall);
+ const result=await f.run.startWithCustody(args,execution),capture=await f.run.custodyFor(result.jobId,owner.id);
+ releaseCall();assert.equal(gate.snapshot().active.length,1);
+ assert.throws(()=>f.run.releasePreviewAdmission({...capture}),{code:'PROJECT_CUSTODY_UNAVAILABLE'});
+ assert.equal(gate.snapshot().active.length,1);
+ f.run.releasePreviewAdmission(capture);assert.equal(gate.snapshot().active.length,0);
+ assert.equal(f.processes[0].status,'running');assert.equal(f.timers.size,1);capture.assertCurrent();
+ const next=await gate.acquire({rootId:'next-build'});t.after(next.release);
+ f.run.releasePreviewAdmission(capture);assert.equal(gate.snapshot().owner,'next-build');
+ f.ctx.jobs.kill(result.jobId,owner.id);await capture.done;
+ assert.equal(f.processes[0].kills,1);assert.equal(f.timers.size,0);assert.equal(gate.snapshot().owner,'next-build');
+ assert.throws(()=>f.run.releasePreviewAdmission(capture),{code:'PROJECT_CUSTODY_EXPIRED'});
+ assert.equal(gate.snapshot().owner,'next-build');
+});
+
 test('two SDK projects share heavy admission for managed bash and project_exec through background process settlement', async t => {
   const f = await fixture(t, { admission: true }), a = f.agent('heavy-a'), b = f.agent('heavy-b');
   const command = { command: 'npm run build', description: 'Build synthetic project', run_in_background: true };

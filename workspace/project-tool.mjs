@@ -72,6 +72,7 @@ export function createProjectCommandRunner(ctx, manager, config = {}, binding = 
     await processes.custodyFor(background.jobId,execution.agent.id,{signal:execution.signal});return background;
   };
   run.custodyFor = processes.custodyFor;
+  run.releasePreviewAdmission = processes.releasePreviewAdmission;
   run.producerFor=processes.producerFor;run.stopOwned=processes.stopOwned;
   run.startCaptured=async(seed,execution,{deadline,onAdmitted})=>{
     const admitted=restartSeeds.get(seed);
