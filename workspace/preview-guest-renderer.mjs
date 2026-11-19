@@ -45,14 +45,20 @@ function framing(socket) {
 }
 
 function validateStart(value,instance) {
- if (!exact(value,'binding,instance,layout,nonce,route,scrollY,type,version') ||
+ if (!exact(value,'binding,budgetMs,instance,layout,nonce,route,scrollY,type,version') ||
      value.type!=='render' || value.version!==1 || value.instance!==instance || !bootId.test(value.nonce) ||
      !['mobile','desktop'].includes(value.layout) ||
      !exact(value.binding,'deadline,generation,previewId,projectId,sessionId') ||
      !['sessionId','generation','projectId','previewId'].every(key=>identity(value.binding,key)) ||
-     !Number.isSafeInteger(value.binding.deadline) || value.binding.deadline<=Date.now() ||
-     value.binding.deadline>Date.now()+10000) throw failure();
+     !Number.isSafeInteger(value.binding.deadline) || value.binding.deadline<=0 ||
+     !Number.isSafeInteger(value.budgetMs) || value.budgetMs<1 || value.budgetMs>10000) throw failure();
  previewSnapshotPosition(value.route,value.scrollY);
+}
+
+function remainingBudget(deadline) {
+ const remaining=deadline-Date.now();
+ if (!Number.isSafeInteger(remaining)||remaining<1) throw failure();
+ return Math.min(10000,remaining);
 }
 
 function checkImage(image,start) {
@@ -82,14 +88,20 @@ export function createGuestPreviewSnapshot({port,serverName,instance,credentials
   try {
    if (!Number.isInteger(port)||port<1024||port>65535||!name.test(serverName)||!bootId.test(instance)) throw failure();
    const position=previewSnapshotPosition(options.route,options.scrollY);
-   const start={type:'render',version:1,instance,nonce:randomUUID(),binding:options.binding,layout:options.layout,...position};
+   const start={type:'render',version:1,instance,nonce:randomUUID(),binding:options.binding,
+    budgetMs:remainingBudget(options.binding?.deadline),layout:options.layout,...position};
    validateStart(start,instance);
    options.assertCurrent();
    const keys=await credentials();
+   options.assertCurrent();
    signal.throwIfAborted();
    socket=tls.connect({...keys,host:'127.0.0.1',port,servername:serverName,minVersion:'TLSv1.3',rejectUnauthorized:true});
    signal.addEventListener('abort',abort,{once:true});
    await once(socket,'secureConnect',{signal});
+   options.assertCurrent();
+   signal.throwIfAborted();
+   // Only Native compares its own absolute owner deadline. Guest clocks may differ.
+   start.budgetMs=remainingBudget(start.binding.deadline);
    const wire=framing(socket), readAsset=ownedPreviewAssets(options);
    await wire.write(start);
    let requests=0;
@@ -120,7 +132,7 @@ export function startPreviewGuestWorker({host,port,instance,credentials,browser}
   try {
    const start=await wire.read();
    validateStart(start,instance);
-   const signal=AbortSignal.any([cancel.signal,AbortSignal.timeout(Math.max(1,start.binding.deadline-Date.now()))]);
+   const signal=AbortSignal.any([cancel.signal,AbortSignal.timeout(start.budgetMs)]);
    signal.addEventListener('abort',()=>socket.destroy(),{once:true});
    let assets=Promise.resolve();
    function readAsset(path) {
