@@ -142,6 +142,105 @@
    const recheck=button(editorText('recheck'),()=>void recheckDocument(doc));recheck.hidden=Boolean(doc.serverVersion);editorBinding={doc,text,save,rename,remove,recheck};controls.append(save,button(t('download'),()=>{const a=node('a');a.href='/api/workbench/download?'+new URLSearchParams({sessionId:doc.sessionId,path:doc.path});a.download=doc.path.split('/').at(-1);a.click();}),rename,remove,recheck);editor.append(controls,text);if(doc.binary)editor.append(node('p',t('binaryFile')));if(doc.status==='uncertain')editor.append(node('p',editorText(doc.uncertainOperation==='rename'?'renameUnknown':'uncertain')));
   }else editor.append(node('p',t('open')));layout.append(tree,editor);content.append(layout);
  }
+ const decisionDrafts=new Map();
+ function projectMemoryPanel(workspaceId){
+  const copy=I.language==='cs'?{
+   title:'Paměť projektu',help:'Potvrzená rozhodnutí pro všechny chaty tohoto workspace.',
+   empty:'Žádná potvrzená rozhodnutí.',loading:'Načítám paměť…',failed:'Paměť projektu se nepodařilo načíst nebo uložit.',
+   decision:'Rozhodnutí',add:'Přidat potvrzené rozhodnutí',edit:'Upravit',save:'Uložit rozhodnutí',cancel:'Zrušit',
+   invalid:'Zadej krátké rozhodnutí na jeden řádek.',full:'V paměti je pět rozhodnutí.',
+   stale:'Paměť se mezitím změnila. Obnov seznam a zkontroluj svou úpravu.',remove:'Smazat',confirm:'Smazat rozhodnutí?',saved:'Paměť projektu je uložená.',
+  }:{
+   title:'Project memory',help:'Confirmed decisions shared by all chats in this workspace.',
+   empty:'No confirmed decisions.',loading:'Loading memory…',failed:'Project memory could not be loaded or saved.',
+   decision:'Decision',add:'Add confirmed decision',edit:'Edit',save:'Save decision',cancel:'Cancel',
+   invalid:'Enter a short decision on one line.',full:'Memory contains five decisions.',
+   stale:'Memory changed. Refresh the list and review your edit.',remove:'Delete',confirm:'Delete this decision?',saved:'Project memory saved.',
+  };
+  const section=node('section'),list=node('ul'),notice=node('p'),status=node('p'),form=node('form'),label=node('label',copy.decision),input=node('input');
+  section.dataset.projectMemory='true';notice.setAttribute('role','alert');status.setAttribute('role','status');
+  let snapshot=null,busy=false,stale=false,confirming=null;
+  const visible=()=>alive()&&selectedWorkspace===workspaceId&&tab==='settings'&&section.isConnected;
+  const draft=()=>decisionDrafts.get(workspaceId)||{id:null,text:''};
+  const save=button(copy.add,null),cancel=button(copy.cancel,()=>{
+   decisionDrafts.delete(workspaceId);input.value='';updateControls();input.focus();
+  });
+  input.required=true;input.maxLength=160;input.value=draft().text;
+  input.oninput=()=>decisionDrafts.set(workspaceId,{id:draft().id,text:input.value});
+  save.type='submit';label.append(input);form.append(label,save,cancel);
+  const refreshButton=button(t('refresh'),()=>void request('list'));
+  section.append(node('h3',copy.title),node('p',copy.help),refreshButton,status,notice,list,form);
+
+  function updateControls(){
+   const editing=Boolean(draft().id);
+   input.disabled=busy||!snapshot;
+   save.disabled=busy||!snapshot||stale||(!editing&&snapshot.entries.length>=5);
+   save.textContent=editing?copy.save:copy.add;
+   refreshButton.disabled=busy;cancel.hidden=!editing;cancel.disabled=busy;
+  }
+  function renderRows(){
+   list.replaceChildren();
+   if(!snapshot?.entries.length){if(snapshot)list.append(node('li',copy.empty));return;}
+   for(const entry of snapshot.entries){
+    const item=node('li'),text=node('span',entry.text);
+    text.style.overflowWrap='anywhere';
+    const edit=button(copy.edit,()=>{
+     confirming=null;decisionDrafts.set(workspaceId,{id:entry.id,text:entry.text});
+     input.value=entry.text;renderRows();updateControls();input.focus();
+    });
+    const remove=button(copy.remove,()=>{confirming=entry.id;renderRows();list.querySelector('[data-memory-confirm]')?.focus();});
+    edit.disabled=remove.disabled=busy||stale;
+    item.append(text,' ',edit,' ');
+    if(confirming===entry.id){
+     const confirmButton=button(copy.confirm,()=>void request('delete',{id:entry.id}));
+     confirmButton.dataset.memoryConfirm='true';
+     const cancelDelete=button(copy.cancel,()=>{confirming=null;renderRows();list.querySelector('[data-memory-delete="'+entry.id+'"]')?.focus();});
+     confirmButton.disabled=cancelDelete.disabled=busy||stale;
+     item.append(confirmButton,' ',cancelDelete);
+    }else{remove.dataset.memoryDelete=entry.id;item.append(remove);}
+    list.append(item);
+   }
+  }
+  async function request(operation,fields={}){
+   if(busy||!visible())return;
+   const submitted=decisionDrafts.get(workspaceId);
+   busy=true;notice.textContent='';status.textContent=snapshot?'':copy.loading;
+   updateControls();renderRows();
+   try{
+    const body={operation,workspaceId,...(operation==='list'?{}:{revision:snapshot.revision,...fields})};
+    const {r,value}=await scopedFetch('/api/workbench/project-memory',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),credentials:'same-origin',cache:'no-store'},15000);
+    if(!r.ok)throw Object.assign(Error(copy.failed),{code:value?.code});
+    if(value?.version!==1||value.workspaceId!==workspaceId||!Array.isArray(value.entries))throw Error(copy.failed);
+    const clearDraft=(operation==='add'||operation==='update'||(operation==='delete'&&submitted?.id===fields.id))&&
+     decisionDrafts.get(workspaceId)===submitted;
+    if(clearDraft)decisionDrafts.delete(workspaceId);
+    if(!visible())return;
+    snapshot=value;stale=false;confirming=null;
+    if(clearDraft)input.value='';
+    if(operation==='list'&&draft().id&&!value.entries.some(entry=>entry.id===draft().id)){
+     decisionDrafts.set(workspaceId,{id:null,text:input.value});
+    }
+    status.textContent=operation==='list'?'':copy.saved;
+   }catch(error){
+    if(!visible())return;
+    status.textContent='';
+    stale=error.code==='PROJECT_MEMORY_STALE'||stale;
+    notice.textContent=stale?copy.stale:error.code==='PROJECT_MEMORY_FULL'?copy.full:error.code==='PROJECT_MEMORY_TEXT_INVALID'?copy.invalid:copy.failed;
+   }finally{
+    busy=false;if(visible()){updateControls();renderRows();}
+   }
+  }
+  form.onsubmit=event=>{
+   event.preventDefault();
+   if(save.disabled)return;
+   const text=input.value.trim();
+   if(!text||new TextEncoder().encode(JSON.stringify(text)).length>162){notice.textContent=copy.invalid;return;}
+   const {id}=draft();
+   void request(id?'update':'add',id?{id,text}:{text});
+  };
+  updateControls();queueMicrotask(()=>void request('list'));
+  return section;
+ }
  function renderSettings(){
   const content=el('wb-content');content.replaceChildren();if(!selectedWorkspace){content.append(node('p',t('selectWorkspace')));return;}
   const workspaceId=selectedWorkspace,workspace=state.workspaces.find(w=>w.id===workspaceId),saved=workspace?.settings||{},draft=settingsDrafts.get(workspaceId)||{},value={...state.defaults,...saved},form=node('form');form.className='wb-form';
@@ -181,6 +280,7 @@
    }catch(error){if(alive()&&selectedWorkspace===workspaceId&&tab==='settings')throw error;}
    finally{if(settingsWrites.get(workspaceId)===write)settingsWrites.delete(workspaceId);window.dispatchEvent(new CustomEvent('harness-workspace-write-change',{detail:workspaceId}));}});
   };
+  if(state.projectMemoryVersion===1)content.append(projectMemoryPanel(workspaceId));
   content.append(form,node('p',t('settingsNote')));
  }
  function renderSessions(trash=false){const content=el('wb-content');content.replaceChildren(node('p',t('trashNote')));const rows=trash?Object.keys(state.trash).map(id=>sessionRows.find(s=>s.sessionId===id)||{sessionId:id}):sessionRows.filter(s=>!state.trash[s.sessionId]);for(const s of rows){const row=node('div');row.className='wb-row';row.append(node('span',(s.title||s.sessionId)+(state.running.includes(s.sessionId)?' · '+t('running'):'')));const b=button(t(trash?'restore':'moveTrash'),()=>void action(async()=>{if(!trash&&!confirm(t('trashConfirm')))return;await api({op:trash?'restore':'trash',sessionId:s.sessionId});await refresh();}));b.disabled=!trash&&state.running.includes(s.sessionId);row.append(b);content.append(row);}if(!rows.length)content.append(node('p',t('empty')));}
@@ -255,6 +355,8 @@
   }).catch(()=>{if(valid()&&recovery.isConnected){recovery.replaceChildren(node('p',rt('readFailed')));}});
   if(p.checkpointError)card.append(node('p',t('checkpointUnavailable')+': '+p.checkpointError));
   content.append(card);
+   const taskUndo=node('section');card.append(taskUndo);
+   void import('/api/workbench/task-undo-client').then(module=>{if(freshRead()&&taskUndo.isConnected)return module.mountTaskUndo(taskUndo,{sessionId,api,language:I.language,valid,afterApply:async message=>{await refresh();if(valid())el('wb-message').textContent=message;}});}).catch(()=>{if(freshRead()&&taskUndo.isConnected)taskUndo.textContent=I.language==='cs'?'Historie úkolů není dostupná.':'Task history is unavailable.';});
   if(reconcile){
    const notice=node('p',at('reconcilingStatus'));notice.dataset.automaticReconciliation='true';notice.setAttribute('role','status');card.append(notice);
    void api({op:'automatic-reconcile',sessionId}).then(result=>{
@@ -274,7 +376,7 @@
  }
  el('wb-close').onclick=()=>{if(!dirty||confirm(t('discard'))){dirty=false;file=null;dialog.close();}};dialog.addEventListener('cancel',e=>{if(dirty&&!confirm(t('discard')))e.preventDefault();});dialog.addEventListener('close',()=>{dirty=false;file=null;returnFocus?.focus();});
  el('wb-language').value=I.language;el('wb-language').onchange=()=>I.setLanguage(el('wb-language').value);listen(window,'harness-language-change',()=>{I.apply(document);tabs();pickers();if(state&&!dirty)void action(()=>tab==='review'?renderReview(false):render());});
- listen(window,'harness-workspace-write-change',event=>{if(tab==='settings'&&event.detail===selectedWorkspace){const save=el('wb-content').querySelector('form button[type=submit]');if(save)save.disabled=settingsWrites.has(selectedWorkspace);}});
+ listen(window,'harness-workspace-write-change',event=>{if(tab==='settings'&&event.detail===selectedWorkspace){const save=el('wb-content').querySelector('.wb-form button[type=submit]');if(save)save.disabled=settingsWrites.has(selectedWorkspace);}});
  el('wb-refresh').onclick=()=>void action(async()=>{if(!discardChanges())return;file=null;await refresh();});
  el('wb-session').onchange=()=>{if(!discardChanges()){el('wb-session').value=selectedSession;return;}selectedSession=el('wb-session').value;selectedWorkspace=state.workspaces.find(w=>w.sessionIds.includes(selectedSession))?.id||selectedWorkspace;directory='';pickers();void action(render);};
  el('wb-workspace').onchange=()=>{if(!discardChanges()){el('wb-workspace').value=selectedWorkspace;return;}selectedWorkspace=el('wb-workspace').value;void action(render);};

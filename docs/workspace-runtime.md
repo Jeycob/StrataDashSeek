@@ -51,6 +51,12 @@ trashed. This does not claim permanent erasure or reduce project disk usage.
 
 ## Model defaults and reasoning
 
+Under **Settings → Workspace defaults → Project memory**, choose the workspace
+and add, edit or delete a confirmed decision. Each workspace has room for five
+short decisions. If another tab changes the list, refresh it before saving
+again. Only chats attached to the same workspace receive these decisions when
+the model prompt is assembled. An empty memory contributes nothing.
+
 Workspace settings select provider/model, reasoning level, output limit,
 temperature, top P and Strata thinking budget. They apply to newly created
 conversations. A manual model selection in an existing chat remains effective.

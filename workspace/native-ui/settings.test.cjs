@@ -1,19 +1,62 @@
 'use strict';
-const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),http=require('node:http'),path=require('node:path');
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),http=require('node:http'),path=require('node:path'),os=require('node:os');
 const root=path.resolve(__dirname,'../..'),{chromium}=require(process.env.HARNESS_PLAYWRIGHT_MODULE||'playwright');
-async function fixture(t,asset,catalog={groups:[]}){
+async function fixture(t,asset,catalog={groups:[]},{memory=false}={}){
  const defaults={provider:'strata-vast',model:'base-model',reasoningEffort:'medium',thinkingBudget:4096,maxTokens:32768,temperature:1,topP:.95,projectMode:'auto',maxStageSteps:60,noProgressLimit:3,language:'en',environment:'web'},requests=[],errors=[];let complete,failReads=false;
  const state={defaults,trash:{},running:[],environment:{},projects:{},workspaces:[{id:'w1',title:'One',sessionIds:[],settings:{model:'workspace-model'}},{id:'w2',title:'Two',sessionIds:[],settings:{model:'other-model'}}]};
+ let memoryRoute;
+ if(memory){
+  const directory=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'workbench-memory-ui-')));
+  t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const {installProjectMemory}=await import('../project-memory.mjs');
+  installProjectMemory({
+   effect:fn=>fn(),connection:{fetch:{register:route=>{memoryRoute=route;}}},systemPrompt:{section(){}},
+   workspaceRegistry:{get:id=>state.workspaces.find(row=>row.id===id)},
+  },{root:directory,execution:{assertUnchanged(){}}});
+  state.projectMemoryVersion=1;
+ }
  const server=http.createServer(async(req,res)=>{let text='';for await(const bytes of req)text+=bytes;const body=text?JSON.parse(text):null;const json=value=>{if(!res.destroyed){res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value));}};
   if(req.url==='/'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end('<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/theme.css"><div id="app" style="width:360px;max-width:100%"></div><script>window.HARNESS_NATIVE_WORKBENCH=true;window.__ModuleLoader__={load(){}};window.HarnessNativeTheme={css:value=>value};</script>'+(asset==='source'?'<script src="/i18n.js"></script>':'')+'<script src="/client.js"></script>');}
   const routes={'/i18n.js':'shared/i18n.cjs','/client.js':asset==='source'?'workspace/client.js':'workspace/native-ui/client.js','/theme.css':'workspace/native-ui/theme.css'};
   if(routes[req.url]){res.setHeader('Content-Type',(req.url.endsWith('.css')?'text/css':'application/javascript')+'; charset=utf-8');return res.end(fs.readFileSync(path.join(root,routes[req.url])));}
   if(req.url==='/api/session/list')return json({result:{ok:true,value:{items:[]}}});if(req.url==='/api/session/modelCatalog')return json({result:{ok:true,value:catalog}});
+  if(memoryRoute&&req.url===memoryRoute.path){
+   const result=await memoryRoute.fetch(new Request('http://'+req.headers.host+req.url,{method:req.method,headers:req.headers,body:text}));
+   res.writeHead(result.status,Object.fromEntries(result.headers));res.end(await result.text());return;
+  }
   if(req.url==='/api/workbench'){if(!body){if(failReads){res.statusCode=503;return json({error:'REFRESH_UNAVAILABLE'});}return json(state);}assert.equal(body.op,'settings');requests.push(body);complete=(fail=false)=>{if(fail){res.statusCode=409;return json({code:'INVALID_SETTINGS',error:'Invalid model'});}state.workspaces.find(w=>w.id===body.workspaceId).settings=structuredClone(body.settings);json(body.settings);};return;}
   res.writeHead(404);res.end();
  });await new Promise(r=>server.listen(0,'127.0.0.1',r));const browser=await chromium.launch({headless:true}),page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(5000);page.on('pageerror',e=>errors.push(e.message));
  t.after(async()=>{complete?.();await browser.close();await new Promise(r=>server.close(r));});await page.goto('http://127.0.0.1:'+server.address().port);await page.evaluate(()=>{HarnessI18n.setLanguage('en');window.view=HarnessWorkbench.mount(document.querySelector('#app'),{section:'settings',workspaceId:'w1'});});await page.locator('[name=model]').waitFor();return{page,requests,errors,complete:fail=>complete(fail),failReads:value=>{failReads=value;},state};
 }
+for(const asset of ['source','bundle'])test(asset+': project settings confirms, edits and removes decisions in the selected workspace',async t=>{
+ const f=await fixture(t,asset,undefined,{memory:true}),p=f.page,memory=p.locator('[data-project-memory]');
+ const first='Use the local catalog.';
+ const second='Use an offline catalog.';
+ const input=memory.getByRole('textbox',{name:'Decision'});
+ await memory.getByText('No confirmed decisions.').waitFor();
+ await input.fill(first);
+ await memory.getByRole('button',{name:'Add confirmed decision'}).click();
+ await memory.getByText(first,{exact:true}).waitFor();
+ await p.reload();
+ await p.evaluate(()=>{window.view=HarnessWorkbench.mount(document.querySelector('#app'),{section:'settings',workspaceId:'w1'});});
+ await memory.getByText(first,{exact:true}).waitFor();
+ await memory.getByRole('button',{name:'Edit',exact:true}).click();
+ assert.equal(await input.inputValue(),first);
+ await input.fill(second);
+ await memory.getByRole('button',{name:'Save decision',exact:true}).click();
+ await memory.getByText(second,{exact:true}).waitFor();
+ const workspace=p.locator('[id$="wb-workspace"]');
+ await workspace.evaluate(e=>{e.value='w2';e.dispatchEvent(new Event('change'));});
+ await memory.getByText('No confirmed decisions.').waitFor();
+ assert.equal(await memory.getByText(second,{exact:true}).count(),0);
+ await workspace.evaluate(e=>{e.value='w1';e.dispatchEvent(new Event('change'));});
+ await memory.getByText(second,{exact:true}).waitFor();
+ await memory.getByRole('button',{name:'Delete',exact:true}).click();
+ await memory.getByRole('button',{name:'Delete this decision?',exact:true}).click();
+ await memory.getByText('No confirmed decisions.').waitFor();
+ assert.deepEqual(f.errors,[]);
+});
 for(const asset of ['source','bundle'])test(asset+': settings retain newer edits across a slow save, language change, and workspace switch',async t=>{
  const f=await fixture(t,asset),p=f.page;assert.match(await p.locator('[name=model]').getAttribute('aria-describedby'),/setting-source-model/);assert.equal(await p.locator('label:has([name=model]) [data-setting-source]').innerText(),'Saved workspace value');assert.equal(await p.locator('label:has([name=temperature]) [data-setting-source]').innerText(),'Server default');
  assert.equal(await p.locator('.wb-form').evaluate(e=>getComputedStyle(e).gridTemplateColumns.split(' ').length),1);

@@ -1,5 +1,47 @@
 # Checkpoint inventory and transactional recovery
 
+## Undo one request
+
+**Run review → Undo a task** lists the last 20 recorded owner requests. Select
+**Review task changes** to see the files that request modified, added or deleted.
+This operation restores only its before/after difference; it does not reset the
+whole worktree. It also does not change conversation history or run budgets.
+
+A file changed again by a later request or manual edit is a conflict and is never
+overwritten. The preview names those files and initially disables apply. Select
+**Keep later edits and undo only the nonconflicting files** to apply the safe
+subset; the result explicitly reports the files left alone. Files already reverted
+are skipped. Any source edit after preview invalidates its hash and requires a
+fresh preview. A changed file is handled as a whole file: this version does not
+automatically merge separate edits within the same file.
+
+Snapshots start before the first admitted model step for a genuine owner request
+and close under the same writer lease after owned work is idle, or at the next
+owner request boundary. Running children/jobs prevent a completed boundary or
+undo. Internal continuation can extend the request only when its previous end
+snapshot still matches, so intervening owner edits are not silently attributed
+to that task. Snapshot failure leaves normal model work permitted and displays
+undo as unavailable. Old requests without a captured baseline are not guessed.
+The existing private-file exclusions, 1 MiB/file and 32 MiB/snapshot limits apply;
+unsupported files are kept and identified in preview. These are managed writer
+boundaries, not an attribution guarantee for an external OS process bypassing
+the project lease.
+
+The authenticated same-origin workbench POST operations are `task-undo-list`,
+`task-undo-preview` and `task-undo-apply`. They accept a session and an opaque
+server-issued `taskId`, never a root or checkpoint path. Apply requires the
+preview's `expectedSourceHash`; `skipConflicts:true` authorizes preserving the
+conflicts and undoing the safe subset, never force-overwriting conflicts.
+The existing durable restore journal, safety checkpoint, rollback and explicit
+recovery path also cover task undo. Its UI is a separate same-origin module at
+`/api/workbench/task-undo-client` shared by Native and the phone workbench.
+
+Local acceptance uses `workspace/task-undo-sdk.test.mjs` with the pinned SDK's
+real request/agent/tool loop and an inert adapter, plus
+`workspace/native-ui/task-undo.test.cjs` in Chromium. No external model is used.
+
+## Whole-checkpoint recovery
+
 Version 2 records a source inventory separately from `files`, the bounded backed-up
 content. Each inventoried path is a backed-up file, a directory, or an exclusion
 with a reason. Private/runtime/dependency directories are exclusion boundaries:

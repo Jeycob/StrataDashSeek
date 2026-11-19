@@ -54,11 +54,29 @@ async function inspectCheckpoint(checkpoint, expectedHash, signal) {
   return { manifest, payloads, bytes, skippedPrivateFiles };
 }
 const protectedByInventory = (inventory, name) => name.split('/').some((_, i, parts) => inventory[parts.slice(0, i + 1).join('/')]?.state === 'excluded');
-async function makePlan(root, checkpoint, { expectedHash, expectedSourceHash, signal } = {}) {
+function taskSelection(before, after, current) {
+  if ([before, after].some(manifest => manifest.version !== 2 || manifest.inventoryComplete !== true)) fail('TASK_UNDO_INCOMPLETE', 'This task has no complete source inventory.');
+  const state = (manifest, name) => manifest.files[name]?.sha256 ?? (!manifest.inventory[name] && !protectedByInventory(manifest.inventory, name) && manifest.inventoryComplete ? null : undefined);
+  const selected = new Set(), changes = [], conflicts = [], alreadyReverted = [], unsupported = [];
+  for (const name of [...new Set([...Object.keys(before.files), ...Object.keys(after.files)])].sort()) {
+    const old = state(before, name), next = state(after, name);
+    if (old === next) continue;
+    if (old === undefined || next === undefined) { unsupported.push(name); continue; }
+    changes.push({ path: name, kind: old === null ? 'added' : next === null ? 'deleted' : 'modified' });
+    const actual = state(current, name);
+    if (actual === old) alreadyReverted.push(name);
+    else if (actual !== next) conflicts.push(name);
+    else selected.add(name);
+  }
+  return { selected, changes, conflicts, alreadyReverted, unsupported };
+}
+async function makePlan(root, checkpoint, { expectedHash, expectedSourceHash, signal, taskAfter, skipConflicts = false } = {}) {
   const checked = await inspectCheckpoint(checkpoint, expectedHash, signal), current = await sourceManifest(root, { signal });
   if (expectedSourceHash && expectedSourceHash !== current.sha256) fail('RESTORE_SOURCE_CHANGED', 'Source changed since the restore preview.');
+  const task = taskAfter ? taskSelection(checked.manifest, (await inspectCheckpoint(taskAfter.path, taskAfter.sha256, signal)).manifest, current) : null;
   const operations = [], protectedFiles = []; let previousBytes = 0;
   for (const [name, bytes] of checked.payloads) {
+    if (task && !task.selected.has(name)) continue;
     await canonicalInside(root, name, true);
     const prior = current.files[name], entry = current.inventory[name];
     if (entry && entry.state !== 'backed-up') { protectedFiles.push({ path: name, reason: entry.reason ?? 'not-a-backed-up-file' }); continue; }
@@ -68,16 +86,19 @@ async function makePlan(root, checkpoint, { expectedHash, expectedSourceHash, si
   }
   const deletesKnown = checked.manifest.version === 2 && checked.manifest.inventoryComplete === true;
   if (deletesKnown) for (const [name, prior] of Object.entries(current.files)) {
+    if (task && !task.selected.has(name)) continue;
     if (!Object.hasOwn(checked.manifest.inventory, name) && !protectedByInventory(checked.manifest.inventory, name)) { operations.push({ path: name, kind: 'delete', before: prior, after: null }); previousBytes += prior.bytes; }
   }
-  return { ...checked, current, operations, previousBytes, deletesKnown, protectedFiles };
+  const payloads = task ? new Map([...checked.payloads].filter(([name]) => operations.some(op => op.kind === 'write' && op.path === name))) : checked.payloads;
+  return { ...checked, payloads, current, operations, previousBytes, deletesKnown, protectedFiles, task, skipConflicts };
 }
-const preview = plan => ({ version: 2, canRestore: plan.protectedFiles.length === 0, protectedFiles: plan.protectedFiles, legacyOverlayOnly: !plan.deletesKnown, inventoryComplete: plan.manifest.inventoryComplete === true,
+const preview = plan => ({ version: 2, canRestore: plan.protectedFiles.length === 0 && (!plan.task?.conflicts.length || plan.skipConflicts), protectedFiles: plan.protectedFiles, legacyOverlayOnly: !plan.deletesKnown, inventoryComplete: plan.manifest.inventoryComplete === true,
   sourceHash: plan.current.sha256, writes: plan.operations.filter(o => o.kind === 'write').map(o => o.path), deletes: plan.operations.filter(o => o.kind === 'delete').map(o => o.path),
   savedPaths: [...plan.payloads.keys()], preservedPaths: Object.keys(plan.current.inventory).filter(name => !plan.operations.some(op => op.path === name)),
   newlyDeletedPaths: plan.operations.filter(o => o.kind === 'delete').map(o => o.path),
   preservedExclusions: Object.entries(plan.manifest.inventory ?? {}).filter(([, e]) => e.state === 'excluded').map(([p, e]) => ({ path: p, reason: e.reason })), skippedPrivateFiles: plan.skippedPrivateFiles,
-  requiredStagingBytes: plan.bytes + plan.current.bytes + 8 * 1024 ** 2, beforeRestoreAvailable: true });
+  requiredStagingBytes: plan.bytes + plan.current.bytes + 8 * 1024 ** 2, beforeRestoreAvailable: true,
+  ...(plan.task ? { taskUndo: { changes: plan.task.changes, conflicts: plan.task.conflicts, alreadyReverted: plan.task.alreadyReverted, unsupported: plan.task.unsupported } } : {}) });
 export async function previewCheckpointRestore(root, checkpoint, options = {}) { return preview(await makePlan(await fs.realpath(root), checkpoint, options)); }
 
 async function journalAt(stateRoot) {
@@ -170,7 +191,7 @@ export async function recoverCheckpointRestore(root, { stateRoot, checkpointRoot
   catch (error) { await markRecoveryFailure(stateRoot, error); throw error; }
   finally { await lock.release(); }
 }
-export async function restoreCheckpointTransaction(root, checkpoint, { stateRoot, checkpointRoot, expectedHash, expectedSourceHash, signal, onPrepared, onPhase, statfs = fs.statfs, minFreeBytes = 2 * 1024 ** 3 } = {}) {
+export async function restoreCheckpointTransaction(root, checkpoint, { stateRoot, checkpointRoot, expectedHash, expectedSourceHash, signal, onPrepared, onPhase, statfs = fs.statfs, minFreeBytes = 2 * 1024 ** 3, taskAfter, skipConflicts = false } = {}) {
   if (!Number.isSafeInteger(minFreeBytes) || minFreeBytes < 0) fail('INVALID_RESTORE_LIMIT', 'Invalid restore reserve.');
   root = await fs.realpath(root); stateRoot = path.resolve(stateRoot); checkpointRoot = path.resolve(checkpointRoot);
   const lock = await acquireProcessLock(path.join(stateRoot, 'restore.lock'), { timeoutMs: 0, signal });
@@ -178,7 +199,8 @@ export async function restoreCheckpointTransaction(root, checkpoint, { stateRoot
   try {
     await rollback(root, stateRoot, checkpointRoot, onPhase);
     await cleanAbandonedStaging(stateRoot, (await journalAt(stateRoot))?.directory);
-    const plan = await makePlan(root, checkpoint, { expectedHash, expectedSourceHash, signal }); await onPhase?.('validated'); signal?.throwIfAborted();
+    const plan = await makePlan(root, checkpoint, { expectedHash, expectedSourceHash, signal, taskAfter, skipConflicts }); await onPhase?.('validated'); signal?.throwIfAborted();
+    if (plan.task?.conflicts.length && !skipConflicts) fail('TASK_UNDO_CONFLICT', 'Later edits are preserved. Review conflicts before undoing only the safe changes.');
     if (plan.protectedFiles.length) fail('RESTORE_PROTECTED_SOURCE', 'Restore would overwrite source not included in its safety backup.');
     const space = await statfs(root), required = preview(plan).requiredStagingBytes;
     const available = Number(space.bavail) * Number(space.bsize);
@@ -206,7 +228,8 @@ export async function restoreCheckpointTransaction(root, checkpoint, { stateRoot
       await onPhase?.('committed-file', op.path);
     }
     signal?.throwIfAborted(); await onPhase?.('before-complete'); signal?.throwIfAborted(); journal.status = 'committed'; await atomicJSON(path.join(stateRoot, 'transaction.json'), journal, { durable: true });
-    return { restored: true, files: plan.payloads.size, deletedFiles: plan.operations.filter(o => o.kind === 'delete').length, skippedPrivateFiles: plan.skippedPrivateFiles, previousVersionRetained: true, beforeRestore: journal.beforeRestore, recovery: await checkpointRecoveryStatus(stateRoot), legacyOverlayOnly: !plan.deletesKnown };
+    return { restored: true, files: plan.payloads.size, deletedFiles: plan.operations.filter(o => o.kind === 'delete').length, skippedPrivateFiles: plan.skippedPrivateFiles, previousVersionRetained: true, beforeRestore: journal.beforeRestore, recovery: await checkpointRecoveryStatus(stateRoot), legacyOverlayOnly: !plan.deletesKnown,
+      ...(plan.task ? { preservedConflicts: plan.task.conflicts, unsupported: plan.task.unsupported } : {}) };
   } catch (error) {
     if (journal) try { await rollback(root, stateRoot, checkpointRoot, onPhase); } catch (recoveryError) { await markRecoveryFailure(stateRoot, recoveryError); throw Object.assign(new Error('Restore did not complete; retained recovery requires review.'), { code: 'RESTORE_RECOVERY_REQUIRED', cause: error, recoveryError }); }
     else {

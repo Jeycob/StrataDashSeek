@@ -8,7 +8,7 @@ for(const legacyAbort of [false,true])test((legacyAbort?'Missing abort helpers: 
  const {chromium}=require(process.env.HARNESS_PLAYWRIGHT_MODULE||'playwright'),directory=fs.mkdtempSync(path.join(os.tmpdir(),'harness-native-ui-'));
  const evidence=process.env.HARNESS_NATIVE_EVIDENCE||directory;fs.mkdirSync(evidence,{recursive:true});
  const tools=path.join(directory,'fixture-tools');fs.mkdirSync(tools);fs.writeFileSync(path.join(tools,'package.json'),JSON.stringify({name:'native-ui-test-tools',type:'module',exports:{'.':'./index.mjs','./client':'./client.js','./package.json':'./package.json'},dsh:{client:{platform:'web'}}}));fs.writeFileSync(path.join(tools,'index.mjs'),'export function apply(){}');
- fs.writeFileSync(path.join(tools,'client.js'),"window.__ModuleLoader__.load({id:'native-ui-test-tools',factory:()=>({inject:['sessions','sidebarRight','locale','configForms'],apply(ctx){window.NativeFixture={create:cwd=>ctx.sessions.create({cwd}),openResource:address=>ctx.sidebarRight.openResource(address),openGuide:()=>ctx.sidebarRight.openTab('guide'),closeTab:id=>ctx.sidebarRight.close(id),locale:()=>{const form=ctx.configForms.get('locale').getSnapshot();return{active:ctx.locale.getSnapshot().active,status:form.status,preference:form.value?.preference};}};}})});");
+ fs.writeFileSync(path.join(tools,'client.js'),"window.__ModuleLoader__.load({id:'native-ui-test-tools',factory:()=>({inject:['sessions','sidebarRight','locale','configForms'],apply(ctx){window.NativeFixture={setRunning:(id,on)=>ctx.sessions.handleSessionStatus(id,on),create:cwd=>ctx.sessions.create({cwd}),openResource:address=>ctx.sidebarRight.openResource(address),openGuide:()=>ctx.sidebarRight.openTab('guide'),closeTab:id=>ctx.sidebarRight.close(id),locale:()=>{const form=ctx.configForms.get('locale').getSnapshot();return{active:ctx.locale.getSnapshot().active,status:form.status,preference:form.value?.preference};}};}})});");
  const overlay=path.join(directory,'overlay.yml');fs.writeFileSync(overlay,JSON.stringify([{insert:[{id:'test-native-workbench',name:pathToFileURL(createSourceFixture(directory)).href},{id:'native-test-tools',name:pathToFileURL(path.join(tools,'index.mjs')).href}]}]));
  const child=spawn(process.execPath,[path.resolve(process.env.HARNESS_NATIVE_CLI),'web','--patch',overlay,'--no-open','--host','127.0.0.1','--port','0'],{cwd:directory,env:{...process.env,DSH_HOME:path.join(directory,'home'),PATH:path.dirname(process.execPath)+path.delimiter+process.env.PATH},stdio:['ignore','pipe','pipe'],windowsHide:true});
  let output='',browser;child.stdout.on('data',c=>output+=c);child.stderr.on('data',c=>output+=c);
@@ -74,6 +74,20 @@ for(const legacyAbort of [false,true])test((legacyAbort?'Missing abort helpers: 
   await runChangesScenarios(page,{sid,sid2,data:changes,evidence,wireRoutes});
   await page.evaluate(id=>window.HarnessNativeUI.openDocker(id),sid);await page.waitForTimeout(300);await page.screenshot({path:path.join(evidence,'native-docker-desktop-en.png'),fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
+  const activityRequests = [];
+  await page.route('**/api/workbench', async route => {
+   const data = route.request().postDataJSON();
+   if (data?.op !== 'run-activity') return route.fallback();
+   activityRequests.push(data.sessionId);
+   await route.fulfill({json:{version:1,sessionId:data.sessionId,phases:[{phase:'heavyTools.waiting',elapsedSeconds:42}]}});
+  });
+  await page.evaluate(id => NativeFixture.setRunning(id, true), sid);
+  const activity = page.locator('.harness-run-activity:visible');
+  await activity.getByText('Waiting for tool capacity · 42 s', {exact:true}).waitFor();
+  assert.equal(await activity.getAttribute('data-run-session'), sid);
+  await page.evaluate(id => NativeFixture.setRunning(id, false), sid);
+  await activity.waitFor({state:'hidden'});
+  assert.ok(activityRequests.length && activityRequests.every(id => id === sid));
  }catch(error){
   // Publish only this isolated fixture's assertion, never its login URL or logs.
   const safe=String(error.message||error.name||'Native fixture failed').replace(/https?:\/\/[^\s]+/g,'[fixture-url]').slice(0,2000);

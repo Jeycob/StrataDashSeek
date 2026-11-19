@@ -11,7 +11,7 @@ import {registerWorkspaceHeavyAdmission} from './heavy-admission.mjs';
 import {createProjectAppsTools} from '../workspace/project-apps-tools.mjs';
 import {createProjectAppsReceiptStore} from '../workspace/project-apps-receipts.mjs';
 import {installProjectExecutionMode} from '../workspace/execution-mode-service.mjs';
-import {isolatedExecutionBinding} from '../workspace/fixtures/execution-binding.mjs';
+import {isolatedExecutionBinding,hostExecutionBinding} from '../workspace/fixtures/execution-binding.mjs';
 const SDK=process.env.EFFICIENCY_SDK_ROOT??'/data/harness/runtime/node_modules';
 const load=(name,file='index.js')=>import(pathToFileURL(path.join(SDK,'@deepseek-ai',name,'lib',file)));
 const [{Context},{default:SystemPrompt},{default:Tools},{ToolExecutionPipeline,executeToolBatch},{createScope}]=await Promise.all([load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-tools','pipeline.js'),load('dsh-scope')]);
@@ -66,4 +66,49 @@ test('live retained admission remains on the original gate while another heavy r
 test('workspace unload while queued is rechecked after acquire before the tool body',async t=>{
  let release,first=true;const f=await fixture(t,{liveBody:async exec=>{if(first){first=false;release=retainHeavyToolLease(exec);}}});
  assert.equal((await f.call()).isError,false);const queued=f.call();await tick();await tick();assert.equal(f.counts().mutations,1);f.unload();release();const result=await queued;assert.equal(result.isError,true);assert.match(JSON.stringify(result),/WORKSPACE_HEAVY_ADMISSION_UNAVAILABLE/);assert.equal(f.counts().mutations,1);
+});
+
+test('real Agent.cancel removes a queued heavy command without releasing another session or entering its body',{timeout:10000},async t=>{
+ const [{default:Sessions},{default:Agents},{default:Projections},{default:Llm,LlmAdapter},{default:AgentLoop},{NativeToolExecutor}]=await Promise.all(['dsh-session','dsh-agent','dsh-session-projection','dsh-llm','dsh-agent-loop','dsh-tool-executor-native'].map(name=>load(name)));
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'heavy-cancel-sdk-')),ctx=new Context(),release=Promise.withResolvers(),entered=Promise.withResolvers(),bodies=[],events=[],streams=new Map();
+ let a,b;
+ t.after(async()=>{release.resolve();a?.cancel({kind:'user'});b?.cancel({kind:'user'});await ctx.fiber.dispose();await fs.rm(directory,{recursive:true,force:true});});
+ const services=[Sessions,Agents,Projections,Llm,SystemPrompt,Tools].map(plugin=>ctx.plugin(plugin,{}));
+ await Promise.all(services.map(fiber=>fiber.await()));
+ await ctx.plugin(AgentLoop,{agents:[],maxParallelToolCalls:1}).await();
+ ctx.tools.setExecutor(new NativeToolExecutor(ctx));
+ installProjectExecutionMode(ctx,hostExecutionBinding());
+ ctx.provide('shell',{});ctx.provide('shellEnv',{});
+ await apply(ctx,{stateDirectory:path.join(directory,'efficiency'),engineMetrics:false});
+ ctx.on('session/event',(session,event)=>events.push({sessionId:session.id,...event}),{global:true});
+ class Scripted extends LlmAdapter {
+  async *stream(options){
+   const id=String(options.sessionId),count=(streams.get(id)??0)+1;streams.set(id,count);
+   const block=count===1?{type:'tool-call',id:'call-'+id,name:'project_exec',arguments:JSON.stringify({command:'synthetic heavy work'})}:{type:'text',text:'Synthetic completion'};
+   yield{type:'block-start',index:0,blockType:block.type};yield{type:'block-end',index:0,block};yield{type:'finish',reason:{kind:count===1?'tool-calls':'stop'}};
+  }
+ }
+ ctx.llm.registerAdapter(['heavy-cancel-fixture'],new Scripted());
+ ctx.tools.register({name:'project_exec',description:'Local cancellable fixture',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']},output:{schema:{type:'object'},render:()=>[{type:'text',text:'complete'}]},async execute(_args,exec){bodies.push(exec.agent.id);entered.resolve();await release.promise;return{exitCode:0};}});
+ a=(await ctx.agents.create({sessionId:'holder',meta:{cwd:directory},agentOptions:{provider:'heavy-cancel-fixture',model:'synthetic'}})).agent;
+ b=(await ctx.agents.create({sessionId:'waiting',meta:{cwd:directory},agentOptions:{provider:'heavy-cancel-fixture',model:'synthetic'}})).agent;
+ const status=sessionId=>ctx.waterfall('efficiency/session-status',{sessionId},()=>undefined);
+ const input=id=>({id,role:'user',source:{kind:'user'},content:[{type:'text',text:'Synthetic local command'}]});
+ a.followup(input('holder-input'));await entered.promise;
+ const holder=await status(a.id);assert.equal(holder.heavyTools.phase,'admitted');assert.equal(holder.heavyTools.active,1);assert(Number.isSafeInteger(holder.heavyTools.since));
+ const before=Date.now();b.followup(input('waiting-input'));
+ let queued;const deadline=performance.now()+2000;
+ do{queued=await status(b.id);if(queued.heavyTools.phase==='waiting')break;assert(performance.now()<deadline,'Actual SDK command must reach the heavy queue');await tick();}while(true);
+ assert.deepEqual(queued,{version:1,sessionId:b.id,enabled:true,model:{phase:'idle',since:null,active:0,waiting:0},heavyTools:{phase:'waiting',since:queued.heavyTools.since,active:0,waiting:1}});
+ assert(queued.heavyTools.since>=before&&queued.heavyTools.since<=Date.now());assert.deepEqual(await status(b.id),queued,'Repeated reads preserve the original phase start');
+ assert.equal(await status('unknown'),undefined);assert(!JSON.stringify(queued).includes(a.id));
+ b.cancel({kind:'user'});await b.whenIdle();
+ assert.deepEqual((await status(b.id)).heavyTools,{phase:'idle',since:null,active:0,waiting:0});
+ assert.deepEqual((await status(a.id)).heavyTools,holder.heavyTools,'Cancel cannot release the actual holder');
+ assert.deepEqual(bodies,[a.id]);assert.equal(b.status,'idle');assert.equal(a.status,'running');
+ const ended=events.find(event=>event.sessionId===b.id&&event.type==='turn/end');assert.equal(ended.data.reason.kind,'aborted');assert.equal(ended.data.reason.reason.kind,'user');
+ release.resolve();await a.whenIdle();await tick();
+ assert.deepEqual(bodies,[a.id],'Releasing capacity later cannot resurrect the cancelled command');
+ assert.equal(streams.get(b.id),1,'Cancel must not create a followup model request');
+ assert.deepEqual((await status(a.id)).heavyTools,{phase:'idle',since:null,active:0,waiting:0});
 });

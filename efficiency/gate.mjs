@@ -24,6 +24,16 @@ export class FairGate {
   close(){this.closed=true;for(const t of this.waiting){t.signal?.removeEventListener('abort',t.abort);t.reject(Error('Scheduler unloaded'));}this.waiting=[];this.changed();}
 }
 
+// A slot is admitted capacity, not evidence that a process/model is computing.
+// Only this project's counters/timestamps leave the shared gate snapshot.
+export function sessionGateStatus(snapshot, rootId) {
+  const active = snapshot.active.filter(entry => entry.rootId === rootId);
+  const waiting = snapshot.waiting.filter(entry => entry.rootId === rootId);
+  return { phase: active.length ? 'admitted' : waiting.length ? 'waiting' : 'idle',
+    since: active.length ? Math.min(...active.map(entry => entry.admittedAt)) : waiting.length ? Math.min(...waiting.map(entry => entry.queuedAt)) : null,
+    active: active.length, waiting: waiting.length };
+}
+
 export function heavyTool(exec) {
   if (exec.name === 'project_preview_restart') return true; // server-only captured-spec ticket
   if (exec.name === 'project_apps') return exec.arguments?.operation === 'verify_deploy';

@@ -6,7 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {confined,digest} from '../quality/core.mjs';
 import {POLICY,WorkCard,archiveLog,summarizeLog,rewriteRisk,patchRemovals,prefixFingerprint} from './context.mjs';
 import {EventLedger,uniqueEngineRecord} from './ledger.mjs';
-import {FairGate,heavyTool,normalizeCompaction} from './gate.mjs';
+import {FairGate,heavyTool,normalizeCompaction,sessionGateStatus} from './gate.mjs';
 import {resourceSnapshot} from './resources.mjs';
 import {bindHeavyToolLease} from './heavy-tool-lease.mjs';
 import {checkWorkspaceHeavyAdmission} from './heavy-admission.mjs';
@@ -47,6 +47,13 @@ export async function apply(ctx,config={}){
     try{const file=config.statusPath??path.join(directory,'queue.json'),temp=file+'.'+process.pid+'.tmp';fssync.mkdirSync(path.dirname(file),{recursive:true});fssync.writeFileSync(temp,JSON.stringify({...state,updatedAt:new Date().toISOString(),implementation:'efficiency-request-v1'}),{mode:0o600});fssync.renameSync(temp,file);}catch{}
   }});
   const toolGate=new FairGate({capacity:config.maxHeavyTools??1});
+  // Internal read for an already-authorized session; transport/UI owns access.
+  // A live snapshot avoids reconstructing current work from historical metrics.
+  ctx.on('efficiency/session-status',({sessionId})=>{
+    check();const agent=ctx.agents.get(sessionId);if(!agent)return undefined;
+    const id=idOf(agent);if(!id)return undefined;
+    return{version:1,sessionId:id,enabled:config.schedule!==false,model:sessionGateStatus(modelGate.snapshot(),id),heavyTools:sessionGateStatus(toolGate.snapshot(),id)};
+  });
   // Preserve the legacy gate's output ceiling for resumed sessions.
   ctx.on('agent/request',async(_input,next)=>{
     const request=await next();check();if(!providers.has(request.provider))return request;

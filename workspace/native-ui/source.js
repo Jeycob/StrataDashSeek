@@ -297,6 +297,9 @@ function CompletedTurnUsage({ turn }) {
 }
 
 function apply(ctx,config={}){
+ installModelAvailability(ctx);
+ installResponseModel(ctx);
+ registerRunActivity(ctx);
  registerPreviewResults(ctx);
  ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
   name:'conversation.chat.turnTail', id:'harness.turn-usage', order:100,
@@ -366,10 +369,11 @@ function apply(ctx,config={}){
   return h('section',{className:'harness-native-surface harness-native-settings','data-harness-settings-group':'workspace'},h('label',null,text('workspace'),h('select',{value:id,onChange:e=>setId(e.target.value)},...rows.map(w=>h('option',{key:w.id,value:w.id},w.title)))),h('p',{className:'hc-meta'},text('workspaceHelp')),error&&h('p',{role:'alert'},error),id?h(Mounted,{kind:'files',section:'settings',workspaceId:id,key:id}):h('p',null,text('noWorkspace')));
  }
  function RuntimeSettings(){
-  const [value,setValue]=React.useState(null),[error,setError]=React.useState('');useLanguage();
+  const [value,setValue]=React.useState(null),[error,setError]=React.useState('');const language=useLanguage();
   React.useEffect(()=>{let active=true;state().then(s=>{if(active)setValue(s.update||{});}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[]);
   const commit=typeof value?.appliedCommit==='string'?value.appliedCommit:null;
-  return h('section',{className:'harness-native-surface harness-native-settings','data-harness-settings-group':'advanced'},h('p',null,text('runtimeHelp')),error&&h('p',{role:'alert'},error),value?.bootstrapUpgradeRequired===true&&h('p',{role:'status','data-bootstrap-upgrade-required':true},text('bootstrapUpgrade')),!value?h('p',null,text('noRuntime')):h('dl',{'data-harness-update-status':true},h('dt',null,text('updates')),h('dd',null,value.enabled?String(value.phase||'unknown'):text('disabled')),h('dt',null,text('sourceCommit')),h('dd',null,commit||'—'),h('dt',null,text('verifiedSignature')),h('dd',null,text(value.signatureVerified?'verifiedSignature':'unverifiedSignature')),h('dt',null,text('lastObserved')),h('dd',null,value.checkedAt?String(value.checkedAt):'—'),value.error&&h('dd',{role:'alert'},String(value.error).slice(0,500))));
+  const CurrentHealth=window.HarnessSettingsHealth.component(React);
+  return h('section',{className:'harness-native-surface harness-native-settings','data-harness-settings-group':'advanced'},h(CurrentHealth,{language}),h('p',null,text('runtimeHelp')),error&&h('p',{role:'alert'},error),value?.bootstrapUpgradeRequired===true&&h('p',{role:'status','data-bootstrap-upgrade-required':true},text('bootstrapUpgrade')),!value?h('p',null,text('noRuntime')):h('dl',{'data-harness-update-status':true},h('dt',null,text('updates')),h('dd',null,value.enabled?String(value.phase||'unknown'):text('disabled')),h('dt',null,text('sourceCommit')),h('dd',null,commit||'—'),h('dt',null,text('verifiedSignature')),h('dd',null,text(value.signatureVerified?'verifiedSignature':'unverifiedSignature')),h('dt',null,text('lastObserved')),h('dd',null,value.checkedAt?String(value.checkedAt):'—'),value.error&&h('dd',{role:'alert'},String(value.error).slice(0,500))));
  }
  function Notifications(){
   const ref=React.useRef(null);useLanguage();

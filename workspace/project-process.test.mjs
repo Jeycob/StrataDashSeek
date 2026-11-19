@@ -39,6 +39,49 @@ async function eventually(check) {
 }
 const args = Object.freeze({ command: 'node preview.mjs', description: 'Start the assigned project preview', run_in_background: true });
 
+test('a real user Stop prevents a prior background job from waking a new turn, while fresh human input still runs',{timeout:10000},async t=>{
+ t.mock.timers.enable({apis:['Date'],now:Date.now()});
+ const S=await sdk(),cli=process.env.HARNESS_NATIVE_CLI??path.join(process.env.HOMEAI_RUNTIME??'/data/harness/runtime','node_modules/@deepseek-ai/dsh/lib/bin.js'),base=path.resolve(path.dirname(cli),'../..');
+ const load=name=>import(pathToFileURL(path.join(base,name,'lib/index.js')));
+ const [{default:Agents},{default:Projections},{default:Llm,LlmAdapter},{default:AgentLoop},{NativeToolExecutor}]=await Promise.all(['dsh-agent','dsh-session-projection','dsh-llm','dsh-agent-loop','dsh-tool-executor-native'].map(load));
+ const ctx=new S.Context(),directory=await fs.mkdtemp(path.join(os.tmpdir(),'stopped-background-sdk-')),modelWaiting=Promise.withResolvers(),processDone=Promise.withResolvers(),events=[],settlements=[];
+ let agent,starter,modelCalls=0;
+ t.after(async()=>{agent?.cancel({kind:'user'});await starter?.dispose();await ctx.fiber.dispose();await fs.rm(directory,{recursive:true,force:true});});
+ const services=[S.Sessions,Agents,Projections,Llm,S.SystemPrompt,S.Tools].map(plugin=>ctx.plugin(plugin,{}));
+ await eventually(()=>services.every(fiber=>fiber.state===2));
+ const loop=ctx.plugin(AgentLoop,{agents:[],maxParallelToolCalls:1});await eventually(()=>loop.state===2);ctx.tools.setExecutor(new NativeToolExecutor(ctx));
+ new S.LocalJobs(ctx,{maxConcurrentJobsPerOwner:4,retainBytes:65536,settledRetainBytes:16384,pumpPollMs:2});S.applyJobTools(ctx,{completionDelivery:'wakeup',inlineOutputBytes:2048});
+ const waits=[],wait=ctx.jobs.wait.bind(ctx.jobs);ctx.jobs.wait=(...values)=>{waits.push(values);return wait(...values);};
+ ctx.on('session/event',(_session,event)=>events.push(event),{global:true});
+ ctx.jobs.events.subscribe({owners:'scope'},event=>{if(event.type==='settled')settlements.push(event);});
+ const ownedProcess={status:'running',exitCode:null,signal:null,kills:0,done:processDone.promise,observed:Object.fromEntries(['stdout','stderr'].map(channel=>[channel,{readFrom(from){const text=channel==='stdout'?'retained job output\n':'';return{text:text.slice(from),nextOffset:text.length,lossy:false};}}])),finish(){ownedProcess.status='completed';ownedProcess.exitCode=0;processDone.resolve();},kill(){ownedProcess.kills++;ownedProcess.status='killed';ownedProcess.signal='SIGTERM';processDone.resolve();}};
+ starter=createProjectProcessStarter(ctx,{execute:async()=>ownedProcess});
+ ctx.tools.register({name:'project_exec',description:'Start a synthetic owned job',parameters:{type:'object',properties:{}},output:{schema:{type:'object'},render:()=>[{type:'text',text:'Background job registered'}]},execute:(_args,exec)=>starter.start({cwd:directory,spec:{}},exec,args)});
+ class Scripted extends LlmAdapter {
+  async *stream(options){
+   modelCalls++;
+   if(modelCalls===2){modelWaiting.resolve();await new Promise((resolve,reject)=>{options.signal.addEventListener('abort',()=>reject(options.signal.reason),{once:true});});return;}
+   const block=modelCalls===1?{type:'tool-call',id:'start-owned-job',name:'project_exec',arguments:'{}'}:{type:'text',text:'Fresh human request handled'};
+   yield{type:'block-start',index:0,blockType:block.type};yield{type:'block-end',index:0,block};yield{type:'finish',reason:{kind:modelCalls===1?'tool-calls':'stop'}};
+  }
+ }
+ ctx.llm.registerAdapter(['stop-background-fixture'],new Scripted());
+ agent=(await ctx.agents.create({sessionId:'owner',meta:{cwd:directory},agentOptions:{provider:'stop-background-fixture',model:'synthetic'}})).agent;
+ const input=id=>({id,role:'user',source:{kind:'user'},content:[{type:'text',text:'Synthetic human input'}]});
+ agent.followup(input('original'));await modelWaiting.promise;
+ const job=ctx.jobs.list(agent.id)[0];assert(job);assert.equal(ownedProcess.status,'running');
+ agent.cancel({kind:'user'});await agent.whenIdle();
+ assert.equal(events.find(event=>event.type==='turn/end').data.reason.reason.kind,'user');assert.equal(ownedProcess.status,'running','Collecting a stopped turn must not kill the retained process');
+ t.mock.timers.setTime(Date.now()+5000);assert.equal(waits.length,0,'No collection timeout may run while a long-lived producer is still alive');
+ agent.followup(input('fresh-while-job-runs'));await agent.whenIdle();assert.equal(modelCalls,3);
+ ownedProcess.finish();await eventually(()=>settlements.length===1);await agent.whenIdle();await tick();
+ assert.equal(modelCalls,3,'The actual jobs wakeup publisher must not reopen the stopped task');assert.equal(settlements[0].awaited,true);assert.equal(waits.length,1);
+ assert.equal(events.filter(event=>event.type==='turn/start').length,2);
+ assert.equal(ctx.jobs.get(job.id,agent.id).status,'completed');assert.match(JSON.stringify(ctx.jobs.read(job.id,agent.id).chunks),/retained job output/);assert(events.some(event=>event.type==='job/settled'));
+ agent.followup(input('fresh-human-request'));await agent.whenIdle();
+ assert.equal(modelCalls,4);assert.equal(events.filter(event=>event.type==='turn/start').length,3);assert.equal(agent.status,'idle');
+});
+
 async function fixture(t, { controller = true, admission = false, custody = false, liveSessions = false, completionDelivery = 'quiet' } = {}) {
   const S = await sdk(), directory = await fs.mkdtemp(path.join(os.tmpdir(), 'owned-project-jobs-'));
   const root = path.join(directory, 'project'); await fs.mkdir(root);
@@ -103,6 +146,40 @@ async function fixture(t, { controller = true, admission = false, custody = fals
   });
   return { ...S, ctx, root, directory, manager, native, managed, run, agent, call, processes, calls, timers, events, notices, wakes, injections, settlements };
 }
+
+test('user Stop during the actual final SDK output drain still collects only that turn',async t=>{
+ const f=await fixture(t,{custody:true,liveSessions:true,completionDelivery:'wakeup'}),owner=f.agent('owner');
+ owner.session.append('turn/start',{turn:1});
+ const result=await f.run.startWithCustody(args,{agent:owner,callId:'near-stop',signal:new AbortController().signal});
+ const capture=await f.run.custodyFor(result.jobId,owner.id),process=f.processes[0],stdout=process.observed.stdout,read=stdout.readFrom.bind(stdout);let stopped=false;
+ stdout.readFrom=from=>{
+  const value=read(from);
+  if(process.status==='completed'&&!stopped){
+   stopped=true;assert.throws(capture.assertCurrent,{code:'PROJECT_CUSTODY_EXPIRED'},'Producer cleanup must already have completed');
+   owner.session.append('turn/end',{turn:1,reason:{kind:'aborted',reason:{kind:'user'}}});
+  }
+  return value;
+ };
+ process.finish();await eventually(()=>f.settlements.length===1);
+ assert.equal(stopped,true);assert.equal(f.settlements[0].awaited,true);assert.equal(f.wakes.length,0);
+ assert.equal(f.ctx.jobs.get(result.jobId,owner.id).status,'completed');assert.equal(f.timers.size,0);
+});
+
+test('user Stop leaves earlier-turn and foreign jobs observable and disposal drains its scoped collector',async t=>{
+ const f=await fixture(t,{liveSessions:true,completionDelivery:'wakeup'}),owner=f.agent('owner'),other=f.agent('other');
+ owner.session.append('turn/start',{turn:1});const earlier=await f.call(owner);await tick();owner.session.append('turn/end',{turn:1,reason:{kind:'completed'}});
+ other.session.append('turn/start',{turn:1});const foreign=await f.call(other);await tick();
+ owner.session.append('turn/start',{turn:2});const stopped=await f.call(owner);await tick();
+ owner.session.append('turn/end',{turn:2,reason:{kind:'aborted',reason:{kind:'user'}}});
+ f.processes[0].finish();f.processes[1].finish();await eventually(()=>f.settlements.length===2);
+ assert.equal(f.wakes.length,2);assert(f.settlements.every(event=>event.awaited===false));
+ assert.equal(f.ctx.jobs.get(earlier.value.jobId,owner.id).status,'completed');assert.equal(f.ctx.jobs.get(foreign.value.jobId,other.id).status,'completed');
+ await f.run.dispose();await eventually(()=>f.settlements.length===3);
+ assert.equal(f.settlements.find(event=>event.job.id===stopped.value.jobId).awaited,true);assert.equal(f.wakes.length,2);
+ assert.equal(f.processes[2].kills,1);assert.equal(f.timers.size,0);
+ owner.session.append('turn/start',{turn:3});owner.session.append('turn/end',{turn:3,reason:{kind:'aborted',reason:{kind:'user'}}});
+ await f.run.dispose();assert.equal(f.processes[2].kills,1);
+});
 
 test('expected handed-off preview expiry is collected after a completed turn in either cleanup order', async t => {
   for (const first of ['process timer', 'broker cleanup']) await t.test(first, async t => {

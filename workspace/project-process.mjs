@@ -14,13 +14,29 @@ export function renderProjectBackground(args, value) {
 // Only SDK-owned handles are retained. Never discover/adopt arbitrary PIDs or
 // use a process name as an authority to signal another program.
 export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearTimer = clearTimeout, execute = spec => ctx.shell.execute(spec), assertActive = () => {} } = {}) {
-  const active = new Map(), captures = new WeakMap(); let disposed = false;
+  const active = new Map(), captures = new WeakMap(), turns = new WeakMap(); let disposed = false;
+  // Keep the ownership entry through the registry's final output drain, so a
+  // Stop just after producer.done still precedes notification settlement.
+  const jobRegistry = typeof ctx.get === 'function' ? ctx.get('jobs') : ctx.jobs;
+  const stopSettlements = jobRegistry?.events?.subscribe({ owners: 'scope' }, event => {
+    if (event.type !== 'settled') return;
+    const entry = active.get(event.job.id);if (!entry) return;
+    entry.registrySettled = true;
+    if (entry.producerSettled()) active.delete(event.job.id);
+  });
   ctx.on?.('session/event', (session, event) => {
     const turnBoundary = event.type === 'turn/start' || event.type === 'turn/end';
     if (!turnBoundary && !(event.type === 'agent/inbox/spliced' && event.data.inserted?.length)) return;
+    if (event.type === 'turn/start') turns.set(session, event.data.turn);
+    else if (event.type === 'turn/end' && turns.get(session) === event.data.turn) turns.delete(session);
     for (const entry of active.values()) if (entry.session === session) {
-      // A new turn/input during the final output drain still needs its notice.
-      entry.expiryWait?.abort();
+      if (event.type === 'turn/end' && Number.isSafeInteger(entry.turn) && entry.turn === event.data.turn &&
+          event.data.reason?.kind === 'aborted' && event.data.reason.reason?.kind === 'user') {
+        entry.stoppedByUser = true; entry.collectStoppedTurn();
+      }
+      // Fresh input can revive a useful preview notice, never an old job from
+      // the specific turn the user explicitly stopped.
+      if (!entry.stoppedByUser) entry.expiryWait?.abort();
       if (turnBoundary) entry.previewTurnCompleted = entry.previewPublished && event.type === 'turn/end' && event.data.reason?.kind === 'completed';
     }
   }, { global: true });
@@ -33,6 +49,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       catch { entry.cancel('project executor disposed'); }
     }
     await Promise.all(entries.map(entry => entry.done));
+    active.clear();stopSettlements?.();
   }
   ctx.effect?.(() => dispose, 'managed project background processes');
 
@@ -40,7 +57,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     assertActive();
     execution.signal.throwIfAborted();
     if (disposed) throw new WorkbenchError('PROJECT_EXECUTOR_DISPOSED', 'Project command execution is shutting down.');
-    const owner = execution.agent?.id;
+    const owner = execution.agent?.id, turn = execution.agent?.session ? turns.get(execution.agent.session) : undefined;
     const call=Object.freeze({callId:evidenceId(execution.callId),rootCallId:evidenceId(execution.rootCallId??execution.callId),toolName:evidenceId(execution.name)});
     if (!owner) throw new WorkbenchError('PROJECT_JOB_OWNER_REQUIRED', 'Background commands require their executing conversation.');
     const jobs = typeof ctx.get === 'function' ? ctx.get('jobs') : ctx.jobs;
@@ -53,7 +70,15 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     let resolveCapture,rejectCapture,identity,stdout;
     const captured=launch?new Promise((resolve,reject)=>{resolveCapture=resolve;rejectCapture=reject;}):null;
     void captured?.catch(()=>{});
-    const controller = new AbortController(); let process, id, timer, done, settled = false, stopReason, expiryRequested = false, expirySettlement;
+    const controller = new AbortController(); let process, id, timer, done, entry, settled = false, stopReason, expiryRequested = false, settlementCollection;
+    const collectStoppedTurn = () => {
+      if (!settled || !entry?.stoppedByUser || settlementCollection || entry.agent.session !== entry.session || ctx.get?.('agents')?.get(owner) !== entry.agent) return;
+      // No wait runs while the process is alive, and Stop never awaits it.
+      // The already-finished producer is collected through the supported SDK
+      // API; its output/history remain available without a new model turn.
+      settlementCollection = jobs.wait(id, 1000, owner);
+      void settlementCollection.catch(() => {});
+    };
     const cancel = reason => {
       if (settled || controller.signal.aborted) return;
       stopReason = reason ?? 'project job cancelled';
@@ -111,8 +136,8 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
                 // idle owner for an awaited settlement. Register before returning
                 // the outcome; awaiting here would deadlock registry settlement.
                 entry.expiryWait = new AbortController();
-                expirySettlement = jobs.wait(id, 1000, owner, entry.expiryWait.signal);
-                void expirySettlement.catch(() => {});
+                settlementCollection = jobs.wait(id, 1000, owner, entry.expiryWait.signal);
+                void settlementCollection.catch(() => {});
               }
               return outcome;
             } catch (error) {
@@ -124,7 +149,8 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
             } finally {
               rejectCapture?.(new WorkbenchError('PROJECT_CUSTODY_EXITED','Custody process is no longer active.'));
               settled = true; if (timer !== undefined) clearTimer(timer);
-              if (id !== undefined && !expirySettlement) active.delete(id);
+              collectStoppedTurn();
+              if (entry?.registrySettled || !stopSettlements && id !== undefined && !settlementCollection) active.delete(id);
               releaseAdmission();
             }
           });
@@ -148,8 +174,8 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       const reason = 'project job lifetime limit reached after ' + lifetimeMs + 'ms';
       try { jobs.kill(id, owner, reason); } catch { cancel(reason); }
     };
-    const entry = { id, owner, agent:execution.agent, session:execution.agent.session, previewPublished:false, previewTurnCompleted:false,
-      jobs, done:done.then(async outcome => { try { if (expirySettlement) await expirySettlement.catch(() => {}); return outcome; } finally { active.delete(id); } }), cancel, expire,
+    entry = { id, owner, turn, agent:execution.agent, session:execution.agent.session, stoppedByUser:false, collectStoppedTurn, producerSettled:()=>settled, previewPublished:false, previewTurnCompleted:false,
+      jobs, done:done.then(async outcome => { try { if (settlementCollection) await settlementCollection.catch(() => {}); return outcome; } finally { if (!stopSettlements) active.delete(id); } }), cancel, expire,
       captured, launch, expiresAt,call,releaseAdmission,identity:()=>identity, current:()=>!settled&&!controller.signal.aborted&&process?.status==='running' }; active.set(id, entry);
     timer = setTimer(expire, lifetimeMs);
     timer?.unref?.();

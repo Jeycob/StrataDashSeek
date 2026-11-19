@@ -67,6 +67,19 @@ heavy native tool operations to one; ordinary reads retain native scheduling.
 for controlled comparisons. Cache switching can offset concurrency gains, so
 real traces must distinguish responsiveness from total accepted-task throughput.
 
+The internal `efficiency/session-status` waterfall accepts `{sessionId}` from an
+already-authorized server caller. It returns `{version:1, sessionId, enabled,
+model, heavyTools}` for that root session and its subagents; unknown sessions
+return `undefined`. Each gate has `{phase, since, active, waiting}`. `since` is
+Unix epoch milliseconds (or `null` when idle). `phase` is `idle`, `waiting`, or
+`admitted`; admitted means an occupied slot, not observed computation. When a
+project owns a slot and also queues another command, `admitted` takes priority
+and both counters remain visible. The response contains no other project's
+identity, command, prompt, or queue position. `enabled:false` means these gates
+are disabled, not that the session has no work. This read does not cancel work;
+ordinary SDK `agent.cancel({kind:'user'})` aborts a queued tool's existing signal.
+UI transport/access checks and whole-session Stop presentation remain separate.
+
 ## Measurement and cost
 
 The append-only private ledger records model wait, model wall time, first token,

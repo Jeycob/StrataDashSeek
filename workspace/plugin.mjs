@@ -11,10 +11,13 @@ import { createRuntimeCapabilities } from './runtime-capabilities.mjs';
 import { registerRuntimeCapabilities } from './runtime-tool.mjs';
 import { cleanupIdleProjectCaches } from './cache-cleanup.mjs';
 import { checkpointOperation } from './checkpoint-api.mjs';
+import { readRunActivity } from './run-activity.mjs';
+import { taskUndoOperation } from './task-undo.mjs';
 import { installRuntimeAdmission } from './runtime-admission-hooks.mjs';
 import { automaticReviewView } from './automatic-review.mjs';
 import { installDockerCleanup } from './docker-cleanup.mjs';
 import { installModelSelection } from './model-selection.mjs';
+import { installProjectMemory } from './project-memory.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -32,6 +35,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   const execution = ctx.projectExecutionMode;
   execution.assertUnchanged();
   const manager = new WorkspaceManager(ctx, config, execution); await manager.initialize();
+  installProjectMemory(ctx, manager);
   const models = installModelSelection(ctx, manager, { lifecycle: false });
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
   const { callApps } = createRequire(import.meta.url)('../vast/apps-cli.cjs');
@@ -107,7 +111,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
     const workspaces = ctx.workspaceRegistry.list().map(w => ({ id: w.id, title: w.title, path: w.path, sessionIds: w.sessionIds, settings: manager.data.workspaces[w.id]?.settings }));
     const projects = Object.fromEntries(Object.entries(manager.data.sessions).map(([id, p]) => [id, { root: p.root, ports: p.ports, databasePath: p.databasePath, baseCommit: p.baseCommit, nativeWorktree: p.nativeWorktree, legacy: p.legacy, budget: p.budget ? { ...p.budget, automatic: automaticReviewView(p.budget.automatic) } : p.budget, checkpoints: Object.fromEntries(Object.entries(p.checkpoints ?? {}).map(([k, c]) => [k, { score: c.score, at: c.at, files: c.files }])), checkpointError: p.checkpointError, verification: p.lastVerification ? Object.fromEntries(['kind','exitCode','checksPassed','checksTotal','accepted','at'].map(k=>[k,p.lastVerification[k]])) : undefined, diagnostic: p.lastDiagnostic ? Object.fromEntries(['code','category','at'].map(k=>[k,p.lastDiagnostic[k]])) : undefined }]));
     const update = await fs.readFile(!config.updateReport || config.updateReport === '/data/harness/state/startup-update.json' ? '/data/harness/runtime-status/startup-update.json' : config.updateReport, 'utf8').then(JSON.parse).then(value => Object.fromEntries(['version','enabled','phase','checkedAt','appliedCommit','targetCommit','error','signatureVerified','bootstrapUpgradeRequired'].map(key => [key,value[key]]))).catch(() => null);
-    return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, managedShellVersion: 1, projectBackgroundVersion: 1, changesVersion: 1, update, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
+    return { defaults: DEFAULTS, repairPolicyVersion: manager.repairPolicyVersion, managedShellVersion: 1, projectBackgroundVersion: 1, projectMemoryVersion: 1, changesVersion: 1, update, workspaces, projects, trash: manager.data.trash, running: ctx.agents.list().filter(a => a.status === 'running').map(a => a.id), environment: await fs.readFile(config.environmentReport ?? '/data/harness/state/development.json', 'utf8').then(JSON.parse).catch(() => null) };
   }
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench', methods: ['GET', 'POST'], requestBody: 'buffered', fetch: async request => {
     try {
@@ -116,6 +120,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
       const data = await boundedJSON(request), id = data.sessionId;
       if (id !== undefined && (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(id))) throw new WorkbenchError('INVALID_SESSION', 'Invalid conversation.', 400);
       if (data.op === 'settings') return reply(await manager.updateSettings(data.workspaceId, data.settings));
+      if (data.op === 'run-activity') return reply(await readRunActivity(manager, id));
       if (data.op === 'file') return reply(await manager.files(id, data.operation, data.args ?? {}, request.signal));
       if (data.op === 'changes') return reply(await manager.projectChanges(id, data.operation ?? 'list', data.args ?? {}, request.signal));
       if (data.op === 'trash') return reply(await manager.inOrder(() => manager.trashSession(id)));
@@ -123,6 +128,8 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
       if (data.op === 'resume') { await manager.reviewResume(id, data.strategy); return reply({ resumed: true }); }
       if (data.op === 'automatic-reconcile') { const value=await manager.automaticReconcile(id);return reply({...value,automatic:automaticReviewView(value.automatic)}); }
       if (data.op === 'automatic-resume-consumed') { if(Object.keys(data).sort().join(',')!=='op,sessionId')throw new WorkbenchError('INVALID_CONSUMED_RECOVERY_REQUEST','Only the owner conversation identity is accepted.',400);const value=await manager.automaticResumeConsumed(id);return reply({...value,automatic:automaticReviewView(value.automatic)}); }
+      const taskUndo = await taskUndoOperation(manager, data, request.signal);
+      if (taskUndo) return reply(taskUndo.value);
       const checkpoint = await checkpointOperation(manager, data, request.signal);
       if (checkpoint) return reply(checkpoint.value);
       throw new WorkbenchError('UNKNOWN_OPERATION', 'Unknown operation.', 400);
@@ -139,5 +146,6 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   } }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/health', methods: ['GET'], requestBody: 'buffered', fetch: async () => reply({ version: 1, workspaceReady: true, sourceCommit: /^[a-f0-9]{40}$/u.test(sourceCommit) ? sourceCommit : null, admission: admission.snapshot(), activeAgents: ctx.agents.list().filter(agent => agent.status === 'running').length }) }));
   ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/client', methods: ['GET'], requestBody: 'buffered', fetch: async () => new Response(await fs.readFile(path.join(root, 'workspace/client.js')), { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' } }) }));
+  ctx.effect(() => ctx.connection.fetch.register({ path: '/api/workbench/task-undo-client', methods: ['GET'], fetch: async () => new Response(await fs.readFile(path.join(root, 'workspace/task-undo-ui.js')), { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } }) }));
   await fs.writeFile(path.join(manager.root, 'loaded.json'), JSON.stringify({ at: Date.now(), pid: process.pid, loaded: true, installedAt: manager.data.installedAt }), { mode: 0o600 });
 }

@@ -16,6 +16,27 @@ async function fixture(t) {
   const options = { checkpointRoot, stateRoot, minFreeBytes: 0 };
   return { root, checkpointRoot, stateRoot, write, capture, options };
 }
+test('task undo changes only its before/after delta and requires an explicit choice to preserve conflicts', async t => {
+  const f=await fixture(t);await f.write('edit.js','before');await f.write('removed.js','restore me');await f.write('keep.txt','unrelated');const before=await f.capture();
+  await f.write('edit.js','task');await f.write('created.js','task file');await fs.unlink(path.join(f.root,'removed.js'));const after=await f.capture();
+  await f.write('edit.js','later task edit');await f.write('later.js','new unrelated file');await f.write('keep.txt','manual later edit');
+  const options={...f.options,expectedHash:before.manifest.sha256,taskAfter:{path:after.path,sha256:after.manifest.sha256}};
+  const preview=await previewCheckpointRestore(f.root,before.path,options);
+  assert.equal(preview.canRestore,false);assert.deepEqual(preview.taskUndo.conflicts,['edit.js']);assert.deepEqual(preview.writes,['removed.js']);assert.deepEqual(preview.deletes,['created.js']);
+  await assert.rejects(restoreCheckpointTransaction(f.root,before.path,{...options,expectedSourceHash:preview.sourceHash}),{code:'TASK_UNDO_CONFLICT'});
+  const result=await restoreCheckpointTransaction(f.root,before.path,{...options,expectedSourceHash:preview.sourceHash,skipConflicts:true});assert.equal(result.recovery.status,'committed');assert.deepEqual(result.preservedConflicts,['edit.js']);
+  assert.equal(await fs.readFile(path.join(f.root,'edit.js'),'utf8'),'later task edit');assert.equal(await fs.readFile(path.join(f.root,'keep.txt'),'utf8'),'manual later edit');assert.equal(await fs.readFile(path.join(f.root,'later.js'),'utf8'),'new unrelated file');assert.equal(await fs.readFile(path.join(f.root,'removed.js'),'utf8'),'restore me');await assert.rejects(fs.stat(path.join(f.root,'created.js')),{code:'ENOENT'});
+  const repeated=await previewCheckpointRestore(f.root,before.path,options);assert.deepEqual(repeated.writes,[]);assert.deepEqual(repeated.deletes,[]);assert.deepEqual(repeated.taskUndo.alreadyReverted,['created.js','removed.js']);
+});
+test('task undo invalidates a stale preview and rolls back only its selected operations after failure',async t=>{
+  const f=await fixture(t);await f.write('a.js','a-before');await f.write('b.js','b-before');const before=await f.capture();await f.write('a.js','a-task');await f.write('b.js','b-task');const after=await f.capture();
+  const options={...f.options,expectedHash:before.manifest.sha256,taskAfter:{path:after.path,sha256:after.manifest.sha256}};
+  const old=await previewCheckpointRestore(f.root,before.path,options);await f.write('unrelated.txt','keep');
+  await assert.rejects(restoreCheckpointTransaction(f.root,before.path,{...options,expectedSourceHash:old.sourceHash}),{code:'RESTORE_SOURCE_CHANGED'});
+  const current=await previewCheckpointRestore(f.root,before.path,options);
+  await assert.rejects(restoreCheckpointTransaction(f.root,before.path,{...options,expectedSourceHash:current.sourceHash,onPhase(phase){if(phase==='committed-file')throw Error('synthetic IO failure');}}),/synthetic IO failure/);
+  assert.equal((await checkpointRecoveryStatus(f.stateRoot)).status,'rolled-back');assert.equal(await fs.readFile(path.join(f.root,'a.js'),'utf8'),'a-task');assert.equal(await fs.readFile(path.join(f.root,'b.js'),'utf8'),'b-task');assert.equal(await fs.readFile(path.join(f.root,'unrelated.txt'),'utf8'),'keep');
+});
 test('large snapshot source later shrunk is preserved; exclusions are explicit and not deletions', async t => {
   const f = await fixture(t); await f.write('large.txt', Buffer.alloc(1024 ** 2 + 1, 65)); await f.write('app.js', 'original'); await f.write('secrets/session-secret', 'PRIVATE_FIXTURE');
   const saved = await f.capture(); assert.equal(saved.manifest.inventory['large.txt'].reason, 'per-file-limit');

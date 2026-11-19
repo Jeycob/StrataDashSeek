@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import {POLICY,rewriteRisk,summarizeLog,archiveLog,WorkCard,prefixFingerprint} from './context.mjs';
-import {FairGate,normalizeCompaction} from './gate.mjs';
+import {FairGate,normalizeCompaction,sessionGateStatus} from './gate.mjs';
 import {EventLedger,costReport,uniqueEngineRecord,intervalUnion} from './ledger.mjs';
 import {focusContext} from './focus.mjs';
 import {sampleBilling,billingWindows} from './billing-sample.mjs';
@@ -61,6 +61,17 @@ test('FIFO cancellation never releases an active stream early and cleanup is ide
 test('heavy tool capacity bounds resource contention without serializing every read',async()=>{
   const q=new FairGate({capacity:2}),a=await q.acquire({rootId:'A'}),b=await q.acquire({rootId:'B'});assert.equal(q.active.size,2);
   let started=false;const c=q.acquire({rootId:'C'}).then(p=>(started=true,p));await tick();assert.equal(started,false);a.release();(await c).release();b.release();
+});
+test('per-project gate state includes child work and simultaneous wait without other session data',async()=>{
+ const gate=new FairGate(),a=await gate.acquire({rootId:'A',sessionId:'A-child'}),waiting=new AbortController();
+ const queued=gate.acquire({rootId:'A',sessionId:'A',signal:waiting.signal});
+ const b=gate.acquire({rootId:'B',signal:waiting.signal});
+ const snapshot=gate.snapshot();
+ assert.deepEqual(sessionGateStatus(snapshot,'A'),{phase:'admitted',since:snapshot.active[0].admittedAt,active:1,waiting:1});
+ assert.deepEqual(sessionGateStatus(snapshot,'B'),{phase:'waiting',since:snapshot.waiting[1].queuedAt,active:0,waiting:1});
+ assert.deepEqual(sessionGateStatus(snapshot,'absent'),{phase:'idle',since:null,active:0,waiting:0});
+ const settled=Promise.allSettled([queued,b]);waiting.abort();await settled;a.release();
+ assert.deepEqual(sessionGateStatus(gate.snapshot(),'A'),{phase:'idle',since:null,active:0,waiting:0});
 });
 test('compaction uses the factual handoff ceiling without recursion or an already-off bypass',()=>{
   const r=normalizeCompaction({purpose:'compaction',reasoningEffort:'medium',maxTokens:1000,messages:[]});assert.equal(r.reasoningEffort,'off');assert.equal(r.maxTokens,4096);assert.equal(normalizeCompaction(r),null);

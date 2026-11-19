@@ -72,7 +72,7 @@ async function dependencies(env,{requirePython=false}={}) {
 }
 async function reproduceBundle(temporary, env, expectedSha256) {
   const replica = path.join(temporary, 'bundle-reproduction');
-  for (const name of ['workspace/native-ui/build.cjs', 'workspace/native-ui/source.js', 'workspace/native-ui/result-preview.js', 'workspace/native-ui/theme.css', 'shared/i18n.cjs', 'shared/ui-copy.cjs', 'mobile/apps.js', 'workspace/client.js']) {
+  for (const name of ['workspace/native-ui/build.cjs', 'workspace/native-ui/factory-source.cjs', 'workspace/native-ui/run-activity.js', 'workspace/native-ui/model-availability.js', 'workspace/native-ui/response-model.js', 'workspace/native-ui/source.js', 'workspace/native-ui/result-preview.js', 'workspace/native-ui/theme.css', 'shared/i18n.cjs', 'shared/ui-copy.cjs', 'shared/settings-health.cjs', 'mobile/apps.js', 'workspace/client.js']) {
     const target = path.join(replica, name); await fs.mkdir(path.dirname(target), {recursive: true}); await fs.copyFile(path.join(root, name), target);
   }
   const run = await runProgram([process.execPath, 'workspace/native-ui/build.cjs'], {cwd: replica, env, timeoutMs: 15000, outputLimit: 32768});

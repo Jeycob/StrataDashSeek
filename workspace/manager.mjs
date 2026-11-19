@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { WorkbenchError, DEFAULTS, validateSettings, RepairBudget, REPAIR_POLICY_VERSION, validationKind, relativeFile, within, operationFingerprint } from './policy.mjs';
 import { readJSON, atomicJSON, ProjectLocks, canonicalInside, sourceManifest, saveCheckpoint, hash, changedSourcePaths, sourceChangeDiagnostic } from './storage.mjs';
 import { LiveChanges } from './changes.mjs';
+import { createTaskUndo } from './task-undo.mjs';
 import { previewCheckpointRestore, restoreCheckpointTransaction, recoverCheckpointRestore, checkpointRecoveryStatus } from './checkpoint-restore.mjs';
 import { classifyToolOutcome, classifyVerificationOutcome, recoveryContext, normalizeVerificationCommand } from './tool-recovery.mjs';
 import { guideFirstCheck, STARTUP_CHECK_GUIDANCE } from './verification-guidance.mjs';
@@ -30,6 +31,7 @@ export class WorkspaceManager {
     this.root = config.stateRoot ?? '/data/harness/state/workbench'; this.projectsRoot = config.projectsRoot ?? '/data/harness/workspaces/projects';
     this.file = path.join(this.root, 'registry.json'); this.locks = new ProjectLocks(path.join(this.root, 'leases'));
     this.changes = new LiveChanges({ ...config.changes, stateRoot: path.join(this.root, 'changes') }, this.execution);
+    this.taskUndo = createTaskUndo(this);
     this.serial = Promise.resolve(); this.persistQueue = Promise.resolve(); this.running = new Map(); this.grants = new Map(); this.budgets = new Map(); this.frozenSettings = new Map(); this.pendingNotices = new Map(); this.pendingDiagnostics = new Map(); this.resultWork = new Map(); this.automaticReviews = new Map();
   }
   async initialize() {
@@ -257,6 +259,7 @@ export class WorkspaceManager {
     await this.checked(() => guideFirstCheck(this, agent, record, budget, signal));
     record.budget = budget; await this.save();
     if (budget.blocked) throw new WorkbenchError(budget.blocked.code, budget.blocked.message + ' Files and verification results are retained. See Workspace → Run review for details.');
+    await this.taskUndo?.begin({ agent: executionAgent, signal, turn, messages });
   }
   ownerAgent(agent) {
     const seen = new Set();
@@ -503,6 +506,8 @@ export class WorkspaceManager {
     if (this.ctx.agents.get(id)?.status === 'running') return;
     const activity = await this.ctx.waterfall('workspace/session-activity', { sessionId: id }, () => Promise.resolve([]));
     if (activity.length) return;
+    if (await this.taskUndo?.finish(id) === false) return;
+    if (this.ctx.agents.get(id)?.status === 'running') return;
     await this.locks.release(id); this.running.delete(id);
   }
   async reviewResume(id, strategy) {
