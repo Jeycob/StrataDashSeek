@@ -240,8 +240,8 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
   assert.equal(nextY,540);
   await page.getByRole('button',{name:'Show next section',exact:true}).tap();
 
-  async function tapTarget(path=route, scroll=nextY) {
-   const image=snapshot(path,scroll);
+  async function tapTarget(routePath=route, scroll=nextY, evidenceName) {
+   const image=snapshot(routePath,scroll);
    await image.waitFor();
    await image.evaluate(async node=>node.decode());
    const target=latest.regions.find(region=>region.selector==='#target');
@@ -253,6 +253,12 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
    }});
    const crop=page.getByRole('img',{name:'Selected element screenshot'});
    await crop.waitFor();
+   if (evidenceName && process.env.HARNESS_NATIVE_EVIDENCE) {
+    const bytes=await crop.evaluate(async node=>Array.from(new Uint8Array(await (await fetch(node.src)).arrayBuffer())));
+    const directory=process.env.HARNESS_NATIVE_EVIDENCE;
+    await fs.mkdir(directory,{recursive:true});
+    await fs.writeFile(path.join(directory,evidenceName),Buffer.from(bytes));
+   }
    return crop.evaluate(async node=>{
     await node.decode();
     const canvas=document.createElement('canvas');
@@ -262,7 +268,7 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
    });
   }
 
-  assert.deepEqual(await tapTarget(),{width:140,height:60,pixel:[224,0,0,255]});
+  assert.deepEqual(await tapTarget(route,nextY,'preview-guest-selected.png'),{width:140,height:60,pixel:[224,0,0,255]});
   assert.equal((await draft(first)).payload.attachments.length,0);
   await composer.press('Control+a');
   await page.getByRole('button',{name:'Add to next message',exact:true}).tap();
@@ -282,7 +288,7 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
   assert(edited.includes('#untouched{background:#222222}'));
   await fs.writeFile(projectFile,edited);
   await page.getByRole('button',{name:'Select an element',exact:true}).tap();
-  assert.deepEqual(await tapTarget(),{width:140,height:60,pixel:[0,51,238,255]});
+  assert.deepEqual(await tapTarget(route,nextY,'preview-guest-after-edit.png'),{width:140,height:60,pixel:[0,51,238,255]});
 
   const control = body => controlTab.evaluate(async payload => {
    const response = await fetch('/api/workbench/preview',{method:'POST',
