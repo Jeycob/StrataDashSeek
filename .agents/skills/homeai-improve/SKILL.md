@@ -30,6 +30,14 @@ Místní workflow je autoritativní; [Page](https://chatgpt.com/space/page_deb3a
 
 Pro malou lokální opravu nevyžaduj celý provozní audit. Historii otevři kvůli konkrétní nejasnosti. Přenositelný postup pro práci v checkoutu je v `docs/homeai-delivery.md`; osobní workflow a živá evidence mohou být v odděleném koordinačním prostoru.
 
+## Omez tokenovou režii
+
+Novému subagentovi dej stručné samostatné zadání: výsledek, vlastněné soubory, potřebná omezení a oprávnění, přijetí a odkazy na podklady. Celou historii předej jen při skutečné potřebě; existujícímu autorovi posílej pouze změny. Počet rolí není povinný počet aktivních agentů. Čti relevantní sekce a filtrované logy, nikoli opakovaně celý archiv; chybějící rozhodující kontext vždy doplň.
+
+Lokálně ověř dotčené chování; zachovej povinné CI přesného kandidáta, požadované kontroly na main a potřebné živé přijetí. Platné zelené kontroly ručně neopakuj bez změny zdrojů či prostředí nebo konkrétní pochybnosti. U samotné dokumentace kontroluj obsah, odkazy a schéma podle potřeby. Běžné testy samy modelové tokeny nevyžadují; šetři hlavně čtení a opakovaný rozbor jejich výstupů. Modelové benchmarky inferenci využívají.
+
+Předávej výsledek, verzi a odkaz na ověření, zbývající blocker a další krok s vlastníkem. Úspěšné logy shrň, při selhání načti relevantní chybu. Čekej přednostně na dokončení nebo používej kompaktní snapshot s cursorem; nezměněný stav opakovaně nerozebírej. Podrobnosti jsou v části „Menší tokenová a koordinační režie“ workflow nebo `docs/homeai-delivery.md`. Úsporu netvrď procentem bez měření a nezaváděj pro ni další reporting.
+
 ## Doruč použitelný celek
 
 Urči uživatelský výsledek a skutečné závislosti: session → správný model → nástroje → preview → přijetí, pokud je tato cesta součástí úkolu. Infrastrukturní práci spoj s konkrétním chybějícím krokem. Zachovej všechny požadavky zadání.

@@ -1,6 +1,18 @@
 # Doručování změn HomeAI
 
-Postup vychází z integračních zkušeností 16.–18. listopadu 2026. Cílem je rychleji doručovat ověřené uživatelské výsledky a omezit přípravy, které jejich dostupnost neposouvají.
+Postup vychází z integračních zkušeností 16.–19. listopadu 2026. Cílem je rychleji doručovat ověřené uživatelské výsledky a omezit přípravy, které jejich dostupnost neposouvají.
+
+## Menší tokenová a koordinační režie
+
+Šetři kontext, opakované rozbory a zbytečné běhy. Běžné deterministické testy samy nevyžadují modelové tokeny; spotřebovává je zejména čtení jejich výstupů. Modelové benchmarky naopak inferenci využívají. Úsporu proto neodvozuj pouze z počtu testů.
+
+- **Předávej vymezený úkol.** Nový subagent dostane cíl, rozsah souborů, relevantní omezení a oprávnění, podmínku přijetí a odkazy na potřebné podklady. Výchozí je stručné samostatné zadání bez celé historie; plný kontext předej, jen když je pro úkol skutečně potřebný. Existujícímu autorovi posílej pouze změnu zadání nebo nový nález. Dalšího agenta zapoj, pokud má nezávislou práci nebo přinese potřebnou kontrolu; počet rolí není povinný počet spuštěných agentů.
+- **Načítej konkrétní podklady.** Začni aktuálním souhrnem a relevantními částmi souborů. Historii a velké logy vyhledej podle konkrétní otázky a filtruj před výpisem; po zkráceném výstupu načti chybějící potřebnou část. Správná oprávnění ani technický kontrakt se nesmějí ztratit kvůli kratšímu předání.
+- **Ověřuj podle změny.** Autor spustí cílené testy. Povinné kompletní CI nech proběhnout na přesném kandidátovi a zachovej požadované kontroly na main. Další ruční běh stejné zelené kontroly potřebuje důvod: změnu relevantních zdrojů či prostředí, konkrétní selhání nebo nevyřešenou pochybnost. Reviewer využije platné výsledky a případné vlastní ověření zaměří na riziko změny. Čistá dokumentace potřebuje kontrolu obsahu, odkazů a případného schématu, nikoli novou sadu aplikačních testů. Původní přijímací kritéria a nutné živé ověření zůstávají.
+- **Shrnuj úspěch, rozebírej selhání.** U úspěšných kontrol předej rozsah, výsledek, přesnou verzi a odkaz na důkaz. Do kontextu nevkládej celý zelený log. Při selhání začni první relevantní chybou a okolím; celý log zůstane dostupný. Jedno předání obsahuje výsledek změny, ověření, zbývající blocker a další krok s vlastníkem; opakovaně nekopíruj celý plán ani manifest.
+- **Sleduj změny stavu.** Pro čekání preferuj událost dokončení či kompaktní snapshot s posledním cursorem. Pokud je nutný polling, zvol interval podle obvyklé délky operace a nezměněné odpovědi zpracuj bez opakovaného rozboru modelem. Zprávu agentům posílej při změně výsledku, úkolu nebo blockeru; průběžné zprávy uživateli zachovej stručné. Čekání neznamená povolení k opakovanému submitu ani resetu limitů.
+
+Praktické předání: „Opraveno X, větev/SHA Y; dotčené testy prošly, důkaz Z. Zbývá živé ověření; po CI provede koordinátor.“ Při nové revizi pošli její rozdíl a nové ověření. Úsporu vyhodnocuj z dostupných vstupních, cache a výstupních tokenů, počtu opakovaných kontrol a času do přijetí; bez měření neslibuj procentní zlepšení. Kvůli evidenci úspor nezakládej další povinný reporting.
 
 ## Plynulé předávání práce
 
