@@ -230,13 +230,20 @@ export async function automaticReview(manager, input, record, budget, settings, 
       reportPath: report?.reportPath, checks: Array.isArray(report?.checks) ? report.checks.slice(0,24).map(check => ({ id: check.id, kind: check.kind, passed: check.passed,
         checksPassed: check.checksPassed, checksTotal: check.checksTotal, diagnosticCode: check.diagnosticCode, logPath: check.logPath, artifactPaths: check.artifactPaths?.slice(0,4) })) : [] }).slice(0,6000);
     if (budget.blocked) { a.phase = 'stopped'; a.reason = budget.blocked.code; return; }
+    const completeCheck = operation.verificationKind === 'all' && report?.passed === true && report?.complete === true && report?.stale === false
+      && a.lastAutomaticOutcome.failed === false && typeof report.sourceHash === 'string' && a.lastAutomaticOutcome.sourceHash === report.sourceHash;
     if (a.lastAutomaticOutcome.verifiedProgress === true) {
-      diagnostics(manager, id, '[Harness: verified progress] The automatic project check completed on the current source and recorded new evidence. Continue the existing task with a smaller verified milestone. A partial check is not full completion; inspect required kinds and real application behavior.\nActual verification summary: ' + outcome);
+      diagnostics(manager, id, '[Harness: verified progress] ' + (completeCheck
+        ? 'All required project checks passed on the current source and the full verification was accepted. Deliver any remaining requested artifact or preview, then finish the task with a final answer describing the result and how to access it. Change application behavior only if an original requirement remains unmet; a passing contract does not replace the requested deliverable. Do not expand scope, weaken assertions or repeat unchanged passing checks.'
+        : 'The current-source check recorded new passing evidence, but it is only a partial verification. Implement or verify the next unmet original requirement, preserving assertions and scope. Inspect required kinds and real application behavior; do not claim full completion from this result.')
+        + '\nActual verification summary: ' + outcome);
     } else {
       const repeatedPass = report?.passed === true && report?.stale === false && typeof report?.sourceHash === 'string' && budget.checks.all?.manifestHash === report.sourceHash;
       a.phase = repeatedPass ? 'working' : 'repairing'; a.nextCheckAt = a.taskSteps + REPAIR_STEPS;
       diagnostics(manager, id, (repeatedPass
-        ? '[Harness: repeated passing evidence] This current-source check passed, but repeats existing evidence and earns no stage or task-budget renewal. If the original request is satisfied, report the real result and finish. Otherwise implement only the next smaller remaining requirement; do not invent a repair for already passing behavior.'
+        ? '[Harness: repeated passing evidence] This current-source check passed, but repeats existing evidence and earns no stage or task-budget renewal. ' + (completeCheck
+          ? 'Full verification is still passing. Deliver any remaining requested artifact or preview, then finish with a final answer if the original requirements are satisfied. Change application behavior only for an unmet original requirement; do not invent a repair for already passing behavior.'
+          : 'This is only partial verification. Implement or verify the next unmet original requirement; do not claim full completion or invent a repair for already passing behavior.')
         : '[Harness: bounded repair] Verification did not establish new progress. Read the reported owned log/report paths, repair the specific failure or missing contract, and run a relevant foreground verify_project check within the next ' + REPAIR_STEPS + ' steps. Preserve current files and report a concrete blocker only when it requires an owner decision.')
         + ' Do not repeat an unchanged passing check, weaken assertions, raise limits or expand scope.\nActual verification summary: ' + outcome);
     }

@@ -41,6 +41,30 @@ test('soft limit automatically dispatches guarded verification and continues the
  const f=await fixture(t);await f.step(11);assert.equal(f.calls.length,1);assert.equal(f.budget.blocked,null);assert.equal(f.budget.stage,2);assert.equal(f.budget.steps,1);assert.equal(f.budget.automatic.taskSteps,11);assert.equal(f.budget.automatic.checks,1);assert.equal(f.budget.automatic.phase,'working');assert.match(f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW'),/verified progress/);
 });
 
+test('automatic handoff guidance distinguishes full, partial, failed and source-rejected evidence without stopping delivery',async t=>{
+ for(const [label,options,expected] of [
+  ['full',{},/Deliver any remaining requested artifact or preview, then finish the task with a final answer/],
+  ['partial',{report:()=>({...success(),complete:false})},/only a partial verification/],
+  ['failed',{report:failure},/bounded repair/],
+  ['stale',{report:()=>({...success(),stale:true})},/bounded repair/],
+  ['source-changed',{changeSource:true},/bounded repair/],
+ ]){
+  const f=await fixture(t,options);await f.step(11);
+  const notice=f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW');assert.match(notice,expected,label);
+  assert.equal(f.budget.blocked,null,label);assert.equal(f.budget.automatic.taskSteps,11,label);assert.equal(f.calls.length,1,label);
+  if(label!=='full')assert.doesNotMatch(notice,/full verification was accepted|Deliver any remaining requested artifact/,label);
+  if(label==='full'||label==='partial'){
+   const stage=f.budget.stage;for(let n=12;n<=21;n++)await f.step(n);
+   const repeated=f.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW');assert.match(repeated,/repeated passing evidence/,label);
+   assert.match(repeated,label==='full'?/Full verification is still passing.*Deliver any remaining requested artifact or preview/:/only partial verification.*do not claim full completion/,label);
+   assert.equal(f.budget.stage,stage,label);assert.equal(f.budget.automatic.taskSteps,21,label);assert.equal(f.budget.blocked,null,label);
+  }
+ }
+ const scoped=await unknownRepair(t,{report:()=>({...success(),checks:success().checks.map(check=>({...check,countsMeasured:true}))})});await scoped.step(2);
+ const notice=scoped.manager.pendingDiagnostics.get('owner').get('AUTOMATIC_REVIEW');assert.match(notice,/only a partial verification/);assert.doesNotMatch(notice,/full verification was accepted|Deliver any remaining requested artifact/);
+ assert.equal(JSON.parse(scoped.calls[0].calls[0].arguments).kind,'test');assert.equal(scoped.budget.blocked,null);
+});
+
 const countedFailure = (failed=2, passed=12) => ({passed:false,complete:false,stale:false,checks:[{id:'core',kind:'test',passed:false,checksTotal:failed+passed,checksPassed:passed,countsMeasured:true}]});
 async function unknownRepair(t, options={}) {
  const f=await fixture(t,{steps:0,reviewKind:'test',report:countedFailure,...options});
