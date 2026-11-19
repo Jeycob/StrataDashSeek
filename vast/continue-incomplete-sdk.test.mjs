@@ -22,6 +22,7 @@ const isOwn=message=>message?.source?.kind==='workspace-runtime';
 async function active(fibers){const deadline=Date.now()+2000;while(fibers.some(f=>f.state!==2)){await Promise.all(fibers.map(f=>f.await()));assert(Date.now()<deadline);await new Promise(resolve=>setImmediate(resolve));}}
 async function eventually(predicate){const deadline=Date.now()+2000;while(!predicate()){assert(Date.now()<deadline,'SDK admission did not arrive');await new Promise(resolve=>setImmediate(resolve));}}
 async function fixture(t,options={}){
+  const {reasoning=false,...recoveryConfig}=options;
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'continue-incomplete-')),registryPath=path.join(directory,'registry.json'),journalRoot=path.join(directory,'journals'),ctx=new Context(),events=[],durable=[],admissions=[];
   let calls=0,reviewCount=0,onReview=()=>{},onFlush=()=>{},jobs=[],terminals=[],holdSeventh;
   t.after(async()=>{await ctx.fiber.dispose();assert.equal(path.dirname(await fs.realpath(directory)),await fs.realpath(os.tmpdir()));assert(path.basename(directory).startsWith('continue-incomplete-'));await fs.rm(directory,{recursive:true,force:true});});
@@ -30,7 +31,7 @@ async function fixture(t,options={}){
   await ctx.sessionProjections.register(subagentCatalogProjectionDefinition);
   ctx.tools.setExecutor(new NativeToolExecutor(ctx));
   ctx.tools.register({name:'fixture_probe',description:'Inert successful probe',parameters:{type:'object',properties:{},additionalProperties:false},output:{schema:{type:'object'},render:()=>[{type:'text',text:'Synthetic probe succeeded.'}]},execute:()=>({})});
-  class Inert extends LlmAdapter{async *stream(){calls++;assert(calls<=8,'No duplicate model dispatch');if(calls<=5)yield{type:'block-end',index:0,block:{type:'tool-call',id:'fixture-'+calls,name:'fixture_probe',arguments:'{}'}};else{if(calls===7)await holdSeventh;yield{type:'text-delta',index:0,text:calls===6?progress:'Done. The synthetic original task is complete.'};}yield{type:'finish',reason:{kind:'stop'},replayState:{response:{stopReason:'stop'}}};}}
+  class Inert extends LlmAdapter{async *stream(){calls++;assert(calls<=8,'No duplicate model dispatch');if(calls<=5)yield{type:'block-end',index:0,block:{type:'tool-call',id:'fixture-'+calls,name:'fixture_probe',arguments:'{}'}};else{if(calls===7)await holdSeventh;if(reasoning)yield{type:'reasoning-delta',index:0,text:'Synthetic reasoning from the inert adapter.'};yield{type:'text-delta',index:reasoning?1:0,text:calls===6?progress:'Done. The synthetic original task is complete.'};}yield{type:'finish',reason:{kind:'stop'},replayState:{response:{stopReason:'stop'}}};}}
   ctx.llm.registerAdapter(['strata-vast'],new Inert());
   const budget=new RepairBudget(),record={root:directory,legacy:false,budget},registry={sessions:{owner:record},trash:{}};
   const save=()=>fs.writeFile(registryPath,JSON.stringify(registry));
@@ -49,11 +50,12 @@ async function fixture(t,options={}){
   assert.equal(calls,6);assert.equal(budget.steps,6);assert.equal(budget.automatic.taskSteps,6);
   const ended=events.findLast(e=>e.type==='turn/end');assert.equal(ended.data.reason.kind,'completed');
   const request={sessionId:'owner',requestId:'fixed-request-r',expectedTurnEndSeq:ended.seq},prefix=structuredClone(events),beforeBudget=hash(budget);
-  const continuation=createIncompleteContinuation(ctx,{registryPath,journalRoot,...options});
+  const continuation=createIncompleteContinuation(ctx,{registryPath,journalRoot,...recoveryConfig});
   return{ctx,agent,events,durable,record,budget,registry,request,prefix,beforeBudget,admissions,registryPath,journalRoot,continuation,save,calls:()=>calls,setFlush:fn=>onFlush=fn,setReview:fn=>onReview=fn,setJobs:rows=>jobs=rows,setTerminals:rows=>terminals=rows,hold:promise=>holdSeventh=promise};
 }
 test('actual SDK recovery retains six steps until admission seven and dispatches fixed R once',{timeout:10000},async t=>{
-  const f=await fixture(t);let release;f.hold(new Promise(resolve=>release=resolve));
+  const f=await fixture(t,{reasoning:true});let release;f.hold(new Promise(resolve=>release=resolve));
+  assert.deepEqual(f.events.findLast(e=>e.type==='assistant/message').data.message.content.map(block=>block.type),['reasoning','text']);
   try{
   const result=await f.continuation.recover(f.request);assert.equal(result.accepted,true);assert.equal(result.state,'queued');
   await eventually(()=>f.admissions.length===7);assert.equal(f.admissions[6].steps,7);assert.equal(f.admissions[6].taskSteps,7);assert.equal(f.admissions[6].original,'original-human');

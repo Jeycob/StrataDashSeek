@@ -31,7 +31,10 @@ for(const progress of [probeProgress,"WebGL2 works in headless Chromium. I'll no
       const call=requests.length;
       assert(call<=4,'The fixture must not dispatch more than four inert responses');
       if(call===1||call===3)yield{type:'block-end',index:0,block:{type:'tool-call',id:'fixture-'+call,name:'fixture_probe',arguments:'{}'}};
-      else yield{type:'text-delta',index:0,text:call===2?progress:'Done. The fixture task is complete.'};
+      else{
+        if(progress===probeProgress)yield{type:'reasoning-delta',index:0,text:'Synthetic reasoning from the inert adapter.'};
+        yield{type:'text-delta',index:progress===probeProgress?1:0,text:call===2?progress:'Done. The fixture task is complete.'};
+      }
       yield{type:'finish',reason:{kind:'stop'},replayState:{response:{stopReason:'stop'}}};
     }
   }
@@ -51,5 +54,6 @@ for(const progress of [probeProgress,"WebGL2 works in headless Chromium. I'll no
   assert(steering[0].seq>events.find(e=>e.type==='turn/start').seq&&steering[0].seq<ended[0].seq);
   assert.equal(events.filter(e=>e.type==='user/message'&&e.data.id==='original-human').length,1);
   assert.equal(events.filter(e=>e.type==='assistant/message').length,4);
+  assert.deepEqual(events.filter(e=>e.type==='assistant/message')[1].data.message.content.map(block=>block.type),progress===probeProgress?['reasoning','text']:['text']);
   assert.equal(agent.status,'idle');
 });

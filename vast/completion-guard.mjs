@@ -31,7 +31,9 @@ export function shouldContinue(state, { turn, signal, inbox, providers, maxConti
   if (!state.tools || state.lastToolFailed || state.hitTokenLimit || state.continuations >= maxContinuations) return false;
   const message = state.message;
   if (!providers.has(message?.source?.provider) || message.source?.replayState?.response?.stopReason !== 'stop') return false;
-  if (!message.content?.length || message.content.some(x => !['text', 'thinking'].includes(x.type))) return false;
+  // The pinned SDK assembles reasoning-delta into reasoning blocks. They are
+  // allowed alongside visible text, but only visible text decides completion.
+  if (!Array.isArray(message.content) || !message.content.length || message.content.some(x => !x || !['text', 'thinking', 'reasoning'].includes(x.type) || typeof x.text !== 'string')) return false;
   return isProgressOnly(message.content.filter(x => x.type === 'text').map(x => x.text).join('\n'));
 }
 

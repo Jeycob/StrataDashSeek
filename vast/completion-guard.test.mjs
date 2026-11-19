@@ -49,6 +49,21 @@ test('honors user cancellation, queued input and actual tool calls', () => {
   for (const change of [{ signal: aborted }, { inbox: { nextStep: [{}], nextTurn: [] } }, { inbox: { nextStep: [], nextTurn: [{}] } }]) assert.equal(shouldContinue(state(), { ...options(), ...change }), false);
   assert.equal(shouldContinue({ ...state(), message: { ...message('Now the stylesheet.'), content: [{ type: 'tool-call' }] } }, options()), false);
 });
+
+test('accepts SDK reasoning with progress text but never classifies hidden reasoning as the answer', () => {
+  const reasoning = { type: 'reasoning', text: 'Done. Synthetic hidden reasoning; not a user-visible completion.' };
+  const check = content => shouldContinue({ ...state(), message: { ...message(probeProgress), content } }, options());
+  const text = { type: 'text', text: probeProgress };
+  assert.equal(check([reasoning, text]), true);
+  assert.equal(check([text]), true);
+  for (const content of [
+    [{ type: 'reasoning', text: probeProgress }],
+    [reasoning, { type: 'text', text: 'Done. The game is complete.' }],
+    ...[null, {}, { type: 'reasoning' }, { type: 'reasoning', text: 42 }, { type: 'text' },
+      { type: 'tool-call' }, { type: 'image' }, { type: 'file' }, { type: 'unknown', text: 'metadata' }].map(block => [block, text]),
+    { length: 1 },
+  ]) assert.equal(check(content), false, JSON.stringify(content));
+});
 test('the observed probe response still honors every runtime continuation gate', () => {
   const observed = { ...state(), message: message(probeProgress) };
   assert.equal(shouldContinue(observed, options()), true);
