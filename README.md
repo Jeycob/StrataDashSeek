@@ -29,6 +29,27 @@ limits, temporary process jobs and verification behavior.
    result and how you want it checked in one message. For example, ask for an
    `index.html` counter and specify that increment, decrement and reset should
    each be tested in the browser.
+   Optionally expand **Task budget** beside the composer before sending, choose
+   elapsed minutes or reported tokens, and save it for that one request. The
+   default adds no limit; later new requests start without one. Elapsed time
+   starts at the first recorded SDK acceptance receipt and includes subsequent
+   waits. If that receipt has no timestamp, it starts at the first runtime step;
+   the budget status records which basis was used. A completed task's delivered
+   preview does not keep its timer alive. Token totals are usage, not a price: they are checked after a
+   model response, which can overshoot the threshold. Missing exact usage stops
+   a token-limited task with an explanation. Reaching a limit stops its active
+   work and retains files and recorded checks; reopen **Task budget** for the
+   specific reason. Internal continuation does not reset an allowance, and
+   interrupted token accounting cannot silently resume with a fresh allowance.
+   Unfinished background work keeps its original task's deadline when a newer
+   request starts. Its stop reason appears separately as **Earlier task**;
+   settling that work cannot release or stop the newer task's allowance.
+   An already accepted next human request stays in the SDK inbox when the
+   budget stops the current request. Managed project/Bash jobs collect their
+   terminal results without a late model wakeup. Other SDK job producers, such
+   as terminal or workflow jobs, receive cancellation but retain SDK completion
+   notification behavior: the registry does not guarantee a settlement deadline
+   or offer a per-job quiet flag.
 2. Open the preview link in the completion message while the preview is live.
    To keep a copy of the result, open **Workspace files**, select the output
    file and use **Download**. Preview links are temporary. Project files stay

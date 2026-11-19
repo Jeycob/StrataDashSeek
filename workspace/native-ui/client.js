@@ -1553,6 +1553,28 @@ function mountResourceInventory(anchor,adapter){
   if(result.restored!==true||result.recovery?.pending)throw Error(rt('uncertain'));
   await refresh();if(valid())el('wb-message').textContent=rt('restored');
  }
+ function renderTaskBudget(content,sessionId,valid){
+  if(!sessionId)return;
+  const words=I.language==='cs'?{title:'Rozpočet příští úlohy',none:'Bez nového limitu',elapsed:'Časový limit',tokens:'Vykázané tokeny',minutes:'Minuty',total:'Celkem tokenů',save:'Použít pro příští zadání',saved:'Uloženo pro jedno nové lidské zadání.',help:'Výchozí je bez limitu. Interní pokračování limit neobnovuje. Další nové zadání bude opět bez limitu.',meter:'Tokeny nejsou cena. Účtují se po odpovědi modelu; poslední odpověď může limit překročit. Když přesný součet chybí, úloha se zastaví s důvodem.',used:'Vykázaná spotřeba',state:'Stav rozpočtu',loading:'Načítám rozpočet…',unavailable:'Rozpočet se nepodařilo načíst.',active:'Aktivní',idle:'Tah dokončen',stopped:'Zastaveno limitem'}:{title:'Next task budget',none:'No new limit',elapsed:'Elapsed time limit',tokens:'Reported tokens',minutes:'Minutes',total:'Total tokens',save:'Use for next request',saved:'Saved for one new human request.',help:'The default is no limit. Internal continuation does not renew the allowance. A later new request starts without a limit.',meter:'Tokens are not a price. Usage is reported after a model response; the last response can exceed the limit. Missing exact totals stop the task with a reason.',used:'Reported usage',state:'Budget status',loading:'Loading task budget…',unavailable:'Task budget could not be loaded.',active:'Active',idle:'Turn completed',stopped:'Stopped by limit'};
+  const card=node('section');card.className='wb-card';card.dataset.taskBudget='true';card.append(node('h3',words.title),node('p',words.loading));content.append(card);
+  function draw(value){
+   if(!valid())return;
+   card.replaceChildren(node('h3',words.title));
+   const form=node('form'),label=node('label',words.title),select=node('select'),amountLabel=node('label'),amount=node('input'),save=button(words.save),message=node('p');
+   select.id=prefix+'task-limit-kind';select.name='task-limit-kind';label.htmlFor=select.id;
+   for(const kind of ['none','elapsed','tokens']){const option=node('option',words[kind]);option.value=kind;select.append(option);}
+   select.value=value.nextTaskLimit?.kind||'none';amount.id=prefix+'task-limit-amount';amount.type='number';amount.min='1';amount.step='1';amount.required=true;amountLabel.htmlFor=amount.id;save.type='submit';
+   const choose=()=>{const tokens=select.value==='tokens';amountLabel.textContent=tokens?words.total:words.minutes;amount.max=tokens?'10000000':'1440';amount.hidden=amountLabel.hidden=select.value==='none';amount.disabled=select.value==='none';amount.value=String(value.nextTaskLimit?.kind===select.value?(tokens?value.nextTaskLimit.totalTokens:value.nextTaskLimit.minutes):(tokens?50000:10));};
+   select.onchange=choose;choose();form.append(label,select,amountLabel,amount,save,message);card.append(form,node('p',words.help),node('p',words.meter));
+   if(value.current){const current=value.current,stateLine=node('p',words.state+': '+(words[current.state]||current.state));card.append(stateLine);if(current.limit.kind==='tokens')card.append(node('p',words.used+': '+(current.usageAvailable===false?'—':current.usedTokens)+' / '+current.limit.totalTokens));if(current.deadlineAt)card.append(node('p',new Date(current.deadlineAt).toLocaleString(I.locale)));if(current.reason){const reason=node('p',current.reason.message+' ('+current.reason.code+')');reason.dataset.taskBudgetReason=current.reason.code;card.append(reason);}}
+   if(value.previousStop){const previous=value.previousStop;card.append(node('p',(I.language==='cs'?'Předchozí úloha':'Earlier task')+' ('+new Date(previous.startedAt).toLocaleString(I.locale)+'): '+previous.reason.message));}
+   let busy=false;
+   form.onsubmit=event=>{event.preventDefault();if(busy||!valid()||!form.reportValidity())return;busy=true;save.disabled=true;message.textContent='';const kind=select.value,limit=kind==='none'?null:{kind,[kind==='elapsed'?'minutes':'totalTokens']:Number(amount.value)};
+    void api({op:'task-budget',action:'configure',sessionId,limit}).then(result=>{if(valid()){draw(result);card.append(node('p',words.saved));}}).catch(error=>{if(valid())message.textContent=error.message;}).finally(()=>{busy=false;if(valid())save.disabled=false;});
+   };
+  }
+  void api({op:'task-budget',action:'status',sessionId}).then(draw).catch(()=>{if(valid())card.replaceChildren(node('h3',words.title),node('p',words.unavailable));});
+ }
   function renderCriteria(raw,unconfirmed){
    const section=node('section');section.dataset.completionCriteria='true';section.append(node('h4',at('criteria')),node('p',at('criteriaHistory')));
    const valid=Array.isArray(raw)&&raw.length<=8&&raw.every(row=>row&&typeof row.id==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(row.id)&&typeof row.text==='string'&&row.text.length>0&&row.text.length<=240&&Array.isArray(row.checks)&&row.checks.length>0&&row.checks.length<=32&&row.checks.every(check=>check&&typeof check.id==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(check.id)));
@@ -1574,6 +1596,7 @@ function mountResourceInventory(anchor,adapter){
   // User checkpoint operations survive their own refresh and a background
   // status repaint. Only reconcile reads must also match the current render.
   const freshRead=()=>valid()&&epoch===renderReview.epoch;
+  renderTaskBudget(content,sessionId,freshRead);
   function loadCriteria(host, unconfirmed) {
    if(state.criteriaVersion!==1||!p?.root)return;
    const placeholder=node('p',t('loading'));
@@ -1816,6 +1839,54 @@ function installGenerationProfilePane(ctx){
  ctx.effect(()=>ctx.sidebarRightTabs.register(definition));
  function Pane(props){const info=props.useTabInfo();return h(GenerationProfiles,{sessionId:props.sessionId,visible:info.tab.visible,key:props.sessionId});}
  ctx.effect(()=>ctx.slots.inject('sidebar.right.pane.tab',()=>ctx.slots.register({name:'sidebar.right.pane.tab',key:definition.id,inject:sessionId=>({sessionId})},Pane)));
+}
+
+// Included inside the same Native factory as source.js; uses the session
+// supplied by the composer's public slot, never a DOM-inferred identity.
+const taskBudgetLabels = {
+ en: {title:'Task budget',none:'No new limit',elapsed:'Elapsed minutes',tokens:'Reported tokens',save:'Use for next request',saved:'Saved for one new request.',help:'Optional, for your next request only. Internal continuation does not reset it. The next new request has no new limit.',meter:'Tokens are not a price. Usage is checked after each model response and may exceed the limit by that response. Missing exact totals stop the task.',time:'Time starts at the recorded acceptance receipt and includes later waits. Without a receipt timestamp, it starts at the first runtime step. A finished task and its delivered preview do not keep the timer running.',scope:'Late completion notices stay suppressed for managed project commands. Other background services retain their own notification behavior.',failed:'Task budget could not be loaded.',busy:'Set the limit before sending the request.',used:'Reported tokens',TASK_TIME_LIMIT:'Task time limit reached. Files and recorded checks are retained.',TASK_TOKEN_LIMIT:'Reported token limit reached. Files and recorded checks are retained.',TASK_BUDGET_USAGE_UNAVAILABLE:'Exact token usage was not reported. The task stopped; files and recorded checks are retained.',TASK_BUDGET_USAGE_INTERRUPTED:'Token accounting was interrupted. The task stopped; files and recorded checks are retained.'},
+ cs: {title:'Rozpočet úlohy',none:'Bez nového limitu',elapsed:'Uplynulé minuty',tokens:'Vykázané tokeny',save:'Použít pro příští zadání',saved:'Uloženo pro jedno nové zadání.',help:'Volitelný limit jen pro příští zadání. Interní pokračování jej neobnovuje. Další nové zadání má opět výchozí stav bez limitu.',meter:'Tokeny nejsou cena. Spotřeba se kontroluje po odpovědi modelu; poslední odpověď může limit překročit. Když přesný součet chybí, úloha se zastaví.',time:'Čas začíná zaznamenaným přijetím zadání a zahrnuje následné čekání. Chybí-li čas přijetí, začíná prvním krokem běhu. Dokončená úloha ani předaný náhled časovač neudržují.',scope:'Pozdní dokončení spravovaných příkazů projektu už úlohu neprobudí. Jiné služby na pozadí zachovávají vlastní chování oznámení.',failed:'Rozpočet se nepodařilo načíst.',busy:'Limit nastavte před odesláním zadání.',used:'Vykázané tokeny',TASK_TIME_LIMIT:'Dosažen časový limit úlohy. Soubory i zaznamenané kontroly zůstaly zachovány.',TASK_TOKEN_LIMIT:'Dosažen limit vykázaných tokenů. Soubory i zaznamenané kontroly zůstaly zachovány.',TASK_BUDGET_USAGE_UNAVAILABLE:'Model neposkytl přesný součet tokenů. Úloha se zastavila; soubory a kontroly zůstaly zachovány.',TASK_BUDGET_USAGE_INTERRUPTED:'Účtování tokenů bylo přerušeno. Úloha se zastavila; soubory a kontroly zůstaly zachovány.'}
+};
+function TaskBudgetControl({sessionId,useSession,usePanelInfo}) {
+ const language=useLanguage(),copy=taskBudgetLabels[language]||taskBudgetLabels.en;
+ const running=useSession(s=>s.running),subagent=useSession(s=>s.subagent),conversation=usePanelInfo(p=>p.activePanelId===null);
+ const [open,setOpen]=React.useState(false),[value,setValue]=React.useState(null),[kind,setKind]=React.useState('none'),[amount,setAmount]=React.useState('10'),[busy,setBusy]=React.useState(false),[error,setError]=React.useState(''),[saved,setSaved]=React.useState(false);
+ const generation=React.useRef(0),request=React.useRef(null),id=React.useId();
+ React.useEffect(()=>{setOpen(false);setValue(null);setKind('none');setError('');setSaved(false);return()=>{++generation.current;request.current?.abort();};},[sessionId]);
+ React.useEffect(()=>{
+  if(!open||!sessionId)return;
+  const ticket=++generation.current,controller=new AbortController();request.current=controller;setBusy(true);setError('');
+  void nativeJSON('/api/workbench',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'task-budget',action:'status',sessionId}),signal:controller.signal},5000).then(result=>{
+   if(ticket!==generation.current||controller.signal.aborted)return;
+   if(result.version!==1||result.sessionId!==sessionId)throw Error('Invalid task budget');
+   setValue(result);setKind(result.nextTaskLimit?.kind||'none');setAmount(String(result.nextTaskLimit?.minutes??result.nextTaskLimit?.totalTokens??10));
+  }).catch(()=>{if(!controller.signal.aborted&&ticket===generation.current)setError(copy.failed);}).finally(()=>{if(ticket===generation.current)setBusy(false);});
+  return()=>{controller.abort();++generation.current;};
+ },[sessionId,open,running]);
+ if(!sessionId||subagent||!conversation)return null;
+ async function save(event){
+  event.preventDefault();if(busy||running||!value)return;
+  const ticket=++generation.current,controller=new AbortController();request.current?.abort();request.current=controller;setBusy(true);setError('');setSaved(false);
+  const limit=kind==='none'?null:{kind,[kind==='elapsed'?'minutes':'totalTokens']:Number(amount)};
+  try{const result=await nativeJSON('/api/workbench',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'task-budget',action:'configure',sessionId,limit}),signal:controller.signal},5000);if(ticket!==generation.current||controller.signal.aborted)return;if(result.version!==1||result.sessionId!==sessionId)throw Error('Invalid task budget');setValue(result);setSaved(true);}
+  catch(e){if(!controller.signal.aborted&&ticket===generation.current)setError(e.code==='TASK_ALREADY_RUNNING'?copy.busy:copy.failed);}
+  finally{if(ticket===generation.current)setBusy(false);}
+ }
+ const reason=value?.current?.reason,previous=value?.previousStop;
+ return h('details',{'data-task-budget-session':sessionId,open,onToggle:e=>setOpen(e.currentTarget.open),style:{maxWidth:'100%',fontSize:'12px'}},
+  h('summary',null,copy.title+(value?.nextTaskLimit?' · '+(value.nextTaskLimit.minutes??value.nextTaskLimit.totalTokens):'')),
+  open&&h('form',{onSubmit:save,style:{display:'flex',flexWrap:'wrap',gap:'8px',padding:'8px 0'}},
+   h('label',{htmlFor:id+'-kind'},copy.title),h('select',{id:id+'-kind',value:kind,disabled:busy||running||!value,onChange:e=>{setKind(e.target.value);setAmount(e.target.value==='tokens'?'50000':'10');setSaved(false);}},...['none','elapsed','tokens'].map(k=>h('option',{key:k,value:k},copy[k]))),
+   kind!=='none'&&h(React.Fragment,null,h('label',{htmlFor:id+'-amount'},copy[kind]),h('input',{id:id+'-amount',type:'number',required:true,min:1,max:kind==='tokens'?10000000:1440,step:1,value:amount,disabled:busy||running,onChange:e=>{setAmount(e.target.value);setSaved(false);},style:{width:'8em'}})),
+   h('button',{type:'submit',disabled:busy||running||!value},copy.save),h('p',{style:{flexBasis:'100%',margin:0}},copy.help),h('p',{style:{flexBasis:'100%',margin:0}},kind==='tokens'?copy.meter:copy.time),
+   value?.current?.limit.kind==='tokens'&&h('p',null,copy.used+': '+(value.current.usageAvailable===false?'—':value.current.usedTokens)+' / '+value.current.limit.totalTokens),
+   h('p',{style:{flexBasis:'100%',margin:0}},copy.scope),
+   previous&&h('p',{'data-task-budget-previous-turn':previous.turn},(language==='cs'?'Předchozí úloha':'Earlier task')+' ('+new Date(previous.startedAt).toLocaleString()+'): '+(copy[previous.reason.code]||previous.reason.message)),
+   reason&&h('p',{'data-task-budget-reason':reason.code,role:'status'},copy[reason.code]||reason.message),error&&h('p',{role:'alert'},error),saved&&h('p',{role:'status'},copy.saved)));
+}
+function registerTaskBudget(ctx){
+ const slot='conversation.input.dock';
+ ctx.slots.inject(slot,()=>ctx.slots.register({name:slot,id:'harness.task-budget',order:45},TaskBudgetControl));
 }
 
 // Native also composes abort signals. Older Safari must have these helpers
@@ -2122,6 +2193,7 @@ function apply(ctx,config={}){
  installGenerationProfilePane(ctx);
  registerRunActivity(ctx);
  registerPreviewResults(ctx);
+ registerTaskBudget(ctx);
  ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
   name:'conversation.chat.turnTail', id:'harness.turn-usage', order:100,
  }, CompletedTurnUsage)), 'native-workbench: completed turn usage');

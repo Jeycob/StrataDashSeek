@@ -22,6 +22,7 @@ async function fixture(t,asset,language,width,section='review'){
   if(req.url==='/api/workbench'){
    if(!body)return json(state);
    if(body.op==='checkpoint-recovery')return json({pending:false});
+   if(body.op==='task-budget'&&body.action==='status')return json({version:1,sessionId:body.sessionId,nextTaskLimit:null,current:null});
    requests.push(body);
    if(body.op==='automatic-reconcile'){
     if(failure){res.statusCode=409;return json(failure);}

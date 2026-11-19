@@ -308,6 +308,28 @@
   if(result.restored!==true||result.recovery?.pending)throw Error(rt('uncertain'));
   await refresh();if(valid())el('wb-message').textContent=rt('restored');
  }
+ function renderTaskBudget(content,sessionId,valid){
+  if(!sessionId)return;
+  const words=I.language==='cs'?{title:'Rozpočet příští úlohy',none:'Bez nového limitu',elapsed:'Časový limit',tokens:'Vykázané tokeny',minutes:'Minuty',total:'Celkem tokenů',save:'Použít pro příští zadání',saved:'Uloženo pro jedno nové lidské zadání.',help:'Výchozí je bez limitu. Interní pokračování limit neobnovuje. Další nové zadání bude opět bez limitu.',meter:'Tokeny nejsou cena. Účtují se po odpovědi modelu; poslední odpověď může limit překročit. Když přesný součet chybí, úloha se zastaví s důvodem.',used:'Vykázaná spotřeba',state:'Stav rozpočtu',loading:'Načítám rozpočet…',unavailable:'Rozpočet se nepodařilo načíst.',active:'Aktivní',idle:'Tah dokončen',stopped:'Zastaveno limitem'}:{title:'Next task budget',none:'No new limit',elapsed:'Elapsed time limit',tokens:'Reported tokens',minutes:'Minutes',total:'Total tokens',save:'Use for next request',saved:'Saved for one new human request.',help:'The default is no limit. Internal continuation does not renew the allowance. A later new request starts without a limit.',meter:'Tokens are not a price. Usage is reported after a model response; the last response can exceed the limit. Missing exact totals stop the task with a reason.',used:'Reported usage',state:'Budget status',loading:'Loading task budget…',unavailable:'Task budget could not be loaded.',active:'Active',idle:'Turn completed',stopped:'Stopped by limit'};
+  const card=node('section');card.className='wb-card';card.dataset.taskBudget='true';card.append(node('h3',words.title),node('p',words.loading));content.append(card);
+  function draw(value){
+   if(!valid())return;
+   card.replaceChildren(node('h3',words.title));
+   const form=node('form'),label=node('label',words.title),select=node('select'),amountLabel=node('label'),amount=node('input'),save=button(words.save),message=node('p');
+   select.id=prefix+'task-limit-kind';select.name='task-limit-kind';label.htmlFor=select.id;
+   for(const kind of ['none','elapsed','tokens']){const option=node('option',words[kind]);option.value=kind;select.append(option);}
+   select.value=value.nextTaskLimit?.kind||'none';amount.id=prefix+'task-limit-amount';amount.type='number';amount.min='1';amount.step='1';amount.required=true;amountLabel.htmlFor=amount.id;save.type='submit';
+   const choose=()=>{const tokens=select.value==='tokens';amountLabel.textContent=tokens?words.total:words.minutes;amount.max=tokens?'10000000':'1440';amount.hidden=amountLabel.hidden=select.value==='none';amount.disabled=select.value==='none';amount.value=String(value.nextTaskLimit?.kind===select.value?(tokens?value.nextTaskLimit.totalTokens:value.nextTaskLimit.minutes):(tokens?50000:10));};
+   select.onchange=choose;choose();form.append(label,select,amountLabel,amount,save,message);card.append(form,node('p',words.help),node('p',words.meter));
+   if(value.current){const current=value.current,stateLine=node('p',words.state+': '+(words[current.state]||current.state));card.append(stateLine);if(current.limit.kind==='tokens')card.append(node('p',words.used+': '+(current.usageAvailable===false?'—':current.usedTokens)+' / '+current.limit.totalTokens));if(current.deadlineAt)card.append(node('p',new Date(current.deadlineAt).toLocaleString(I.locale)));if(current.reason){const reason=node('p',current.reason.message+' ('+current.reason.code+')');reason.dataset.taskBudgetReason=current.reason.code;card.append(reason);}}
+   if(value.previousStop){const previous=value.previousStop;card.append(node('p',(I.language==='cs'?'Předchozí úloha':'Earlier task')+' ('+new Date(previous.startedAt).toLocaleString(I.locale)+'): '+previous.reason.message));}
+   let busy=false;
+   form.onsubmit=event=>{event.preventDefault();if(busy||!valid()||!form.reportValidity())return;busy=true;save.disabled=true;message.textContent='';const kind=select.value,limit=kind==='none'?null:{kind,[kind==='elapsed'?'minutes':'totalTokens']:Number(amount.value)};
+    void api({op:'task-budget',action:'configure',sessionId,limit}).then(result=>{if(valid()){draw(result);card.append(node('p',words.saved));}}).catch(error=>{if(valid())message.textContent=error.message;}).finally(()=>{busy=false;if(valid())save.disabled=false;});
+   };
+  }
+  void api({op:'task-budget',action:'status',sessionId}).then(draw).catch(()=>{if(valid())card.replaceChildren(node('h3',words.title),node('p',words.unavailable));});
+ }
   function renderCriteria(raw,unconfirmed){
    const section=node('section');section.dataset.completionCriteria='true';section.append(node('h4',at('criteria')),node('p',at('criteriaHistory')));
    const valid=Array.isArray(raw)&&raw.length<=8&&raw.every(row=>row&&typeof row.id==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(row.id)&&typeof row.text==='string'&&row.text.length>0&&row.text.length<=240&&Array.isArray(row.checks)&&row.checks.length>0&&row.checks.length<=32&&row.checks.every(check=>check&&typeof check.id==='string'&&/^[a-z][a-z0-9_-]{0,63}$/.test(check.id)));
@@ -329,6 +351,7 @@
   // User checkpoint operations survive their own refresh and a background
   // status repaint. Only reconcile reads must also match the current render.
   const freshRead=()=>valid()&&epoch===renderReview.epoch;
+  renderTaskBudget(content,sessionId,freshRead);
   function loadCriteria(host, unconfirmed) {
    if(state.criteriaVersion!==1||!p?.root)return;
    const placeholder=node('p',t('loading'));

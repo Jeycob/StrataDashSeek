@@ -302,6 +302,7 @@ function apply(ctx,config={}){
  installGenerationProfilePane(ctx);
  registerRunActivity(ctx);
  registerPreviewResults(ctx);
+ registerTaskBudget(ctx);
  ctx.effect(() => ctx.slots.inject('conversation.chat.turnTail', () => ctx.slots.register({
   name:'conversation.chat.turnTail', id:'harness.turn-usage', order:100,
  }, CompletedTurnUsage)), 'native-workbench: completed turn usage');

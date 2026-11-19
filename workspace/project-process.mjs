@@ -40,6 +40,12 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       if (turnBoundary) entry.previewTurnCompleted = entry.previewPublished && event.type === 'turn/end' && event.data.reason?.kind === 'completed';
     }
   }, { global: true });
+  // A user-selected task budget owns these exact registered jobs even when
+  // the model is idle awaiting a background result. Reuse Stop's collector.
+  ctx.on?.('workspace/task-budget-stop', (id, owner) => {
+    const entry = active.get(id);
+    if (entry?.owner === owner) { entry.stoppedByUser = true; entry.collectStoppedTurn(); }
+  }, { global: true });
   async function dispose() {
     if (disposed && active.size === 0) return;
     disposed = true;
@@ -205,6 +211,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     const entry=captures.get(capture);
     if(!entry)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','Preview admission requires this runner\'s current private custody.');
     capture.assertCurrent();entry.previewPublished=true;entry.releaseAdmission();
+    ctx.emit?.('workspace/project-preview-delivered', entry.id, entry.owner);
   }
   function producerFor(id,owner){const entry=active.get(id);if(!entry||entry.owner!==owner||!entry.launch)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No exact owned producer.');return Object.freeze({done:entry.done,expiresAt:entry.expiresAt,call:entry.call});}
   async function stopOwned(id,owner){const entry=active.get(id);if(!entry||entry.owner!==owner)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No exact owned producer.');if(Date.now()>=entry.expiresAt)entry.expire();else try{entry.jobs.kill(id,owner,'owned preview cleanup');}catch{entry.cancel('owned preview cleanup');}await entry.done;}

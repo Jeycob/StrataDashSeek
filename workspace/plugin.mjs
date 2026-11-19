@@ -21,6 +21,7 @@ import { installModelSelection } from './model-selection.mjs';
 import { installProjectMemory } from './project-memory.mjs';
 import { installGenerationProfiles, generationControls, freezeGenerationSettings } from './generation-profiles.mjs';
 import { createProjectStarters, installProjectStarterDiscovery } from './project-starters.mjs';
+import { createTaskBudgets } from './task-budget.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -41,6 +42,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   installProjectMemory(ctx, manager);
   const projectStarters = manager.projectStarters = createProjectStarters(manager, config.applicationStarters !== false);
   installProjectStarterDiscovery(ctx, projectStarters);
+  const taskBudgets = createTaskBudgets(ctx, manager);
   const models = installModelSelection(ctx, manager, { lifecycle: false });
   installGenerationProfiles(ctx, manager);
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
@@ -75,6 +77,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   for (const agent of ctx.agents.list()) { if(composition.isolated)composition.install(agent);await models.restore(agent);execution.assertUnchanged();if(!composition.isolated)composition.install(agent); }
   ctx.on('agent/created', async ({ agent, source, signal }) => { if(composition.isolated)composition.install(agent);await models.restoreAfterDefaults(agent, source, (a, s) => manager.applyDefaults(a, s));execution.assertUnchanged();if (source === 'startup' && !agent.session.header.isSeeded) await manager.ensureProject(agent, signal);execution.assertUnchanged();if(!composition.isolated)composition.install(agent); }, { global: true });
   ctx.on('agent/pre-step', async (input, next) => {
+    await taskBudgets.beforeStep(input);
     await manager.preStep(input); manager.frozenSettings.set(input.agent.id, freezeGenerationSettings(manager,input.agent));
     const decision = await next(), id = manager.ownerAgent(input.agent).id, message = manager.pendingNotices.get(id), diagnostics = manager.pendingDiagnostics.get(id);
     if (decision.kind === 'enter' && (message || diagnostics?.size)) {
@@ -127,6 +130,12 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
       if (id !== undefined && (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/u.test(id))) throw new WorkbenchError('INVALID_SESSION', 'Invalid conversation.', 400);
       if (data.op === 'settings') return reply(await manager.updateSettings(data.workspaceId, data.settings));
       if (data.op === 'run-activity') return reply(await readRunActivity(manager, id));
+      if (data.op === 'task-budget') {
+        const fields = Object.keys(data).sort().join(',');
+        if (data.action === 'status' && fields === 'action,op,sessionId') return reply(await taskBudgets.inspect(id));
+        if (data.action === 'configure' && fields === 'action,limit,op,sessionId') return reply(await taskBudgets.configure(id, data.limit));
+        throw new WorkbenchError('INVALID_TASK_LIMIT_REQUEST', 'Only the selected session and its task limit are accepted.', 400);
+      }
       if (data.op === 'file') return reply(await manager.files(id, data.operation, data.args ?? {}, request.signal));
       if (data.op === 'verification-criteria') return reply({version:1,criteria:await manager.verificationCriteria(id,request.signal)});
       if (data.op === 'changes') return reply(await manager.projectChanges(id, data.operation ?? 'list', data.args ?? {}, request.signal));
