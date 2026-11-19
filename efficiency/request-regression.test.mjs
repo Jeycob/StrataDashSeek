@@ -14,11 +14,15 @@ const correction='Keep the original goal.\n'+'Additional correction detail. '.re
 
 test('long objective and exact latest correction remain distinct, including repeated steps and an explicit return to the original request',()=>{
  const card=new WorkCard(),first=user('one',original),last=user('two',correction);
+ const rendered=()=>JSON.parse(card.render().split('\n').slice(1).join('\n'));
  card.observeMessages([first]);assert.equal(card.snapshot().task,original);assert.equal(card.snapshot().latestRequest,original);
+ const snapshot=card.snapshot(),initial=rendered();assert.equal(initial.task,original);assert.equal(Object.hasOwn(initial,'latestRequest'),false);assert.equal(initial.latestRequestId,'one');assert.equal(initial.priority,snapshot.priority);assert.deepEqual(card.snapshot(),snapshot);
  card.observeMessages([first,last]);card.observeMessages([first,last]);assert.equal(card.snapshot().task,original);assert.equal(card.snapshot().latestRequest,correction);assert.equal(card.snapshot().latestRequestId,'two');
+ assert.deepEqual(rendered(),card.snapshot(),'a different latest instruction remains complete in the rendered context');
  card.observeMessages([first]);assert.equal(card.snapshot().latestRequest,correction,'an older retained surface message must not replace the canonical latest request');
  card.observeMessages([{...user('internal','Wrong task'),source:{kind:'workspace-runtime'}},{...last,role:'assistant'}]);assert.equal(card.snapshot().latestRequest,correction);
  card.observeMessages([user('three',original)]);assert.equal(card.snapshot().latestRequest,original);assert.equal(card.snapshot().latestRequestId,'three');
+ const returned=rendered();assert.equal(returned.task,original);assert.equal(Object.hasOwn(returned,'latestRequest'),false);assert.equal(returned.latestRequestId,'three');assert.equal(returned.priority,snapshot.priority);
 });
 
 test('resume recovers original and latest request from canonical history after compaction; child assignments cannot replace them',async t=>{
