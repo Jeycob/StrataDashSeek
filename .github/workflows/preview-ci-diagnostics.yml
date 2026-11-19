@@ -19,12 +19,15 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
+          fetch-depth: 3
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: '24.22.1'
       - name: Install the pinned Linux test dependencies
         run: |
-          test "$(git rev-parse HEAD^)" = 580bb04fcb735b51f37e7e4ce4a658f43bce4ec9
+          fixture_base=580bb04fcb735b51f37e7e4ce4a658f43bce4ec9
+          git merge-base --is-ancestor "$fixture_base" HEAD
+          test "$(git diff --name-only "$fixture_base" HEAD)" = .github/workflows/preview-ci-diagnostics.yml
           export PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/playwright-browsers"
           echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" >> "$GITHUB_ENV"
           npm ci --prefix runtime --no-audit --no-fund
