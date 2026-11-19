@@ -1,5 +1,6 @@
 // Actual pinned SDK tools/jobs/pipeline, mocked processes/connectors only.
-// No real SDK subprocess, Linux proc access, TLS, Native server or model.
+// Clock fixtures additionally use loopback mTLS and a separate synthetic worker.
+// No real SDK subprocess, Linux proc access, Native server or model.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -7,6 +8,10 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
+import tls from 'node:tls';
+import {randomUUID} from 'node:crypto';
+import {spawn,execFileSync} from 'node:child_process';
+import {once} from 'node:events';
 import {pathToFileURL} from 'node:url';
 import {createHostPreview} from './host-preview.mjs';
 import {createPreviewRelay} from './host-preview-relay.mjs';
@@ -32,6 +37,105 @@ const tick=()=>new Promise(resolve=>setTimeout(resolve,5));
 async function until(check){for(let n=0;n<200;n++){if(await check())return;await tick();}assert.fail('bounded fixture wait');}
 const config={enabled:true,ownerOrigin:'https://same.test',endpoints:[{origin:'https://same.test:8443',listenerPort:18190},{origin:'https://same.test:8444',listenerPort:18191}]};
 const args={command:'node fixture-server.mjs',description:'Start own synthetic app',run_in_background:true,timeoutMs:60000};
+
+async function previewClockCertificates() {
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'preview-clock-mtls-'));
+ const name='clock.preview.homeai.invalid';
+ const openssl=(...argv)=>execFileSync('openssl',argv,{cwd:directory,stdio:'ignore',timeout:5000});
+ openssl('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-days','1',
+  '-subj','/CN=Synthetic preview clock CA','-keyout','ca.key','-out','ca.crt');
+ for(const role of ['server','client']) {
+  openssl('req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes',
+   '-subj','/CN=Synthetic preview clock','-keyout',role+'.key','-out',role+'.csr');
+  await fs.writeFile(path.join(directory,role+'.ext'),role==='server'?
+   'subjectAltName=DNS:'+name+'\nextendedKeyUsage=serverAuth\n':'extendedKeyUsage=clientAuth\n');
+  openssl('x509','-req','-in',role+'.csr','-CA','ca.crt','-CAkey','ca.key','-CAcreateserial',
+   '-days','1','-extfile',role+'.ext','-out',role+'.crt');
+ }
+ const credentials={ca:await fs.readFile(path.join(directory,'ca.crt')),
+  cert:await fs.readFile(path.join(directory,'client.crt')),key:await fs.readFile(path.join(directory,'client.key'))};
+ return {directory,name,credentials};
+}
+
+async function previewClockWorker(certs,{offset,peer=false}) {
+ const instance=randomUUID(), file=path.join(certs.directory,'worker-'+randomUUID()+'.mjs');
+ await fs.writeFile(file,`
+ import tls from 'node:tls';
+ import {readFileSync} from 'node:fs';
+ import {startPreviewGuestWorker} from ${JSON.stringify(new URL('./preview-guest-renderer.mjs',import.meta.url).href)};
+ const realNow=Date.now;Date.now=()=>realNow()+${JSON.stringify(offset)};
+ const keys={ca:readFileSync('ca.crt'),cert:readFileSync('server.crt'),key:readFileSync('server.key')};
+ let admitted=0;
+ const server=${peer?`tls.createServer({...keys,requestCert:true,rejectUnauthorized:true,minVersion:'TLSv1.3'},socket=>{
+  socket.on('error',()=>{});let pending='';
+  socket.on('data',chunk=>{pending+=chunk;if(!pending.includes('\\n'))return;
+   const frame=JSON.parse(pending.slice(0,pending.indexOf('\\n')));process.send({type:'frame',frame});
+   const png=Buffer.alloc(24);Buffer.from('89504e470d0a1a0a','hex').copy(png);png.writeUInt32BE(390,16);png.writeUInt32BE(720,20);
+   socket.end(JSON.stringify({type:'image',nonce:frame.nonce,image:{width:390,height:720,png:png.toString('base64'),regions:[],route:frame.route,scrollY:0,maxScrollY:0,scrollStep:600}})+'\\n');
+  });
+ }).listen(0,'127.0.0.1')`:`startPreviewGuestWorker({host:'127.0.0.1',port:0,instance:${JSON.stringify(instance)},credentials:keys,
+  browser:{loadBrowser:async()=>{admitted++;await new Promise((_,reject)=>setTimeout(()=>reject(Error('Synthetic browser is deliberately unavailable')),2000));}}})`};
+ server.on('listening',()=>process.send({type:'ready',port:server.address().port}));
+ process.on('message',message=>{if(message.type==='stats')process.send({type:'stats',id:message.id,admitted});});
+ process.on('disconnect',()=>server.close());
+ `);
+ const child=spawn(process.execPath,[file],{cwd:certs.directory,stdio:['ignore','ignore','inherit','ipc']});
+ const exited=new Promise(resolve=>child.once('close',resolve));
+ const messages=[];child.on('message',message=>messages.push(message));
+ const next=async(type,id)=>{await until(()=>messages.some(m=>m.type===type&&(id===undefined||m.id===id)));return messages.find(m=>m.type===type&&(id===undefined||m.id===id));};
+ async function close(){if(child.exitCode===null&&child.signalCode===null)child.kill();await exited;}
+ try {
+  const [ready]=await Promise.race([once(child,'message',{signal:AbortSignal.timeout(4000)}),exited.then(()=>{throw Error('Synthetic clock worker exited');})]);
+  assert.equal(ready.type,'ready');
+  return {instance,port:ready.port,next,close,async admitted(){const id=randomUUID();child.send({type:'stats',id});return(await next('stats',id)).admitted;}};
+ }catch(error){await close();throw error;}
+}
+
+test('guest preview mTLS budget uses worker-local timers across positive and negative clock skew', {timeout:15000,skip:process.platform!=='linux'}, async()=>{
+ const certs=await previewClockCertificates();
+ try {
+  for(const offset of [-60000,60000]) {
+   const worker=await previewClockWorker(certs,{offset});
+   try {
+    async function send(budgetMs) {
+     const socket=tls.connect({...certs.credentials,host:'127.0.0.1',port:worker.port,servername:certs.name,minVersion:'TLSv1.3',rejectUnauthorized:true});
+     socket.on('error',()=>{});
+     const closed=new Promise(resolve=>socket.once('close',resolve));
+     try {
+      await once(socket,'secureConnect',{signal:AbortSignal.timeout(3000)});
+      const began=performance.now();
+      socket.write(JSON.stringify({type:'render',version:1,instance:worker.instance,nonce:randomUUID(),layout:'mobile',route:'/',scrollY:0,
+       binding:{sessionId:'session-clock',projectId:'project-clock',previewId:'preview-clock',generation:'generation-clock',deadline:Date.now()+5000},budgetMs})+'\n');
+      await Promise.race([closed,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('Guest budget did not close its transport')),2000);timer.unref();})]);
+      return performance.now()-began;
+     }finally{socket.destroy();await closed;}
+    }
+    for(const budget of [0,10001,1.5]) {await send(budget);assert.equal(await worker.admitted(),0);}
+    const elapsed=await send(120);
+    assert.equal(await worker.admitted(),1,'a valid frame reaches the production renderer despite guest wall-clock skew');
+    assert(elapsed>=60&&elapsed<1500,'the guest enforces the relative120ms timer');
+   }finally{await worker.close();}
+  }
+ }finally{await fs.rm(certs.directory,{recursive:true,force:true});}
+});
+
+test('guest preview mTLS budget is recomputed after credentials and TLS while absolute binding stays intact', {timeout:10000,skip:process.platform!=='linux'}, async t=>{
+ const certs=await previewClockCertificates();let worker;
+ try {
+  worker=await previewClockWorker(certs,{offset:60000,peer:true});
+  const {createGuestPreviewSnapshot}=await import('./preview-guest-renderer.mjs');
+  let nativeNow=Date.now(),checks=0;t.mock.method(Date,'now',()=>nativeNow);
+  const binding={sessionId:'session-clock',projectId:'project-clock',previewId:'preview-clock',generation:'generation-clock',deadline:nativeNow+5000};
+  const snapshot=createGuestPreviewSnapshot({port:worker.port,serverName:certs.name,instance:worker.instance,
+   credentials:async()=>{nativeNow+=1234;return certs.credentials;}});
+  const image=await snapshot({binding,origin:'https://owned-preview.invalid',socketPath:path.join(certs.directory,'unused.sock'),layout:'mobile',route:'/',scrollY:0,
+   signal:new AbortController().signal,assertCurrent:()=>{checks++;}});
+  const {frame}=await worker.next('frame');
+  assert.equal(frame.budgetMs,3766);assert.deepEqual(frame.binding,binding);
+  assert.equal(image.width,390);assert(checks>=3);
+ }finally{if(worker)await worker.close();await fs.rm(certs.directory,{recursive:true,force:true});}
+});
+
 async function fixture(t,{enabled=true,heavy=false,operationMs=1000,transport=false,bindWait,noAckAt=-1,completionDelivery,snapshot}={}){
  const S=await sdk(),directory=await fs.mkdtemp(path.join(os.tmpdir(),'host-preview-sdk-')),projects=path.join(directory,'projects'),state=path.join(directory,'state');
  await fs.mkdir(projects);await fs.mkdir(state);

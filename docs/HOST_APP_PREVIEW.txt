@@ -285,6 +285,10 @@ Give each process its own mode 0700 credential directory and mode 0600 files.
 Update the trusted instance binding when the VM boots again. The worker's
 mTLS exchange carries the requested viewport, route, scroll and invocation
 binding. Native serves the bounded asset reads from its own preview socket.
+The binding retains Native's absolute owner deadline. After mTLS completes,
+Native sends a fresh positive remaining budgetMs, capped at10000. The worker
+uses that relative budget with its own timeout; it does not compare the two
+machines' wall clocks. The client and worker must use this same frame schema.
 
 The local Linux fixture uses a separate worker process, mTLS and real sandboxed
 Chromium. For Vast acceptance, exercise the same mobile selection with the
