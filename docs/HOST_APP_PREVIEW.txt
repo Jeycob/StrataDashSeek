@@ -256,3 +256,37 @@ the wrapper can exit, verifies that the job/permit remain held, then uses only
 exact owned stop and observes its TERM trap and eventual range exit. B has not
 executed this fixture. Live preview
 acceptance and the frozen paired benchmark remain separate, unclaimed work.
+
+Optional guest snapshot renderer
+
+In host-compat, the trusted Apps configuration may select a guest renderer with
+hostPreviewRenderer containing port, serverName and instance. The port belongs
+to a reserved host loopback QEMU forward to the same port on guest 10.0.2.15.
+The name is the guest certificate SAN under preview.homeai.invalid. The
+instance is the guest kernel boot UUID, observed independently by the operator.
+Keep the original preview origin and producer custody in Native.
+
+Install the approved source files workspace/preview-guest-worker.mjs,
+workspace/preview-guest-renderer.mjs, workspace/preview-snapshot.mjs,
+workspace/source-private.cjs and development/versions.json with their relative
+paths under one read-only guest root. Run the worker's Node entry point with
+the port as its sole argument under a dedicated non-root guest identity. Use
+the pinned Playwright toolchain under /opt/playwright and a guest kernel that
+actually runs Chromium with chromiumSandbox enabled. Restrict the guest service
+to the private transport and provide its own scratch space. Keep project
+mounts, project environment, Docker control and host networking privileges
+outside the renderer's scope. Provision the VM and worker before selection
+so requests stay within the existing snapshot deadline.
+
+Use a dedicated CA for this transport. Native reads ca.crt, client.crt and
+client.key from /data/harness/secrets/preview-renderer. The worker reads ca.crt,
+server.crt and server.key from /run/homeai-preview-renderer inside the guest.
+Give each process its own mode 0700 credential directory and mode 0600 files.
+Update the trusted instance binding when the VM boots again. The worker's
+mTLS exchange carries the requested viewport, route, scroll and invocation
+binding. Native serves the bounded asset reads from its own preview socket.
+
+The local Linux fixture uses a separate worker process, mTLS and real sandboxed
+Chromium. For Vast acceptance, exercise the same mobile selection with the
+actual guest UID, pinned browser, private forward and bound boot UUID. Repeat
+with a stale generation and after closing the preview in another tab.

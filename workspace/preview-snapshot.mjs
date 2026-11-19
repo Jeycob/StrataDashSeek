@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import {constants} from 'node:fs';
 import path from 'node:path';
 import {createRequire} from 'node:module';
+import privateSource from './source-private.cjs';
 
 const require = createRequire(import.meta.url);
 const renderOrigin = 'https://preview-snapshot.invalid';
@@ -38,6 +39,44 @@ function readOwnedAsset({socketPath, path, host, signal, charge}) {
   });
   req.on('error', reject);
  });
+}
+
+export function previewAssetPath(value) {
+ if (typeof value !== 'string' || !value.startsWith('/') || value.length > 2000 ||
+     /[\u0000-\u0020\u007f\\#]/u.test(value)) throw fail('PREVIEW_SNAPSHOT_ASSET_PATH');
+ const url = new URL(value,renderOrigin);
+ const relative = decodeURIComponent(url.pathname).slice(1);
+ if (url.origin !== renderOrigin || url.pathname+url.search !== value ||
+     /^(?:__preview|__editor|proxy|absproxy)(?:\/|$)/i.test(relative) ||
+     /%(?:2f|5c|00|0d|0a|25)/i.test(url.pathname) || privateSource.isPrivateSourcePath(relative) ||
+     relative.split('/').some(part=>part==='.git'||part==='.harness')) throw fail('PREVIEW_SNAPSHOT_ASSET_PATH');
+ return value;
+}
+
+export function ownedPreviewAssets({socketPath,origin,assertCurrent,signal}) {
+ const host = new URL(origin).host;
+ let count = 0, total = 0;
+ const charge = bytes => (total += bytes) <= 8*1024*1024;
+ return async value => {
+  const path = previewAssetPath(value);
+  assertCurrent();
+  signal.throwIfAborted();
+  if (++count > 48) throw fail('PREVIEW_SNAPSHOT_ASSET_LIMIT');
+  const asset = await readOwnedAsset({socketPath,path,host,signal,charge});
+  assertCurrent();
+  if (asset.status < 200 || asset.status >= 300 ||
+      (asset.headers['content-encoding'] && asset.headers['content-encoding'] !== 'identity')) {
+   throw fail('PREVIEW_SNAPSHOT_ASSET_UNAVAILABLE');
+  }
+  const contentType=String(asset.headers['content-type'] || 'application/octet-stream');
+  const csp=asset.headers['content-security-policy'];
+  if (contentType.length>8192 || (csp!==undefined&&(typeof csp!=='string'||csp.length>8192))) {
+   throw fail('PREVIEW_SNAPSHOT_ASSET_UNAVAILABLE');
+  }
+  return {status:asset.status,body:asset.body,headers:{
+   'content-type':contentType,...(csp?{'content-security-policy':csp}:{}),
+  }};
+ };
 }
 
 // Evaluated in a separate Chromium world. The project's JavaScript cannot
@@ -115,9 +154,9 @@ async function readViewport(context, page, scrollY) {
  } finally { await cdp.detach().catch(() => {}); }
 }
 
-async function productionBrowser() {
+export async function pinnedPreviewBrowser({guest=false}={}) {
  // Only the operator-provisioned toolchain is an executable dependency.
- const folder = '/data/harness/dev/browser/node_modules/playwright';
+ const folder = guest ? '/opt/playwright/node_modules/playwright' : '/data/harness/dev/browser/node_modules/playwright';
  const distribution = {x64:'linux64',arm64:'linux-arm64'}[process.arch];
  try {
   if (process.platform !== 'linux' || !distribution) throw Error('Unsupported browser platform');
@@ -128,7 +167,7 @@ async function productionBrowser() {
   const {browsers} = require(path.join(path.dirname(toolkit),'browsers.json'));
   const revision = browsers.find(browser => browser.name === 'chromium-headless-shell')?.revision;
   if (!/^[0-9]{1,8}$/.test(revision ?? '')) throw Error('Browser revision unavailable');
-  const root = await fs.realpath('/data/harness/dev/browsers');
+  const root = await fs.realpath(guest ? '/opt/playwright/browsers' : '/data/harness/dev/browsers');
   const expected = path.join(root,'chromium_headless_shell-'+revision,'chrome-headless-shell-'+distribution,'chrome-headless-shell');
   const executablePath = await fs.realpath(expected);
   if (executablePath !== expected || !(await fs.stat(executablePath)).isFile()) throw Error('Browser executable changed');
@@ -141,9 +180,13 @@ async function productionBrowser() {
 
 let rendering = false;
 
-export async function snapshotOwnedPreview({
- socketPath, origin, layout, route, scrollY, signal, assertCurrent,
-}, {chromium, browserChannel} = {}) {
+export function snapshotOwnedPreview(options, browser) {
+ return renderPreviewSnapshot({...options,readAsset:ownedPreviewAssets(options)},browser);
+}
+
+export async function renderPreviewSnapshot({
+ layout, route, scrollY, signal, assertCurrent, readAsset,
+}, {chromium, browserChannel,loadBrowser=pinnedPreviewBrowser} = {}) {
  const position = previewSnapshotPosition(route,scrollY);
  if (!Object.hasOwn(viewports, layout)) throw fail('PREVIEW_SNAPSHOT_LAYOUT_INVALID');
  assertCurrent();
@@ -154,7 +197,7 @@ export async function snapshotOwnedPreview({
  const abort = () => { void browser?.close().catch(() => {}); };
  signal.addEventListener('abort', abort, {once:true});
  try {
-  const {engine,executablePath} = chromium ? {engine:chromium} : await productionBrowser();
+  const {engine,executablePath} = chromium ? {engine:chromium} : await loadBrowser();
   signal.throwIfAborted();
   browser = await engine.launch({
    chromiumSandbox:true, headless:true, timeout:6000,
@@ -171,32 +214,19 @@ export async function snapshotOwnedPreview({
    ...(layout === 'mobile' ? {isMobile:true, hasTouch:true} : {}),
   });
   await context.routeWebSocket('**/*', socket => socket.close());
-  let count = 0, total = 0;
-  const charge = bytes => {
-   if (total+bytes > 8 * 1024 * 1024) return false;
-   total += bytes;
-   return true;
-  };
-  const host = new URL(origin).host;
+  let requests=0;
   await context.route('**/*', async route => {
    try {
     const req = route.request(), url = new URL(req.url());
-    if (req.method() !== 'GET' || url.origin !== renderOrigin || url.href.length > 2048 ||
-        /^\/(?:__preview|__editor|proxy|absproxy)(?:\/|$)/i.test(url.pathname) ||
-        /%(?:2f|5c|00|0d|0a)/i.test(url.pathname) || ++count > 48) return await route.abort();
+    if (req.method() !== 'GET' || url.origin !== renderOrigin || url.href.length > 2048 || ++requests>48) return await route.abort();
     assertCurrent();
-    const asset = await readOwnedAsset({socketPath, path:url.pathname+url.search, host, signal, charge});
+    const asset = await readAsset(previewAssetPath(url.pathname+url.search));
     assertCurrent();
-    if (asset.status < 200 || asset.status >= 300 ||
-        (asset.headers['content-encoding'] && asset.headers['content-encoding'] !== 'identity')) {
-     return await route.abort();
-    }
     await route.fulfill({
      status:asset.status, body:asset.body,
      headers:{
-      'content-type':String(asset.headers['content-type'] || 'application/octet-stream'),
+      ...asset.headers,
       'cache-control':'no-store', 'x-content-type-options':'nosniff',
-      ...(asset.headers['content-security-policy'] ? {'content-security-policy':String(asset.headers['content-security-policy'])} : {}),
      },
     });
    } catch { await route.abort().catch(() => {}); }

@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const {randomUUID} = require('node:crypto');
-const {spawn} = require('node:child_process');
+const {spawn,execFileSync} = require('node:child_process');
 const {once} = require('node:events');
 const {pathToFileURL} = require('node:url');
 const {createSourceFixture} = require('./test-bundle.cjs');
@@ -35,7 +35,46 @@ function fixtureHtml(color, spacer=790) {
   '<button id="target">Primary action</button> <button id="untouched">Secondary action</button>'+
   '<div style="height:550px"></div>'+
   '<script>fetch("/fixture-write",{method:"POST"}).catch(()=>{});'+
+  'fetch("/%2eenv").catch(()=>{});fetch("/.ssh/id_ed25519").catch(()=>{});'+
+  'fetch("/%5f%5fpreview/bootstrap").catch(()=>{});fetch("/%252eenv").catch(()=>{});'+
   'fetch("https://outside-preview.invalid/").catch(()=>{});</script>';
+}
+
+async function guestRenderer(directory,browserChannel) {
+ const {createGuestPreviewSnapshot}=await import('../preview-guest-renderer.mjs');
+ const name='fixture.preview.homeai.invalid', instance=randomUUID();
+ const openssl=(...args)=>execFileSync('openssl',args,{cwd:directory,stdio:'ignore'});
+ openssl('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-days','1',
+  '-subj','/CN=Preview fixture CA','-keyout','ca.key','-out','ca.crt');
+ for(const role of ['client','server']){
+  openssl('req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes',
+   '-subj','/CN=Preview fixture','-keyout',role+'.key','-out',role+'.csr');
+  await fs.writeFile(path.join(directory,role+'.ext'),role==='server'?'subjectAltName=DNS:'+name+'\nextendedKeyUsage=serverAuth\n':'extendedKeyUsage=clientAuth\n');
+  openssl('x509','-req','-in',role+'.csr','-CA','ca.crt','-CAkey','ca.key','-CAcreateserial',
+   '-days','1','-extfile',role+'.ext','-out',role+'.crt');
+ }
+ const pem=name=>fs.readFile(path.join(directory,name));
+ const client={ca:await pem('ca.crt'),cert:await pem('client.crt'),key:await pem('client.key')};
+ const bootstrap=path.join(directory,'guest.mjs');
+ await fs.writeFile(bootstrap,`
+ import {readFileSync} from 'node:fs';
+ import {createRequire} from 'node:module';
+ import {startPreviewGuestWorker} from ${JSON.stringify(pathToFileURL(path.resolve(__dirname,'../preview-guest-renderer.mjs')).href)};
+ const chromium=createRequire(import.meta.url)(process.env.HARNESS_PLAYWRIGHT_MODULE || 'playwright').chromium;
+ const credentials={ca:readFileSync('ca.crt'),cert:readFileSync('server.crt'),key:readFileSync('server.key')};
+ const server=startPreviewGuestWorker({host:'127.0.0.1',port:0,instance:${JSON.stringify(instance)},credentials,browser:{chromium,browserChannel:${JSON.stringify(browserChannel??null)}}});
+ server.on('listening',()=>process.send(server.address().port));
+ process.on('disconnect',()=>server.close());
+ `);
+ const worker=spawn(process.execPath,[bootstrap],{cwd:directory,stdio:['ignore','ignore','inherit','ipc']});
+ const exited=once(worker,'close');
+ const handshake=AbortSignal.timeout(8000);
+ async function close(){if(worker.exitCode===null&&worker.signalCode===null)worker.kill();await exited;}
+ try{
+  const [port]=await Promise.race([once(worker,'message',{signal:handshake}),exited.then(()=>{throw Error('Guest worker exited before binding');})]);
+  const connect=overrides=>createGuestPreviewSnapshot({port,instance,serverName:name,credentials:async()=>client,...overrides});
+  return {close,snapshot:connect(),foreign:connect({instance:randomUUID()}),untrusted:connect({credentials:async()=>({ca:client.ca})})};
+ }catch(error){await close();throw error;}
 }
 
 test('navigate and scroll a real preview snapshot on mobile, then attach and edit the selected element', {timeout:100000}, async () => {
@@ -54,6 +93,9 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
  let rootHasTarget = false;
  const app = http.createServer(async (req,res) => {
   assetRequests.push(req.url);
+  assert.equal(req.headers.cookie,undefined);
+  assert.equal(req.headers.authorization,undefined);
+  res.setHeader('Set-Cookie','fixture-private=unused; Secure');
   if (req.url === '/') {
    const root = rootHasTarget ? fixtureHtml('#0033ee',0) : '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">';
    res.writeHead(200,{'Content-Type':'text/html'}).end(root);
@@ -63,10 +105,19 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
   res.writeHead(200,{'Content-Type':'text/html'});
   res.end(await fs.readFile(projectFile));
  });
- let child, exited, browser;
+ let child, exited, browser, guest;
  try {
   app.listen(socketPath);
   await once(app,'listening');
+  if(process.platform==='linux'){
+   guest=await guestRenderer(directory,channel);
+   const probe={socketPath,origin:'https://preview-owner.test',layout:'mobile',
+    binding:{sessionId:'owner',projectId:'own-project',previewId:'own-preview',generation:'generation',deadline:Date.now()+5000},
+    signal:AbortSignal.timeout(5000),assertCurrent(){}};
+   await assert.rejects(guest.foreign(probe),{code:'PREVIEW_SNAPSHOT_GUEST_UNAVAILABLE'});
+   await assert.rejects(guest.untrusted(probe),{code:'PREVIEW_SNAPSHOT_GUEST_UNAVAILABLE'});
+   assert.deepEqual(assetRequests,[]);
+  }
   const plugin = path.join(directory,'fixture');
   const idsFile = path.join(directory,'sessions.json');
   await fs.mkdir(plugin);
@@ -145,8 +196,10 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
    assert.equal(body.generation,generation);
    assert.equal(body.layout,'mobile');
    try {
-    latest = await snapshotOwnedPreview({socketPath,origin,layout:body.layout,route:body.route,scrollY:body.scrollY,
-     signal:AbortSignal.timeout(12000),assertCurrent(){}},{
+    const capture={socketPath,origin,layout:body.layout,route:body.route,scrollY:body.scrollY,
+     binding:{sessionId:body.sessionId,projectId:'fixture-project',previewId,generation,deadline:Date.now()+10000},
+     signal:AbortSignal.timeout(10000),assertCurrent(){assert(ready&&generation===body.generation);}};
+    latest = guest ? await guest.snapshot(capture) : await snapshotOwnedPreview(capture,{
      chromium,browserChannel:channel,
     });
    } catch (error) {
@@ -187,8 +240,8 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
   assert.equal(nextY,540);
   await page.getByRole('button',{name:'Show next section',exact:true}).tap();
 
-  async function tapTarget(path=route, scroll=nextY) {
-   const image=snapshot(path,scroll);
+  async function tapTarget(routePath=route, scroll=nextY, evidenceName) {
+   const image=snapshot(routePath,scroll);
    await image.waitFor();
    await image.evaluate(async node=>node.decode());
    const target=latest.regions.find(region=>region.selector==='#target');
@@ -200,6 +253,12 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
    }});
    const crop=page.getByRole('img',{name:'Selected element screenshot'});
    await crop.waitFor();
+   if (evidenceName && process.env.HARNESS_NATIVE_EVIDENCE) {
+    const bytes=await crop.evaluate(async node=>Array.from(new Uint8Array(await (await fetch(node.src)).arrayBuffer())));
+    const directory=process.env.HARNESS_NATIVE_EVIDENCE;
+    await fs.mkdir(directory,{recursive:true});
+    await fs.writeFile(path.join(directory,evidenceName),Buffer.from(bytes));
+   }
    return crop.evaluate(async node=>{
     await node.decode();
     const canvas=document.createElement('canvas');
@@ -209,7 +268,7 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
    });
   }
 
-  assert.deepEqual(await tapTarget(),{width:140,height:60,pixel:[224,0,0,255]});
+  assert.deepEqual(await tapTarget(route,nextY,'preview-guest-selected.png'),{width:140,height:60,pixel:[224,0,0,255]});
   assert.equal((await draft(first)).payload.attachments.length,0);
   await composer.press('Control+a');
   await page.getByRole('button',{name:'Add to next message',exact:true}).tap();
@@ -229,7 +288,7 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
   assert(edited.includes('#untouched{background:#222222}'));
   await fs.writeFile(projectFile,edited);
   await page.getByRole('button',{name:'Select an element',exact:true}).tap();
-  assert.deepEqual(await tapTarget(),{width:140,height:60,pixel:[0,51,238,255]});
+  assert.deepEqual(await tapTarget(route,nextY,'preview-guest-after-edit.png'),{width:140,height:60,pixel:[0,51,238,255]});
 
   const control = body => controlTab.evaluate(async payload => {
    const response = await fetch('/api/workbench/preview',{method:'POST',
@@ -267,6 +326,7 @@ test('navigate and scroll a real preview snapshot on mobile, then attach and edi
   assert.deepEqual(assetRequests,['/',route,route,route,'/']);
  } finally {
   if (browser) await browser.close();
+  if (guest) await guest.close();
   if (child) {
    if (child.exitCode===null&&child.signalCode===null)child.kill();
    await exited;
