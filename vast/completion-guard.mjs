@@ -3,15 +3,27 @@ import fs from 'node:fs';
 
 export const name = 'homeai-completion-guard';
 
+function announcesNextAction(value) {
+  return /^(?:now|next)[,:]?\s+(?:the\s+)?(?:stylesheet|styles?|css|tests?|backend|frontend|implementation|validation|build|screenshots?)[.!…]?$/iu.test(value)
+    || /^(?:i(?:['’]ll| will)|let me)\s+(?:(?:now|next|also)\s+)?(?:add|write|create|implement|fix|update|run|check|test|verify|build|continue|finish)\b[^\n]*[.!…]?$/iu.test(value)
+    || /^(?:teď|nyní|dále)\s+(?:(?:ještě|tedy)\s+)?(?:doplním|vytvořím|napíšu|opravím|upravím|spustím|ověřím|otestuji|přidám|pokračuji)\b[^\n]*[.!…]?$/iu.test(value);
+}
+
 // Only unmistakable short progress announcements qualify. A normal answer,
 // explanation, blocker or request for permission must remain a valid ending.
 export function isProgressOnly(text) {
   const value = text.trim();
   if (!value || value.length > 240 || value.split(/\s+/u).length > 36 || /[?？`]/u.test(value)) return false;
   if (/\b(?:done|complete[ds]?|finished|implemented|passed|blocked|cannot|can't|unable|please|your|permission|approval)\b|hotovo|dokončen|dokončil|nemohu|nelze|potřebuji|povolení|souhlas/iu.test(value)) return false;
-  return /^(?:now|next)[,:]?\s+(?:the\s+)?(?:stylesheet|styles?|css|tests?|backend|frontend|implementation|validation|build|screenshots?)[.!…]?$/iu.test(value)
-    || /^(?:i(?:['’]ll| will)|let me)\s+(?:(?:now|next|also)\s+)?(?:add|write|create|implement|fix|update|run|check|test|verify|build|continue|finish)\b[^\n]*[.!…]?$/iu.test(value)
-    || /^(?:teď|nyní|dále)\s+(?:(?:ještě|tedy)\s+)?(?:doplním|vytvořím|napíšu|opravím|upravím|spustím|ověřím|otestuji|přidám|pokračuji)\b[^\n]*[.!…]?$/iu.test(value);
+  if (announcesNextAction(value)) return true;
+  // A successful probe can precede the promise: "WebGL works. I'll write the
+  // game now." Inspect only the final separate sentence, retaining every
+  // whole-response veto above. Quotes, delivered links and conditional/future
+  // offers are not instructions to continue this turn.
+  if (/["“”„«»]|(?:^|[\s:(])['‘’]|(?:^|\n)\s*>|https?:\/\//u.test(value)
+    || /\b(?:ready|delivered|resolved|if|unless|after|once|when|until|tomorrow|later|soon|would|could|might)\b|hotov[áaéýí]|pokud|jestli|kdyby|(?:^|\s)až(?:\s|$)|později|zítra/iu.test(value)) return false;
+  const sentences = value.split(/(?<=[.!…])\s+|\n+/u).map(sentence => sentence.trim()).filter(Boolean);
+  return sentences.length > 1 && announcesNextAction(sentences.at(-1));
 }
 
 export function shouldContinue(state, { turn, signal, inbox, providers, maxContinuations }) {
