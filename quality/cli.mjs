@@ -4,9 +4,9 @@ import {connectBrowserServerControl,readBrowserServerEnvelope} from './browser-s
 
 export function argumentsOf(argv) {
   const options = {}; const [operation, ...rest] = argv;
-  if (operation !== 'verify') throw Error('Usage: cli.mjs verify --workspace <directory> [--contract .harness-quality.json] [--kind all|build|test|browser|acceptance]');
+  if (operation !== 'verify') throw Error('Usage: cli.mjs verify --workspace <directory> [--contract .harness-quality.json] [--kind all|build|test|browser|acceptance] [--check-id <id>]');
   for (let i = 0; i < rest.length; i += 2) {
-    const key = { '--workspace': 'workspace', '--contract': 'contractPath', '--kind': 'kind' }[rest[i]];
+    const key = { '--workspace': 'workspace', '--contract': 'contractPath', '--kind': 'kind', '--check-id': 'checkId' }[rest[i]];
     if (!key || !rest[i + 1] || options[key] !== undefined) throw Error('Invalid or duplicate argument.');
     options[key] = rest[i + 1];
   }

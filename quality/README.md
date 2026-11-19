@@ -10,6 +10,15 @@ plan paths remain confined and become required when their stage or `all` is sele
 All declared source paths still need to exist. A partial pass leaves other required
 kinds missing and never means full completion.
 
+After fixing one failed check, pass its returned `retry.checkId` to
+`verify_project`, for example `{"checkId":"unit"}`. The same selector is
+available as `cli.mjs verify --workspace . --check-id unit`. An optional
+`kind` must match the declared check. The runner uses the existing command or
+browser plan for that ID. Its report and logs live under a unique directory in
+`.harness/quality/targeted/`. Even a passing rerun has `complete:false`
+and earns no whole-kind verification credit. Run the ordinary acceptance
+check after the repair.
+
 For requested authentication or localized behavior, include independent negative
 and language-specific checks before declaring completion:
 
@@ -34,6 +43,10 @@ Create `.harness-quality.json` in the project root (adapt commands and sources):
   "version": 1,
   "sources": ["src", "tests", "package.json", "server.mjs"],
   "requiredKinds": ["build", "test", "browser", "acceptance"],
+  "criteria": [
+    {"id":"usable-ui","text":"The main flow works in the browser.","checkIds":["flows"]},
+    {"id":"business-rules","text":"The requested business rules pass their acceptance tests.","checkIds":["business"]}
+  ],
   "checks": [
     {"id":"build","kind":"build","command":["npm","run","build"]},
     {"id":"unit","kind":"test","command":["node","--test","tests/unit.test.mjs"]},
@@ -46,11 +59,30 @@ Create `.harness-quality.json` in the project root (adapt commands and sources):
 }
 ```
 
+`criteria` is optional, so existing projects and reports need no migration.
+Declare usually 2–4 short user-facing conditions (1–8 allowed), each with a
+unique lowercase `id`, a single-line `text` of at most 240 characters, and
+unique `checkIds` referencing declared checks. These are proposed project
+conditions, not an independent claim that every human requirement is covered.
+They do not change `requiredKinds`, add commands, or replace the deliverable.
+
+In Native, open **Workspace files → Workspace tools → Task progress** to see the
+declared conditions before or after a run. A positive result requires measured
+assertions, current source and contract fingerprints, and confirmation from
+the Native verifier. Missing or unmeasured checks remain unverified. Opening
+Task progress again checks whether recorded evidence has become stale.
+An exact `checkId` rerun has its own evidence and leaves these conditions
+unchanged until ordinary verification runs. Logs and artifacts are joined by
+check ID in the verification report.
+
 Programs are direct argv arrays. Globs are **not** shell-expanded: list test files
 or use the test runner's directory discovery. A command's nonzero exit is always
 failure. Tests need a positive assertion count (Node TAP/spec, pytest/Playwright,
 or .NET summary). Other runners may write `resultFile` JSON containing this process's
 `HARNESS_QUALITY_RUN_ID` as `runId`, plus integer `passed` and `failed` counts.
+The verifier snapshots this JSON for its evidence. If an older report still
+links the custom output file itself, run ordinary verification once before
+targeting that check so the next attempt can leave the retained proof intact.
 Shell wrappers are refused. This is honest evidence accounting, not protection
 against an intentionally dishonest project test program.
 

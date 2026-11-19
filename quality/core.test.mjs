@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {verifyProject, runProgram, validateContract, confined, parseTestCounts, compactReport} from './core.mjs';
 import {validatePlan, resolveBaseURL, verifyBrowser} from './browser.mjs';
 import {executeVerification, apply} from './plugin.mjs';
@@ -23,6 +24,113 @@ async function project(t, checks, requiredKinds = ['test']) {
   return root;
 }
 const passing = {id:'tests',kind:'test',command:command("console.log('# pass 3\\n# fail 0')")};
+
+test('actual CLI retries only the failed check and keeps the ordinary evidence unchanged', async t => {
+  const ids = ['first','second','third','fourth','fifth'];
+  const checks = ids.map(id => ({
+    id, kind: 'test', command: command(`
+      const fs = require('node:fs');
+      fs.appendFileSync('.harness/executed.txt', ${JSON.stringify(id + '\n')});
+      const failed = ${JSON.stringify(id)} === 'third' && fs.readFileSync('source.txt','utf8') === 'version1';
+      console.log(failed ? '# pass 0\\n# fail 1' : '# pass 1\\n# fail 0');
+      process.exitCode = Number(failed);
+    `),
+  }));
+  const root = await project(t, checks);
+  const cli = fileURLToPath(new URL('./cli.mjs', import.meta.url));
+  const execute = async (...options) => {
+    const output = await runProgram([process.execPath, cli, 'verify', '--workspace', root, ...options], {cwd: root});
+    return {exitCode: output.exitCode, ...JSON.parse(output.stdout)};
+  };
+  const read = relative => fs.readFile(path.join(root, relative), 'utf8');
+  const executed = async () => (await read('.harness/executed.txt')).trim().split('\n');
+  const failed = await execute('--kind', 'test');
+  assert.equal(failed.exitCode, 1);
+  assert.deepEqual(await executed(), ids);
+  assert.deepEqual(failed.checks.filter(check => check.retry).map(check => check.retry), [{checkId: 'third'}]);
+  const oldPaths = [failed.reportPath, ...failed.checks.map(check => check.logPath)];
+  const previous = await Promise.all(oldPaths.map(read));
+
+  await fs.writeFile(path.join(root, 'source.txt'), 'fixed');
+  const partial = await execute('--check-id', 'third');
+  const retained = JSON.parse(await read(partial.reportPath));
+  assert.equal(partial.exitCode, 0);
+  assert.equal(partial.passed, true);
+  assert.equal(partial.complete, false);
+  assert.deepEqual(partial.checks.map(check => check.id), ['third']);
+  assert.deepEqual(retained.verifiedKinds, []);
+  assert.deepEqual(retained.missingKinds, ['test']);
+  assert.equal(retained.runId, partial.runId);
+  assert.match(partial.checks[0].logPath, new RegExp(partial.runId + '/third.log$'));
+  assert.match(await read(partial.checks[0].logPath), /# pass 1/);
+  assert.deepEqual(await executed(), [...ids, 'third']);
+  assert.deepEqual(await Promise.all(oldPaths.map(read)), previous);
+
+  const whole = await execute('--kind', 'test');
+  assert.equal(whole.complete, true);
+  assert.equal(whole.sourceHash, partial.sourceHash);
+  assert.deepEqual(await executed(), [...ids, 'third', ...ids]);
+  assert.equal(JSON.parse(await read(partial.reportPath)).runId, partial.runId);
+});
+
+test('unknown or invalid check selectors never start a check and interruption leaves ordinary evidence intact', async t => {
+  const root = await project(t, [passing]);
+  const run = () => assert.fail('Invalid selector must not run a check');
+  for (const [options, code] of [
+    [{checkId: '../tests'}, 'INVALID_CHECK_ID'],
+    [{checkId: 'tests\n'}, 'INVALID_CHECK_ID'],
+    [{checkId: 'missing'}, 'CHECK_ID_NOT_FOUND'],
+    [{checkId: 'tests', kind: 'build'}, 'CHECK_ID_NOT_FOUND'],
+  ]) await assert.rejects(verifyProject({workspace: root, run, ...options}), {code});
+  await assert.rejects(fs.stat(path.join(root, '.harness')), {code: 'ENOENT'});
+
+  const ordinary = compactReport(await verifyProject({workspace: root}));
+  assert.equal(ordinary.complete, true);
+  const last = await fs.readFile(path.join(root, ordinary.reportPath));
+  const log = await fs.readFile(path.join(root, ordinary.checks[0].logPath));
+  const controller = new AbortController();
+  let entered, release;
+  const ready = new Promise(resolve => { entered = resolve; });
+  const wait = new Promise(resolve => { release = resolve; });
+  const interrupted = verifyProject({workspace: root, checkId: 'tests', signal: controller.signal, async run() {
+    entered(); await wait; return {exitCode: 0, stdout: '# pass 9', stderr: ''};
+  }});
+  await ready;
+  try { await assert.rejects(verifyProject({workspace: root, checkId: 'tests'}), {code: 'VERIFICATION_BUSY'}); }
+  finally { controller.abort(Error('fixture interrupted')); release(); }
+  await assert.rejects(interrupted, /fixture interrupted/);
+  const runs = await fs.readdir(path.join(root, '.harness/quality/targeted'));
+  assert.equal(runs.length, 1);
+  await assert.rejects(fs.stat(path.join(root, '.harness/quality/targeted', runs[0], 'report.json')), {code: 'ENOENT'});
+  assert.deepEqual(await fs.readFile(path.join(root, ordinary.reportPath)), last);
+  assert.deepEqual(await fs.readFile(path.join(root, ordinary.checks[0].logPath)), log);
+});
+
+test('structured result snapshots retain their own nonce even when the producer overwrites its output', async t => {
+  const resultFile = '.harness/result.json';
+  const root = await project(t, [{...passing, resultFile, artifacts: [resultFile]}]);
+  let runs = 0;
+  const options = {workspace: root, async run(_command, {env}) {
+    await fs.writeFile(path.join(root, resultFile), JSON.stringify({runId: env.HARNESS_QUALITY_RUN_ID, passed: ++runs, failed: 0}));
+    return {exitCode: 0, stdout: '', stderr: ''};
+  }};
+  const full = await verifyProject(options);
+  const fullArtifact = full.results[0].artifactPaths[0];
+  assert.equal(full.results[0].artifactPaths.length, 1);
+  const partial = await verifyProject({...options, checkId: 'tests'});
+  const partialArtifact = partial.results[0].artifactPaths[0];
+  const read = async file => JSON.parse(await fs.readFile(path.join(root, file), 'utf8'));
+  assert.equal(partial.passed, true);
+  assert.equal((await read(partialArtifact)).runId, partial.runId);
+  assert.equal((await read(fullArtifact)).runId, full.runId);
+  assert.equal((await read(resultFile)).runId, partial.runId);
+
+  const latest = path.join(root, '.harness/quality/latest.json');
+  full.results[0].artifactPaths = [resultFile];
+  await fs.writeFile(latest, JSON.stringify(full));
+  await assert.rejects(verifyProject({...options, checkId: 'tests'}), {code: 'TARGETED_LEGACY_EVIDENCE'});
+  assert.equal(runs, 2);
+});
 
 test('browser failure detail survives missing screenshot evidence without passing verification', async t => {
   const root = await project(t, [{id:'ui',kind:'browser',plan:'plan.json'}], ['browser']);
@@ -170,9 +278,9 @@ test('browser plan cannot silently ignore misspelled expectations or use foreign
   assert.throws(()=>validatePlan({...plan,flows:[{name:'empty',steps:[{action:'checkpoint',name:'empty'}]}]}),e=>e.code==='EMPTY_BROWSER_FLOW');
 });
 
-function pluginContext({stale=false,exitCode=0}={}) {
+function pluginContext({stale=false,exitCode=0,cliReport}={}) {
   const root=path.resolve('managed-project'), events=[], specs=[]; let reviews=0;
-  const report={passed:true,complete:true,stale:false,checks:[{passed:true,checksPassed:4,checksTotal:4,artifactPaths:[]}]};
+  const report=cliReport??{passed:true,complete:true,stale:false,checks:[{passed:true,checksPassed:4,checksTotal:4,artifactPaths:[]}]};
   const ctx={projectExecutionMode:hostMode(),waterfall:async()=>({root,sourceHash:stale && reviews++ ? 'new' : 'original',ports:[4000]}),serial:async(name,value)=>events.push({name,value}),shellEnv:{collect:()=>({DSH_APP_PORT:'4000'})},shell:{sandboxMode:'workspace-write',resolve:s=>{specs.push(s);return s;},execute:async()=>({result:async()=>({exitCode,stdout:{text:JSON.stringify(report)}})})}};
   return {ctx,root,events,specs,execution:{agent:{session:{id:'fixture'}},signal:new AbortController().signal}};
 }
@@ -181,6 +289,25 @@ test('plugin uses managed root and native confinement and reports once',async()=
   assert.equal(r.complete,true); assert.deepEqual(f.specs[0].sandboxPolicy,{mode:'workspace-write',workspaceRoot:f.root});
   assert.equal(f.specs[0].workdir,f.root); assert.deepEqual(f.specs[0].dshEnv,{DSH_APP_PORT:'4000'});
   assert.equal(f.events.length,1); assert.equal(f.events[0].value.sourceHash,'original'); assert.equal(f.events[0].value.checksTotal,4);
+});
+
+test('host tool forwards the ID and accepts only matching targeted proof without a whole-kind event', async () => {
+  const runId = '12345678-abcd-4321-abcd-123456789abc';
+  const cliReport = {passed: true, complete: false, stale: false, checkId: 'one', runId,
+    checks: [{id: 'one', kind: 'test', passed: true}], reportPath: `.harness/quality/targeted/${runId}/report.json`};
+  const f = pluginContext({cliReport});
+  const call = () => executeVerification(f.ctx, {kind:'test', checkId:'one'}, f.execution);
+  assert.equal((await call()).passed,true);
+  assert.match(f.specs[0].command, /'--kind' 'test' '--check-id' 'one'$/);
+  assert.equal(f.events.length,0);
+  cliReport.complete = true;
+  const invalid = await call();
+  assert.equal(invalid.passed,false);
+  assert.equal(invalid.complete,false);
+  assert.equal(invalid.code,'QUALITY_RUNNER_FAILED');
+  assert.equal(f.events.length,0);
+  assert.equal((await executeVerification(f.ctx, {checkId: 'one; extra'}, f.execution)).code, 'INVALID_CHECK_ID');
+  assert.equal(f.specs.length,2);
 });
 
 test('unavailable optional server control preserves existing verification checks',async()=>{

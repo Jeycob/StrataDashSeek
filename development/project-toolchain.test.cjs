@@ -53,7 +53,7 @@ test('offline recipe requires concrete pinned inputs, whitelists sources and onl
 test('actual transformed quality sources have an explicit minimal offline dependency closure',()=>{
  const sourceRoot=path.resolve(__dirname,'..'),sources=new Map(Object.keys(T.SOURCE_FILES).map(name=>{const original=fs.readFileSync(path.join(sourceRoot,name));return[name,{original,installed:B.transformSource(name,original)}];}));
  assert.doesNotThrow(()=>B.auditSources(sources));
- for(const name of ['quality/browser-server-contract.mjs','quality/browser-server-client.mjs','quality/browser-server-diagnostic.mjs'])assert.equal(T.SOURCE_FILES[name],'homeai/'+name);
+ for(const name of ['quality/browser-server-contract.mjs','quality/browser-server-client.mjs','quality/browser-server-diagnostic.mjs','quality/criteria.mjs'])assert.equal(T.SOURCE_FILES[name],'homeai/'+name);
  assert.equal(T.SOURCE_FILES['quality/browser-server-host.mjs'],undefined);
  assert.equal(T.SOURCE_FILES['quality/browser-server-inspect.mjs'],undefined);
 });
