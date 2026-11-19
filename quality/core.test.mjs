@@ -206,8 +206,13 @@ test('failed handle registration kills and drains only that verifier and cannot 
  f.ctx.shell.execute=async()=>handle;f.ctx.serial=async(name,value)=>{if(name==='workspace-runtime/verification-process')throw Error('Synthetic registration failure');f.events.push({name,value});};
  const result=await executeVerification(f.ctx,{},f.execution);assert.equal(killed,1);assert.equal(drained,true);assert.equal(result.passed,false);assert.equal(result.code,'QUALITY_RUNNER_FAILED');
 });
-test('plugin invalidates changed source and nonzero native exits',async()=>{
-  for(const options of [{stale:true},{exitCode:7}]) {const f=pluginContext(options);const r=await executeVerification(f.ctx,{},f.execution);assert.equal(r.passed,false);assert.equal(r.complete,false);assert.equal(f.events[0].value.exitCode,1);}
+test('plugin invalidates changed source and nonzero native exits with lossless JSON even without source snapshots',async()=>{
+  for(const options of [{stale:true},{exitCode:7}]) {
+    const f=pluginContext(options);const r=await executeVerification(f.ctx,{},f.execution);
+    assert.equal(r.passed,false);assert.equal(r.complete,false);assert.equal(f.events[0].value.exitCode,1);
+    assert.deepEqual(r,JSON.parse(JSON.stringify(r)),'optional diagnostic absence must not emit undefined tool output');
+    if(options.stale){assert.equal(r.stale,true);assert.equal(Object.hasOwn(r,'sourceChanges'),false);assert.match(r.error,/Changed paths are unavailable/);}
+  }
 });
 test('plugin refuses unmanaged projects without executing commands',async()=>{
   const f=pluginContext();f.ctx.waterfall=async()=>undefined;

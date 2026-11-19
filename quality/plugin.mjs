@@ -75,7 +75,12 @@ export async function executeVerification(ctx, args, execution, config = {}) {
   const after = await ctx.waterfall('workspace-runtime/review', { sessionId:accessSessionId,execution,includeSourceSnapshot:true }, () => undefined);
   check();
   const stale = !after || after.root !== review.root || after.sourceHash !== review.sourceHash || report.stale;
-  if (stale) { report.passed = false; report.complete = false; report.stale = true; report.code = 'STALE_SOURCE';report.sourceChanges=changedSourcePaths(review.sourceSnapshot,after?.sourceSnapshot);report.error=sourceChangeDiagnostic(report.sourceChanges); }
+  if (stale) {
+    report.passed = false; report.complete = false; report.stale = true; report.code = 'STALE_SOURCE';
+    const sourceChanges = changedSourcePaths(review.sourceSnapshot,after?.sourceSnapshot);
+    if (sourceChanges !== undefined) report.sourceChanges = sourceChanges;
+    report.error = sourceChangeDiagnostic(sourceChanges);
+  }
   if (result?.exitCode !== 0 || result?.timedOut) { report.passed = false; report.complete = false; }
   if (result?.timedOut) report.timedOut = true;
   const failed = report.checks.filter(c => !c.passed).flatMap(c => c.diagnostics ?? []);
