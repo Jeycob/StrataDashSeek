@@ -23,28 +23,29 @@ function sdk() {
     const cli = process.env.HARNESS_NATIVE_CLI ?? path.join(process.env.HOMEAI_RUNTIME ?? '/data/harness/runtime', 'node_modules/@deepseek-ai/dsh/lib/bin.js');
     const base = path.resolve(path.dirname(cli), '../..');
     const load = name => import(pathToFileURL(path.join(base, name, 'lib/index.js')));
-    const [cordis, prompt, tools, pipeline, scope, jobs, jobTools, bash] = await Promise.all([
+    const [cordis, prompt, tools, pipeline, scope, jobs, jobTools, bash, sessions] = await Promise.all([
       load('cordis'), load('dsh-system-prompt'), load('dsh-tools'),
       import(pathToFileURL(path.join(base, 'dsh-tools/lib/pipeline.js'))), load('dsh-scope'),
-      load('dsh-jobs-local'), load('dsh-tool-jobs'), load('dsh-tool-bash'),
+      load('dsh-jobs-local'), load('dsh-tool-jobs'), load('dsh-tool-bash'), load('dsh-session'),
     ]);
     return { ...cordis, SystemPrompt: prompt.default, Tools: tools.default, ...pipeline, ...scope,
-      LocalJobs: jobs.default, applyJobTools: jobTools.apply, applyBash: bash.apply };
+      LocalJobs: jobs.default, applyJobTools: jobTools.apply, applyBash: bash.apply, Sessions: sessions.default };
   })();
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 async function eventually(check) {
-  const until = Date.now() + 1000;
-  while (!check()) { if (Date.now() >= until) assert.fail('SDK state did not settle within the bounded wait'); await new Promise(resolve => setTimeout(resolve, 5)); }
+  const until = performance.now() + 1000;
+  while (!check()) { if (performance.now() >= until) assert.fail('SDK state did not settle within the bounded wait'); await new Promise(resolve => setTimeout(resolve, 5)); }
 }
 const args = Object.freeze({ command: 'node preview.mjs', description: 'Start the assigned project preview', run_in_background: true });
 
-async function fixture(t, { controller = true, admission = false, custody = false } = {}) {
+async function fixture(t, { controller = true, admission = false, custody = false, liveSessions = false, completionDelivery = 'quiet' } = {}) {
   const S = await sdk(), directory = await fs.mkdtemp(path.join(os.tmpdir(), 'owned-project-jobs-'));
   const root = path.join(directory, 'project'); await fs.mkdir(root);
   const ctx = new S.Context(); new S.SystemPrompt(ctx, {}); new S.Tools(ctx);
   ctx.provide('projectExecutionMode',hostMode());
-  const agents = new Map(), scopes = [], events = [], notices = [], calls = [], processes = [], timers = new Set();
+  const agents = new Map(), scopes = [], events = [], notices = [], wakes = [], injections = [], settlements = [], calls = [], processes = [], timers = new Set();
+  if (liveSessions) { new S.Sessions(ctx); ctx.on('session/event', (session, event) => events.push(event), { global: true }); }
   ctx.provide('agents', { get: id => agents.get(id), list: () => [...agents.values()] });
   ctx.provide('workingDirectory', { ensure: async () => root }); ctx.provide('shellEnv', { collect: () => ({ DSH_APP_PORT: '21000' }) });
   ctx.provide('sandboxPolicy', { resolve: ({ session }) => ({ mode: session.mode ?? 'danger-full-access', workspaceRoot: directory }) });
@@ -66,7 +67,8 @@ async function fixture(t, { controller = true, admission = false, custody = fals
     processes.push(process); return process;
   } });
   new S.LocalJobs(ctx, { maxConcurrentJobsPerOwner: 4, retainBytes: 65536, settledRetainBytes: 16384, pumpPollMs: 2 });
-  if (controller) S.applyJobTools(ctx, { completionDelivery: 'quiet', waitTimeoutMs: 100, maxWaitTimeoutMs: 1000, inlineOutputBytes: 2048 });
+  if (controller) S.applyJobTools(ctx, { completionDelivery, waitTimeoutMs: 100, maxWaitTimeoutMs: 1000, inlineOutputBytes: 2048 });
+  ctx.jobs.events.subscribe({ owners: 'scope' }, event => { if (event.type === 'settled') settlements.push(event); });
   S.applyBash(ctx, { enableRunInBackground: false }); const native = ctx.tools.get('bash');
   const manager = { existing: new Set(), data: { installedAt: 1000, sessions: {} }, ownerAgent: agent => agent?.owner ?? agent };
   const processTimers = { setTimer(fn, ms) { const token = { fn, ms, unref() {} }; timers.add(token); return token; }, clearTimer(token) { timers.delete(token); } };
@@ -77,9 +79,9 @@ async function fixture(t, { controller = true, admission = false, custody = fals
   ctx.tools.setExecutor({ describe: defs => ({ schemas: defs.map(({ name, description, parameters }) => ({ name, description, parameters })) }),
     execute: input => S.executeToolBatch(input, pipeline, () => 1) });
   function agent(id, { owner, mode } = {}) {
-    const value = { id, owner, status: 'idle', inbox: { nextStep: [] },
-      session: { id, mode, header: { createdAt: 2000 }, append(type, data) { const event = { type, data, seq: events.length }; events.push(event); return event; } },
-      inject: message => notices.push(message), followup: message => notices.push(message) };
+    const value = { id, owner, status: 'idle', inbox: { nextStep: [], nextTurn: [] },
+      session: liveSessions ? ctx.sessions.create(id, { meta: { cwd: root, createdAt: 2000 } }) : { id, mode, header: { createdAt: 2000 }, append(type, data) { const event = { type, data, seq: events.length }; events.push(event); return event; } },
+      inject: message => { notices.push(message); injections.push(message); }, followup: message => { notices.push(message); wakes.push(message); } };
     const scope = S.createScope(ctx, value); value.ctx = scope.ctx; value.scope = scope;
     scopes.push(scope); agents.set(id, value); if (!owner) manager.data.sessions[id] = { root, gitWritableRoots: [path.join(directory, 'git-metadata')] };
     managed.install(value); return value;
@@ -99,8 +101,82 @@ async function fixture(t, { controller = true, admission = false, custody = fals
     assert.ok(path.resolve(directory).startsWith(path.resolve(os.tmpdir()) + path.sep + 'owned-project-jobs-'));
     await fs.rm(directory, { recursive: true, force: true });
   });
-  return { ...S, ctx, root, directory, manager, native, managed, run, agent, call, processes, calls, timers, events, notices };
+  return { ...S, ctx, root, directory, manager, native, managed, run, agent, call, processes, calls, timers, events, notices, wakes, injections, settlements };
 }
+
+test('expected handed-off preview expiry is collected after a completed turn in either cleanup order', async t => {
+  for (const first of ['process timer', 'broker cleanup']) await t.test(first, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const f = await fixture(t, { custody: true, liveSessions: true, completionDelivery: 'wakeup' }), owner = f.agent('preview-owner');
+    owner.session.append('turn/start', { turn: 1 });
+    const result = await f.run.startWithCustody(args, { agent: owner, callId: 'preview', signal: new AbortController().signal });
+    const capture = await f.run.custodyFor(result.jobId, owner.id), timer = [...f.timers][0], process = f.processes[0];
+    f.run.releasePreviewAdmission(capture);
+    owner.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+    process.holdShutdown = true; t.mock.timers.setTime(capture.expiresAt);
+    let closing;
+    if (first === 'process timer') { timer.fn(); closing = f.run.stopOwned(result.jobId, owner.id); }
+    else { closing = f.run.stopOwned(result.jobId, owner.id); timer.fn(); }
+    await tick(); assert.equal(process.kills, 1); assert.equal(f.settlements.length, 0);
+    process.releaseKill(); await closing; await capture.done;
+    await eventually(() => f.settlements.length === 1); await tick();
+    assert.equal(f.settlements[0].awaited, true);
+    assert.equal(f.wakes.length, 0); assert.equal(f.injections.length, 0);
+    assert.equal(f.ctx.jobs.get(result.jobId, owner.id).status, 'killed');
+    const retained = f.ctx.jobs.read(result.jobId, owner.id);
+    assert.equal(retained.result.lifetimeExpired, true); assert.match(JSON.stringify(retained.chunks), /preview-ready/);
+    assert(f.events.some(event => event.type === 'job/settled'), 'SDK history must retain the expiry');
+    assert.equal(process.kills, 1); assert.equal(f.timers.size, 0);
+  });
+});
+
+test('only a confirmed handed-off preview expiry after its own latest completed turn avoids SDK notices', async t => {
+  for (const scenario of ['ordinary build', 'unpublished preview', 'earlier completed turn', 'failed turn', 'new active turn', 'turn starts during settlement', 'input arrives during settlement', 'queued input', 'different session', 'nonzero exit', 'sandbox failure', 'sandbox denial', 'early close', 'explicit wait']) await t.test(scenario, async t => {
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    const f = await fixture(t, { custody: true, liveSessions: true, completionDelivery: 'wakeup' }), owner = f.agent('owner');
+    owner.session.append('turn/start', { turn: 1 });
+    if (scenario === 'earlier completed turn') owner.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+    const execution = { agent: owner, callId: 'preview', signal: new AbortController().signal };
+    const result = scenario === 'ordinary build' ? await f.run(args, execution) : await f.run.startWithCustody(args, execution);
+    await tick();
+    const capture = scenario === 'ordinary build' ? null : await f.run.custodyFor(result.jobId, owner.id);
+    if (capture && scenario !== 'unpublished preview') f.run.releasePreviewAdmission(capture);
+    if (scenario === 'different session') {
+      const other = f.agent('other'); other.session.append('turn/start', { turn: 1 }); other.session.append('turn/end', { turn: 1, reason: { kind: 'completed' } });
+    } else if (scenario !== 'earlier completed turn') owner.session.append('turn/end', { turn: 1, reason: scenario === 'failed turn' ? { kind: 'error', error: { code: 'UNKNOWN', message: 'synthetic turn failure' } } : { kind: 'completed' } });
+    if (scenario === 'new active turn') { owner.session.append('turn/start', { turn: 2 }); owner.status = 'running'; }
+    if (scenario === 'turn starts during settlement' || scenario === 'input arrives during settlement') {
+      const wait = f.ctx.jobs.wait.bind(f.ctx.jobs);
+      f.ctx.jobs.wait = (...values) => {
+        const pending = wait(...values);
+        if (scenario === 'turn starts during settlement') { owner.session.append('turn/start', { turn: 2 }); owner.status = 'running'; }
+        else {
+          const message = { id: 'late-input', role: 'user', content: [{ type: 'text', text: 'Next request' }] };
+          owner.inbox.nextTurn.push(message); owner.session.append('agent/inbox/spliced', { target: 'next-turn', start: 0, inserted: [message] });
+        }
+        return pending;
+      };
+    }
+    if (scenario === 'queued input') owner.inbox.nextTurn.push({ id: 'next-request' });
+    const process = f.processes[0], timer = [...f.timers][0];
+    const waiting = scenario === 'explicit wait' ? f.ctx.jobs.wait(result.jobId, 1000, owner.id) : null;
+    if (scenario === 'nonzero exit') process.finish(7);
+    else if (scenario === 'early close') await f.run.stopOwned(result.jobId, owner.id);
+    else {
+      if (scenario === 'sandbox failure') process.sandbox.runnerFailed = true;
+      if (scenario === 'sandbox denial') process.sandbox.denied = true;
+      t.mock.timers.setTime((capture?.expiresAt ?? Date.now() + timer.ms)); timer.fn();
+    }
+    await eventually(() => f.settlements.length === 1);
+    if (waiting) {
+      assert.equal((await waiting).status, 'killed'); assert.equal(f.settlements[0].awaited, true); assert.equal(f.notices.length, 0);
+    } else {
+      await eventually(() => f.notices.length === 1); assert.equal(f.settlements[0].awaited, false);
+      assert.equal(f.wakes.length, owner.status === 'running' ? 0 : 1);
+      assert.equal(f.injections.length, owner.status === 'running' ? 1 : 0);
+    }
+  });
+});
 
 test('actual pinned SDK partial UTF8 app suffix cannot invalidate a complete ASCII custody prefix',async()=>{
  const cli=process.env.HARNESS_NATIVE_CLI??path.join(process.env.HOMEAI_RUNTIME??'/data/harness/runtime','node_modules/@deepseek-ai/dsh/lib/bin.js');
