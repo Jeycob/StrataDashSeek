@@ -1,0 +1,6 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {searchNotes,updateNote} from '../core.mjs';
+test('empty query preserves notes',()=>{const rows=[{title:'A',body:'B'}];assert.deepEqual(searchNotes(rows,''),rows);});
+test('exact search finds body',()=>assert.equal(searchNotes([{title:'A',body:'xyz'}],'xyz').length,1));
+test('saving updates title, body and version',()=>{const value=updateNote({id:'x',title:'A',body:'B',version:1},{title:'C',body:'D',baseVersion:1});assert.deepEqual(value,{id:'x',title:'C',body:'D',version:2});});

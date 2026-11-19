@@ -39,7 +39,8 @@ function graph({authority,projects,jobs,releases,deployments,saved,containers,im
  for(const c of containers){const records=proofs.get(c.Id)||[],proof=records.length===1?records[0]:null,pids=proof?[proof.c.projectId]:[],r=base('container',c.Id,pids),labels=c.Config?.Labels||{};
   // Existing persisted control-plane record plus exact immutable identity;
   // labels alone (including newly introduced ownership labels) never adopt.
-  if(!proof||!projects[proof.c.projectId]||proof.c.state!=='created'||c.Image!==proof.c.imageId||c.Name!=='/'+proof.c.name||labels[LABEL]!=='managed'||labels[LABEL+'.project']!==proof.c.projectId||labels[LABEL+'.job']!==proof.j.id||labels[LABEL+'.create']!==proof.c.token)r.reasonCodes.push('OWNER_UNKNOWN');
+  // Current producers persist confirmed. Older verified journals used created.
+  if(!proof||!projects[proof.c.projectId]||!['confirmed','created'].includes(proof.c.state)||c.Image!==proof.c.imageId||c.Name!=='/'+proof.c.name||labels[LABEL]!=='managed'||labels[LABEL+'.project']!==proof.c.projectId||labels[LABEL+'.job']!==proof.j.id||labels[LABEL+'.create']!==proof.c.token)r.reasonCodes.push('OWNER_UNKNOWN');
   if(c.State?.Running!==false||c.State?.Paused||c.State?.Restarting||c.State?.RemovalInProgress||!['created','exited'].includes(c.State?.Status))r.reasonCodes.push('CONTAINER_RUNNING');
   const p=pids.length&&projects[pids[0]];if(!Array.isArray(c.Mounts)||c.Mounts.some(m=>m.Type!=='tmpfs')||p?.dataPolicy?.kind!=='stateless')r.reasonCodes.push('PERSISTENT_DATA');
   if(refs.has(c.Id))r.reasonCodes.push('PUBLISHED');if(resume.has(c.Id))r.reasonCodes.push('RESUME_REFERENCE');if(rollback.has(c.Id))r.reasonCodes.push('ROLLBACK_REFERENCE');if(inflight.has(c.Id)||pids.some(id=>inflight.has(id)))r.reasonCodes.push('INFLIGHT_REFERENCE');

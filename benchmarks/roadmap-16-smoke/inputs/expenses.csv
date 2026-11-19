@@ -1,0 +1,12 @@
+id,date,category,amount
+e01,2026-11-01,Potraviny,12.34
+e02,2026-11-02,Doprava,3.21
+e03,2026-11-03,Potraviny,-1.05
+e04,2026-11-04,Bydlení,1000.00
+e05,2026-11-05,,0.10
+e06,2026-11-06,,0.20
+e02,2026-11-02,Doprava,3.21
+e07,2026-11-07,Potraviny,12x
+e08,2026-02-30,Potraviny,5.00
+e09,,Potraviny,5.00
+e01,2026-11-01,Potraviny,99.00

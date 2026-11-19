@@ -3,6 +3,8 @@ const {hostExecutionBinding,executionBindingFixture}=require('./fixtures/executi
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const http = require('node:http');
 const { ArchivedDockerCleanup, graph } = require('./apps-archived-cleanup.cjs'), { LABEL } = require('./apps-engine.cjs');
+const { createManagedContainer } = require('./apps-container-create.cjs');
+const { inspection, resourceEngine, resourceHost } = require('./resource-fixture.cjs');
 const pid = 'a'.repeat(16), cid = 'b'.repeat(64), image = 'sha256:' + 'c'.repeat(64), jobId = 'd'.repeat(16), token = 'e'.repeat(32), operationId = 'f'.repeat(32), sid = 'session-a';
 
 test('mode invalidation during fresh resource capture prevents stop dispatch and a new action receipt',async t=>{
@@ -25,6 +27,106 @@ function fixture(t) {
   const call = input => cleanup.resources({ ...ctx, ...input });
   return { cleanup, manager, source, calls, ctx, call };
 }
+
+async function createOwnResource(f) {
+  const job = f.manager.store.jobs[0];
+  job.status = 'running';
+  job.creations = [];
+  const journal = path.join(f.manager.cfg.stateDir, 'producer-jobs.json');
+  f.manager.save = () => fs.writeFileSync(journal, JSON.stringify(f.manager.store.jobs));
+  f.manager.log = () => {};
+  f.manager.engine.json = async (method, route, options) => {
+    if (method === 'GET') return f.source.containers[0];
+    assert.equal(method, 'POST');
+    const name = new URL(route, 'http://fixture').searchParams.get('name');
+    assert.equal(route.split('?')[0], '/containers/create');
+    f.source.containers = [inspection(cid, options.json, name)];
+    return { Id: cid };
+  };
+  resourceEngine(f.manager.engine, { imageResponse: true });
+  await createManagedContainer(f.manager, job, { Image: image, Labels: {
+    [LABEL]: 'managed', [LABEL + '.project']: pid,
+  }, HostConfig: resourceHost() });
+  job.status = 'failed';
+  f.manager.save();
+  f.manager.store.jobs = f.source.jobs = JSON.parse(fs.readFileSync(journal, 'utf8'));
+  const [record] = f.source.jobs[0].creations;
+  assert.equal(record.state, 'confirmed');
+  assert.equal(record.containerId, cid);
+  return record;
+}
+
+function freshInventory(f) {
+  const resources = f.cleanup.data.resources;
+  const cached = resources?.snapshots[resources.latest];
+  if (cached) cached.observedAt -= 11000;
+  return f.call({ op: 'inventory' });
+}
+
+test('the producer-confirmed container exposes the owner Stop then export and delete', async t => {
+  const f = fixture(t);
+  await createOwnResource(f);
+  f.source.containers[0].State = { Status: 'running', Running: true };
+  const container = value => value.items.find(row => row.kind === 'container' && row.id === cid);
+  const action = (name, value, operationId) => ({ op: 'action', phase: 'preview', action: name,
+    kind: 'container', id: cid, inventoryId: value.inventoryId, operationId });
+  const apply = (input, plan) => f.call({ ...input, phase: 'apply', planId: plan.planId, planHash: plan.planHash });
+
+  const running = await freshInventory(f);
+  assert.deepEqual(container(running).actions, ['stop']);
+  const other = { projectId: pid, sessionId: 'other-chat' };
+  const foreign = await f.call({ op: 'inventory', ...other });
+  assert.equal(container(foreign), undefined);
+  await assert.rejects(f.call({ ...action('stop', foreign, operationId), ...other }), {
+    code: 'RESOURCE_CONTEXT_MISMATCH', status: 403,
+  });
+  assert.deepEqual(f.calls, []);
+
+  const stop = action('stop', running, operationId);
+  assert.equal((await apply(stop, (await f.call(stop)).plan)).operation.state, 'completed');
+  const stopped = await freshInventory(f);
+  assert.deepEqual(container(stopped).actions, ['delete', 'export']);
+  const exportPlan = (await f.call(action('export', stopped, '1'.repeat(32)))).plan;
+  assert.equal(exportPlan.blocked, false);
+  assert.equal(exportPlan.format, 'container-filesystem');
+  for (const [name, id] of [['delete', '2'], ['export', '3']]) {
+    const otherStopped = await f.call({ op: 'inventory', ...other });
+    await assert.rejects(f.call({ ...action(name, otherStopped, id.repeat(32)), ...other }), {
+      code: 'RESOURCE_CONTEXT_MISMATCH', status: 403,
+    });
+  }
+  const removal = action('delete', stopped, '4'.repeat(32));
+  assert.equal((await apply(removal, (await f.call(removal)).plan)).operation.state, 'completed');
+  assert.deepEqual(f.calls, [
+    ['POST', '/containers/' + cid + '/stop?t=10'],
+    ['DELETE', '/containers/' + cid + '?force=false&v=false'],
+  ]);
+});
+
+test('legacy creation is retained and unresolved or mismatched creation exposes no actions', async t => {
+  const f = fixture(t);
+  const record = await createOwnResource(f);
+  const row = async () => (await freshInventory(f)).items.find(item => item.id === cid);
+  record.state = 'created';
+  assert.deepEqual((await row()).actions, ['delete', 'export']);
+  for (const state of ['pending', 'unknown', 'cleanup-pending']) {
+    record.state = state;
+    const result = await row();
+    assert.deepEqual(result.actions, []);
+    assert.ok(result.reasons.includes('INFLIGHT_REFERENCE'));
+  }
+  record.state = 'confirmed';
+  const labels = f.source.containers[0].Config.Labels;
+  for (const label of [LABEL, LABEL + '.project', LABEL + '.job', LABEL + '.create']) {
+    const original = labels[label];
+    labels[label] = 'mismatch';
+    const result = await row();
+    assert.deepEqual(result.actions, []);
+    assert.ok(result.reasons.includes('OWNER_UNKNOWN'));
+    labels[label] = original;
+  }
+  assert.deepEqual(f.calls, []);
+});
 test('paginated census includes inactive containers/images and scopes sessions without silently dropping pages', async t => {
   const f = fixture(t), first = await f.call({ op: 'inventory', limit: 1 });
   assert.equal(first.totalKnown, 2); assert.equal(first.items.length, 1); assert.ok(first.nextCursor);

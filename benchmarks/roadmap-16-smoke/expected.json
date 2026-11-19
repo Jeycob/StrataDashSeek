@@ -1,0 +1,14 @@
+{
+  "counter": [0, 1, 0, -1, 0],
+  "b03": {
+    "totalCents": 101480,
+    "count": 6,
+    "duplicateCount": 1,
+    "errorCount": 4,
+    "byCategory": {"Potraviny": 1129, "Doprava": 321, "Bydlení": 100000, "Nezařazeno": 30}
+  },
+  "b10": {
+    "reference": {"concurrentStatuses": [200, 409], "finalVersion": 2, "staleStatus": 409},
+    "unfixed": {"concurrentStatuses": [200, 200], "staleStatus": 200}
+  }
+}

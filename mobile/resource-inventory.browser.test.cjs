@@ -36,7 +36,7 @@ async function mountedFixture(t,{scope='project',language='en',width=390,count=2
   if(route==='state')return json({...state,enabled:controls.enabled,available:controls.available});
   if(route==='resources'&&url.searchParams.has('operationId')){const op=operations.get(url.searchParams.get('operationId'));return json({operation:{...op,state:'completed',...(op?.action==='export'?{export:{format:op.kind==='image'?'docker-image-archive':'container-filesystem',bytes:1234,includesVolumes:false,includesRestoreConfig:false,expiresAt:Date.now()+60000}}:{})}});}
   if(route==='resources'){
-   const q=url.searchParams.get('q')||'',offset=Number(url.searchParams.get('cursor')||0),session=ctx.sessionId||'global',items=q?[{...item(1,session),name:q+' result'}]:Array.from({length:count},(_,i)=>item(i,session)),respond=()=>json({inventoryId:controls.changedPage&&offset?'changed':'snapshot-1',availability:'ready',stale:controls.stale,observedAt:controls.observedAt(),items:items.slice(offset,offset+50),totalKnown:items.length,nextCursor:offset+50<items.length?String(offset+50):null});
+   const q=url.searchParams.get('q')||'',offset=Number(url.searchParams.get('cursor')||0),session=ctx.sessionId||'global',items=controls.itemsForSession?.(session)??(q?[{...item(1,session),name:q+' result'}]:Array.from({length:count},(_,i)=>item(i,session))),respond=()=>json({inventoryId:controls.changedPage&&offset?'changed':'snapshot-1',availability:'ready',stale:controls.stale,observedAt:controls.observedAt(),items:items.slice(offset,offset+50),totalKnown:items.length,nextCursor:offset+50<items.length?String(offset+50):null});
    if(q&&q===controls.holdQuery||controls.holdSession&&ctx.sessionId===controls.holdSession){held.push(respond);return;}return respond();
   }
   if(route==='resource-action'){
@@ -80,6 +80,45 @@ test('a delayed old search cannot overwrite the newest resource query',async t=>
 test('fast conversation switch aborts the old API lifetime even when its transport ignores the abort signal',async t=>{
  const f=await mountedFixture(t),p=f.page;f.controls.holdSession='fixture-chat';await p.evaluate(()=>{const original=window.fetch;window.fetch=(url,options)=>{if(String(url).includes('/resources')){const {signal,...rest}=options||{};return original(url,rest);}return original(url,options);};});await p.locator('.apps-resource-inventory').getByRole('button',{name:'Refresh inventory',exact:true}).click();await assertEventually(()=>f.held.length===1);
  await p.evaluate(()=>{appView.destroy();window.appView=HarnessApps.mount(document.getElementById('app'),{scope:'project',sessionId:'other-chat',workspaceId:'fixture-workspace'});});await p.getByText('other-chat resource 0',{exact:true}).waitFor();await f.release();await p.waitForTimeout(100);assert.equal(await p.getByText('fixture-chat resource 0',{exact:true}).count(),0);assert.equal(await p.locator('.apps-resource-inventory').count(),1);assert(f.requests.some(r=>r.query.sessionId==='other-chat'));assert.equal(f.requests.filter(r=>r.data).length,0);assert.deepEqual(f.errors,[]);
+});
+
+test('the owner sidebar shows container actions in order and a different chat has none', async t => {
+ const f = await mountedFixture(t), { page } = f, box = page.locator('.apps-resource-inventory');
+ const id = 'f'.repeat(64), row = box.locator('[data-resource-id="' + id + '"]');
+ f.controls.itemsForSession = session => {
+  if (session !== 'fixture-chat') return [];
+  const stopped = [...f.operations.values()].some(operation => operation.action === 'stop' && operation.id === id);
+  return [{ kind: 'container', id, name: 'Owned container', state: stopped ? 'exited' : 'running',
+   actions: stopped ? ['delete', 'export'] : ['stop'] }];
+ };
+ await box.getByRole('button', { name: 'Refresh inventory', exact: true }).click();
+ await row.getByRole('button', { name: 'Stop', exact: true }).click();
+ assert.equal(await row.getByRole('button', { name: 'Delete', exact: true }).count(), 0);
+ assert.equal(await row.getByRole('button', { name: 'Export / download', exact: true }).count(), 0);
+ await box.getByRole('button', { name: 'Confirm this operation', exact: true }).click();
+ await box.getByRole('button', { name: 'Check original operation', exact: true }).click();
+ await box.getByText('completed', { exact: true }).waitFor();
+ await box.getByRole('button', { name: 'Refresh inventory', exact: true }).click();
+ await row.getByRole('button', { name: 'Export / download', exact: true }).waitFor();
+ assert.equal(await row.getByRole('button', { name: 'Delete', exact: true }).isEnabled(), true);
+ assert.equal(await row.getByRole('button', { name: 'Stop', exact: true }).count(), 0);
+
+ const other = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/resources')
+   && new URL(response.url()).searchParams.get('sessionId') === 'other-chat');
+ await page.evaluate(() => {
+  appView.destroy();
+  window.appView = HarnessApps.mount(document.getElementById('app'), {
+   scope: 'project', sessionId: 'other-chat', workspaceId: 'fixture-workspace',
+  });
+ });
+ await other;
+ await row.waitFor({ state: 'detached' });
+ for (const name of ['Stop', 'Export / download', 'Delete']) {
+  assert.equal(await box.getByRole('button', { name, exact: true }).count(), 0);
+ }
+ assert.deepEqual(f.requests.filter(request => request.data?.phase === 'apply')
+   .map(request => [request.data.sessionId, request.data.action]), [['fixture-chat', 'stop']]);
+ assert.deepEqual(f.errors, []);
 });
 
 test('uncertain stop is reconciled under its original operation after remount, with immutable session references',async t=>{

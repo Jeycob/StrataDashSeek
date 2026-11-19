@@ -112,7 +112,8 @@ export function registerProjectTool(ctx, manager, run = createProjectCommandRunn
     output: { schema: { oneOf: [{ type: 'object', properties: { cwd: { type: 'string' }, exitCode: { oneOf: [{ type: 'integer' }, { type: 'null' }] }, stdout: { type: 'string' }, stderr: { type: 'string' }, timedOut: { type: 'boolean' } }, required: ['cwd', 'exitCode', 'stdout', 'stderr', 'timedOut'], additionalProperties: false }, projectBackgroundSchema] }, render: (args, v) => v.kind === 'background' ? renderProjectBackground(args, v) : [{ type: 'text', text: `Exit code: ${v.exitCode}${v.timedOut ? ' (timed out)' : ''}\n${v.stdout}${v.stderr ? '\n[stderr]\n' + v.stderr : ''}` }] },
     async execute(args, execution) {
       mode.assertUnchanged();
-      const value = await run(args, execution);
+      const commandArgs = manager.projectStarters?.prepare(args, execution) ?? args;
+      const value = await run(commandArgs, execution);
       mode.assertUnchanged();
       if (value.background) return value.background;
       const { cwd, result } = value;

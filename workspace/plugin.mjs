@@ -20,6 +20,7 @@ import { installDockerCleanup } from './docker-cleanup.mjs';
 import { installModelSelection } from './model-selection.mjs';
 import { installProjectMemory } from './project-memory.mjs';
 import { installGenerationProfiles, generationControls, freezeGenerationSettings } from './generation-profiles.mjs';
+import { createProjectStarters, installProjectStarterDiscovery } from './project-starters.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -38,6 +39,8 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   execution.assertUnchanged();
   const manager = new WorkspaceManager(ctx, config, execution); await manager.initialize();
   installProjectMemory(ctx, manager);
+  const projectStarters = manager.projectStarters = createProjectStarters(manager, config.applicationStarters !== false);
+  installProjectStarterDiscovery(ctx, projectStarters);
   const models = installModelSelection(ctx, manager, { lifecycle: false });
   installGenerationProfiles(ctx, manager);
   const appsConfig = await fs.readFile(config.appsConfigFile ?? '/data/harness/apps-config.json', 'utf8').then(JSON.parse).catch(() => null);
