@@ -250,10 +250,12 @@ export function createHostPreview(ctx,manager,run,config,binding=manager.executi
      assertEntry(entry);
      need(entry.capture===capture&&entry.target===target&&!target.signal.aborted,'PREVIEW_SNAPSHOT_BINDING_CHANGED');
     };
+    const deadline=Math.min(entry.deadline,f.now()+f.operationMs);
     const image=await bounded(s=>f.snapshot({
      socketPath:entry.relay.socketPath,origin:entry.endpoint.origin,layout:input.layout,
+     binding:{sessionId,projectId:entry.project.projectId,previewId:entry.id,generation:entry.generation,deadline},
      ...position,signal:s,assertCurrent,
-    }),Math.min(entry.deadline,f.now()+f.operationMs),signal?AbortSignal.any([signal,target.signal]):target.signal);
+    }),deadline,signal?AbortSignal.any([signal,target.signal]):target.signal);
     assertCurrent();
     return {version:1,sessionId,previewId:entry.id,generation:entry.generation,image};
    }

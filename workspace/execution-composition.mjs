@@ -17,6 +17,7 @@ import {createProjectEditorAdapter} from './editor-runtime-adapter.mjs';
 import {retainHeavyToolLease} from '../efficiency/heavy-tool-lease.mjs';
 import {requireProjectExecutionMode} from './execution-mode-service.mjs';
 import {createHostPreview,previewSettings,previewSupported} from './host-preview.mjs';
+import {configuredGuestPreview} from './preview-guest-renderer.mjs';
 import {installBrowserServerHost} from '../quality/browser-server-host.mjs';
 const require=createRequire(import.meta.url);
 const defaults=Object.freeze({hostRunner:createProjectCommandRunner,guestRunner:createGuestProjectCommandRunner,runtimeReceipts:createProjectRuntimeReceiptStore,appsReceipts:createProjectAppsReceiptStore,projectApps:createProjectAppsTools,editorSessions:installEditorSessions,editorAdapter:createProjectEditorAdapter,hostPreview:createHostPreview,previewSupported});
@@ -36,7 +37,9 @@ export function composeProjectExecution(ctx,manager,{appsConfig,callApps,capabil
  const shell=isolated?null:factories.hostRunner(ctx,manager,capture?{captureBackgroundCustody:true}:{},execution);
  if(!isolated){
   const project=registerProjectTool(ctx,manager,shell,execution),managedShell=createManagedShell(ctx,manager,shell,execution);
-  const previews=factories.hostPreview(ctx,manager,shell,previewConfig,execution);
+  const guest=appsConfig?.hostPreviewRenderer;
+  const previews=factories.hostPreview(ctx,manager,shell,previewConfig,execution,
+   guest===undefined ? undefined : {snapshot:configuredGuestPreview(guest)});
   const removeBrowserServers=installBrowserServerHost(ctx,manager,shell);
   return{isolated,run:shell,previews,install(agent){managedShell.install(agent);previews.install(agent);},remove(agent){managedShell.remove(agent);previews.remove(agent);},handles:actual=>managedShell.handles(actual)||previews.handles(actual),managerExecution:actual=>({...actual,agent:manager.ownerAgent(actual.agent),managedProjectShell:managedShell.handles(actual)}),async dispose(){managedShell.dispose();project.dispose();await removeBrowserServers();await previews.dispose();await shell.dispose?.();}};
  }

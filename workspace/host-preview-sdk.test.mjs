@@ -273,6 +273,11 @@ test('only owner preview selection can capture its current generation through th
  const renders=[], image={width:390,height:720,png:'synthetic',regions:[]};
  const f=await fixture(t,{snapshot:async input=>{
   input.assertCurrent();
+  assert.equal(input.binding.sessionId,own.id);
+  assert.equal(input.binding.previewId,ready.previewId);
+  assert.equal(input.binding.generation,ready.generation);
+  assert.match(input.binding.projectId,/^[a-f0-9]{16}$/);
+  assert(input.binding.deadline> Date.now()&&input.binding.deadline<=ready.expiresAt);
   renders.push({socketPath:input.socketPath,origin:input.origin,layout:input.layout,route:input.route,scrollY:input.scrollY});
   return image;
  }});
