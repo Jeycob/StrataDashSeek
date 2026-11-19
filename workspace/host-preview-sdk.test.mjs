@@ -259,7 +259,9 @@ test('restart waits actual old done, uses one hidden SDK admitted spec, preserve
  await f.control({operation:'close',sessionId:a.id});assert.equal(f.processes[1].status,'killed');assert.equal(f.processes[2].kills,0);(await f.run.custodyFor(other,b.id)).assertCurrent();
 });
 test('unknown old settlement blocks restart; no new admitted command or lease extension',async t=>{
- const f=await fixture(t,{operationMs:40}),a=await f.agent('owner'),id=await start(f,a),opened=await open(f,a,id);f.processes[0].hold=true;
+ // Opening a preview persists its launch record. Give that real I/O time to
+ // complete. The held producer still forces the subsequent restart deadline.
+ const f=await fixture(t,{operationMs:500}),a=await f.agent('owner'),id=await start(f,a),opened=await open(f,a,id);f.processes[0].hold=true;
  await assert.rejects(f.control({operation:'restart',sessionId:a.id,previewId:opened.previewId,generation:opened.generation,requestId:'held-stop'}));assert.equal(f.calls.length,1);assert.equal((await f.control({operation:'status',sessionId:a.id})).expiresAt,opened.expiresAt);f.processes[0].release();
 });
 test('scoped permission change revokes the grant and exact own job before further forwarding',async t=>{

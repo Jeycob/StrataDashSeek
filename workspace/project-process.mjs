@@ -90,9 +90,9 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
     // Register immediately before settlement so a long-running preview cannot
     // outlive the SDK waiter timeout.
     const retainOwnerSettlement = () => {
-      if (!ownerPreview || expirySettlement) return;
-      expirySettlement = jobs.wait(id, 1000, owner);
-      void expirySettlement.catch(() => {});
+      if (!ownerPreview || settlementCollection) return;
+      settlementCollection = jobs.wait(id, 1000, owner);
+      void settlementCollection.catch(() => {});
     };
     execution.signal.addEventListener('abort', abortBeforeCommit, { once: true });
     try {
