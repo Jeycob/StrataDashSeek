@@ -32,6 +32,15 @@ handle. Missing job-registry/controller support refuses the start. Use these
 handles instead of `nohup`, `setsid`, `pkill` or `killall`. Lasting deployments
 belong in [Applications and Docker](applications.md).
 
+Background commands retain heavy-tool admission until they finish. This includes
+ordinary background builds and tests. An application server releases that permit
+only after `project_preview open` verifies its exact owned listener and registers
+the preview, allowing subsequent shell copies, HTTP checks and builds to run.
+The server remains an owned job with the same lifetime, cancellation and cleanup;
+preview ownership and capacity limits still apply. A failed preview open does not
+release admission. A preview restart acquires admission again until its replacement
+listener has been verified.
+
 A background acknowledgement is neither completed verification nor a failed
 test. Run milestones in the foreground with `verify_project` so that the
 completed result is recorded.

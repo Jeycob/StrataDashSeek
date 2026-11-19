@@ -8,13 +8,13 @@ export const projectJobLifetime = timeoutMs => Math.min(MAX_PROJECT_JOB_LIFETIME
 const evidenceId=value=>typeof value==='string'&&/^[\x21-\x7e]{1,256}$/.test(value)?value:null;
 export const projectBackgroundSchema = { type: 'object', properties: { kind: { type: 'string', const: 'background' }, jobId: { type: 'string' }, cwd: { type: 'string' } }, required: ['kind', 'jobId', 'cwd'], additionalProperties: false };
 export function renderProjectBackground(args, value) {
-  return [{ type: 'text', text: `Started background job ${value.jobId}. Maximum lifetime: ${projectJobLifetime(args.timeoutMs)}ms. Read status/logs with job_output or job_list; stop this owned job with job_kill. Other build/test commands wait while this job runs: run those checks before starting a long-lived server, or stop this job first. Do not use nohup, setsid or process-name kills.` }];
+  return [{ type: 'text', text: `Started background job ${value.jobId}. Maximum lifetime: ${projectJobLifetime(args.timeoutMs)}ms. Read status/logs with job_output or job_list; stop this owned job with job_kill. Other resource-intensive shell commands, including copies and HTTP checks, wait while this job runs. For an application server, successfully open this exact owned job with project_preview to allow further commands while the preview runs; otherwise finish or stop the job first. Do not use nohup, setsid or process-name kills.` }];
 }
 
 // Only SDK-owned handles are retained. Never discover/adopt arbitrary PIDs or
 // use a process name as an authority to signal another program.
 export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearTimer = clearTimeout, execute = spec => ctx.shell.execute(spec), assertActive = () => {} } = {}) {
-  const active = new Map(); let disposed = false;
+  const active = new Map(), captures = new WeakMap(); let disposed = false;
   async function dispose() {
     if (disposed && active.size === 0) return;
     disposed = true;
@@ -110,7 +110,7 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       catch { cancel('tool call aborted before background acknowledgement'); }
       await done; execution.signal.throwIfAborted();
     }
-    const entry = { id, owner, jobs, done, cancel, captured, launch, expiresAt,call,identity:()=>identity, current:()=>!settled&&!controller.signal.aborted&&process?.status==='running' }; active.set(id, entry);
+    const entry = { id, owner, jobs, done, cancel, captured, launch, expiresAt,call,releaseAdmission,identity:()=>identity, current:()=>!settled&&!controller.signal.aborted&&process?.status==='running' }; active.set(id, entry);
     timer = setTimer(() => {
       if (settled) return;
       const reason = 'project job lifetime limit reached after ' + lifetimeMs + 'ms';
@@ -131,13 +131,20 @@ export function createProjectProcessStarter(ctx, { setTimer = setTimeout, clearT
       await (cancelled?Promise.race([entry.captured,cancelled]):entry.captured);
       if(signal?.aborted)throw new WorkbenchError('PROJECT_CUSTODY_ABORTED','Custody acknowledgement aborted.');
       const assertCurrent=()=>{assertActive();if(active.get(id)!==entry||!entry.current())throw new WorkbenchError('PROJECT_CUSTODY_EXPIRED','Captured wrapper is no longer current.');};
-      assertCurrent();return Object.freeze({jobId:id,owner,identity:entry.identity(),context:entry.launch.context,done:entry.done,assertCurrent,expiresAt:entry.expiresAt,restartSeed:entry.launch.restartSeed,call:entry.call});
+      assertCurrent();const capture=Object.freeze({jobId:id,owner,identity:entry.identity(),context:entry.launch.context,done:entry.done,assertCurrent,expiresAt:entry.expiresAt,restartSeed:entry.launch.restartSeed,call:entry.call});captures.set(capture,entry);return capture;
     }catch(error){
       try{entry.jobs.kill(id,owner,'custody capture failed');}catch{entry.cancel('custody capture failed');}
       await entry.done;throw error;
     }finally{if(abort)signal.removeEventListener('abort',abort);}
   }
+  // Only the trusted preview controller calls this after proving the own peer
+  // and publishing its broker. Job custody and cleanup still last until done.
+  function releasePreviewAdmission(capture){
+    const entry=captures.get(capture);
+    if(!entry)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','Preview admission requires this runner\'s current private custody.');
+    capture.assertCurrent();entry.releaseAdmission();
+  }
   function producerFor(id,owner){const entry=active.get(id);if(!entry||entry.owner!==owner||!entry.launch)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No exact owned producer.');return Object.freeze({done:entry.done,expiresAt:entry.expiresAt,call:entry.call});}
   async function stopOwned(id,owner){const entry=active.get(id);if(!entry||entry.owner!==owner)throw new WorkbenchError('PROJECT_CUSTODY_UNAVAILABLE','No exact owned producer.');try{entry.jobs.kill(id,owner,'owned preview cleanup');}catch{entry.cancel('owned preview cleanup');}await entry.done;}
-  return { start, dispose, custodyFor,producerFor,stopOwned };
+  return { start, dispose, custodyFor,releasePreviewAdmission,producerFor,stopOwned };
 }
