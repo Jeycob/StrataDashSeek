@@ -650,8 +650,24 @@ export class WorkspaceManager {
       }
       const target = await this.checked(() => this.ctx.fs.resolve(file, { signal }));
       if (!within(root, this.ctx.fs.processPath(target))) throw new WorkbenchError('OUTSIDE_PROJECT', 'Resolved path is outside the project.', 403);
-      if (operation === 'stat') { const info = await this.ctx.fs.stat(target, signal); return { path: relative, version: info?.version, bytes: info?.size }; }
-      if (operation === 'read') { const info = await this.ctx.fs.stat(target, signal); if (info?.size > 1024 * 1024) throw new WorkbenchError('TOO_LARGE', 'Use Download for files larger than 1 MiB.', 413); const bytes = await this.ctx.fs.readBytes(target, signal, 1024 * 1024); let text; try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); if (text.includes('\0')) throw Error('binary'); } catch { throw new WorkbenchError('BINARY_FILE', 'Binary files can be downloaded, renamed or deleted.', 415); } return { path: relative, version: info?.version, text }; }
+      if (operation === 'stat') {
+        const info = await this.checked(() => this.ctx.fs.stat(target, signal));
+        return { path: relative, version: info?.version, bytes: info?.size, type: info?.type };
+      }
+      if (operation === 'read') {
+        const info = await this.checked(() => this.ctx.fs.stat(target, signal));
+        if (!info?.version) throw new WorkbenchError('FS_NOT_FOUND', 'Project file does not exist.', 404);
+        if (info.size > 1024 * 1024) throw new WorkbenchError('TOO_LARGE', 'Use Download for files larger than 1 MiB.', 413);
+        const bytes = await this.checked(() => this.ctx.fs.readBytes(target, signal, 1024 * 1024));
+        const after = await this.checked(() => this.ctx.fs.stat(target, signal));
+        if (after?.version !== info.version) throw new WorkbenchError('READ_CHANGED', 'The file changed while it was being read. Retry the read.');
+        let text;
+        try {
+          text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: args.preserveBom === true }).decode(bytes);
+          if (text.includes('\0')) throw Error('binary');
+        } catch { throw new WorkbenchError('BINARY_FILE', 'Binary files can be downloaded, renamed or deleted.', 415); }
+        return { path: relative, version: info.version, text };
+      }
       if (operation === 'write') {
         if (typeof args.text !== 'string' || Buffer.byteLength(args.text) > 1024 * 1024 || args.text.includes('\0')) throw new WorkbenchError('INVALID_TEXT', 'Text exceeds the editor limit.', 413);
         const expected = args.version ? { kind: 'replaceIfVersion', version: args.version } : { kind: 'createIfAbsent' };

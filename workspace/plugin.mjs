@@ -23,6 +23,7 @@ import { installGenerationProfiles, generationControls, freezeGenerationSettings
 import { createProjectStarters, installProjectStarterDiscovery } from './project-starters.mjs';
 import { createTaskBudgets } from './task-budget.mjs';
 import { installQaReceipts } from './qa-receipt.mjs';
+import { installCodeOss } from './codeoss-web/assets.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -40,6 +41,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   const execution = ctx.projectExecutionMode;
   execution.assertUnchanged();
   const manager = new WorkspaceManager(ctx, config, execution); await manager.initialize();
+  installCodeOss(ctx, manager);
   installProjectMemory(ctx, manager);
   const projectStarters = manager.projectStarters = createProjectStarters(manager, config.applicationStarters !== false);
   installProjectStarterDiscovery(ctx, projectStarters);

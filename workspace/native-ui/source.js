@@ -257,6 +257,53 @@ const turnUsageCopy = {
  en: {title:'Turn usage', elapsed:'Elapsed time', input:'Uncached input', read:'Cache read', write:'Cache write', output:'Output tokens', missing:'Unavailable'},
  cs: {title:'Spotřeba za tah', elapsed:'Doba běhu', input:'Necachovaný vstup', read:'Čtení cache', write:'Zápis cache', output:'Výstupní tokeny', missing:'Nedostupné'},
 };
+
+Object.assign(copy.en,{
+ codeOss:'Code – OSS',codeOssHelp:'Edit files in this conversation’s project.',
+ codeOssLoading:'Starting Code – OSS…',codeOssUnavailable:'Code – OSS is unavailable for this project.',
+});
+Object.assign(copy.cs,{
+ codeOss:'Code – OSS',codeOssHelp:'Upravujte soubory projektu tohoto chatu.',
+ codeOssLoading:'Spouští se Code – OSS…',codeOssUnavailable:'Code – OSS není pro tento projekt dostupný.',
+});
+
+function CodeOssPane({sessionId,useTabInfo}){
+ const language=useLanguage(),visible=useTabInfo?.()?.tab.visible!==false;
+ const execution=useExecutionMode(visible);
+ const [launch,setLaunch]=React.useState(null),[state,setState]=React.useState('loading');
+ const frame=React.useRef(null);
+ const supported=execution.mode==='host-compat';
+ const mounted=Boolean(launch)&&execution.mode!=='isolated-guest';
+ React.useEffect(()=>{
+  if(!visible||!supported||launch)return;
+  setLaunch({language,attempt:0});
+ },[language,visible,supported,launch]);
+ React.useEffect(()=>{
+  if(!mounted)return;
+  const receive=event=>{
+   if(event.origin!==location.origin||event.source!==frame.current?.contentWindow||event.data?.type!=='homeai-codeoss')return;
+   if(event.data.state==='unavailable'){setState('unavailable');return;}
+   if(event.data.sessionId===sessionId&&event.data.state==='ready')setState('ready');
+  };
+  window.addEventListener('message',receive);
+  const timeout=setTimeout(()=>setState(current=>current==='loading'?'unavailable':current),25000);
+  return()=>{clearTimeout(timeout);window.removeEventListener('message',receive);};
+ },[launch,sessionId,mounted]);
+ const retry=()=>{
+  setState('loading');
+  if(!supported){void execution.refresh();return;}
+  setLaunch(previous=>({language,attempt:(previous?.attempt??0)+1}));
+ };
+ const showError=state==='unavailable'||!execution.loading&&!mounted&&!supported;
+ return h('section',{className:'harness-native-surface harness-codeoss','data-codeoss-session':sessionId},
+  showError&&h('p',{role:'alert'},text('codeOssUnavailable'),' ',h('button',{type:'button',onClick:retry},text('executionRetry'))),
+  !showError&&state==='loading'&&h('p',{role:'status'},text('codeOssLoading')),
+  mounted&&h('iframe',{key:launch.attempt,ref:frame,title:text('codeOss'),className:'harness-codeoss-frame',
+   referrerPolicy:'no-referrer',allow:'clipboard-read; clipboard-write',
+   src:'/api/workbench/codeoss?'+new URLSearchParams({sessionId,lang:launch.language}),
+  }),
+ );
+}
 const isUsageCount = value => Number.isSafeInteger(value) && value >= 0;
 
 function formatTurnDuration(milliseconds, locale) {
@@ -425,6 +472,7 @@ function apply(ctx,config={}){
  const files={id:'stratadashseek/workspace-files',kind:'files',keepMounted:true,title:()=>text(executionView.mode==='isolated-guest'?'editor':'files'),guide:[{id:'workspace',commandId:'workspace.files',order:10,title:()=>text(executionView.mode==='isolated-guest'?'editor':'files'),description:()=>text(executionView.mode==='isolated-guest'?'editorHelp':'filesHelp')}]};
  const changes={id:'stratadashseek/changes',kind:'harness-changes',keepMounted:true,title:()=>text('changes'),guide:[{id:'changes',order:15,title:()=>text('changes'),description:()=>text('changesHelp')}]};
  const docker={id:'stratadashseek/docker',kind:'harness-docker',keepMounted:true,title:()=>text('docker'),guide:[{id:'docker',order:20,title:()=>text('docker'),description:()=>text('dockerHelp')}]};
+ const codeOss={id:'stratadashseek/codeoss',kind:'harness-codeoss',keepMounted:true,title:()=>text('codeOss'),guide:[{id:'codeoss',order:12,title:()=>text('codeOss'),description:()=>text('codeOssHelp')}]};
  // A compatibility switch also lets integration tests exercise the original
  // Native explorer against the server's effective-root resolver.
  if(config.enhancedFiles!==false){ctx.effect(()=>ctx.sidebarRightTabs.register(files),'native-workbench: files type');register(files,Files);
@@ -436,6 +484,8 @@ function apply(ctx,config={}){
  }
  ctx.effect(()=>ctx.sidebarRightTabs.register(docker),'native-workbench: Docker type');register(docker,Docker);
  ctx.effect(()=>ctx.sidebarRightTabs.register(changes),'native-workbench: Changes type');register(changes,Changes);
+ ctx.effect(()=>ctx.sidebarRightTabs.register(codeOss),'native-workbench: Code-OSS type');
+ register(codeOss,props=>h(CodeOssPane,{...props,key:props.sessionId}));
  // Registered guide definitions use the original SDK EntryBox, like Workspace files.
  let sections=[];
  const registerSettings=()=>{for(const dispose of sections)dispose();sections=[['harness-workspaces','workspaces',WorkspaceSettings],['harness-deployment','docker',()=>h(Mounted,{kind:'apps',section:'settings'})],['harness-notifications','notifications',Notifications],['harness-runtime','advanced',RuntimeSettings]].map(([id,label,Component],index)=>ctx.slots.register({name:'settings.section',id,order:210+index*10,label:()=>text(label)},Component));};
@@ -446,7 +496,7 @@ function apply(ctx,config={}){
  function openSettings(section){const shell=ctx.slots.entriesOfSlot('sidebar.settings')[0],actions=shell?.store?.create?.()?.actions;if(typeof actions?.openSection!=='function'||typeof actions?.open!=='function')return false;if(section)actions.openSection(section);else actions.open();return true;}
  let navigation=0;
  const openPanel=async(kind,sessionId)=>{const ticket=++navigation;if(sessionId)ctx.uiWorkspace.openSession(sessionId);const until=Date.now()+5000;while(Date.now()<until&&ticket===navigation){const mounted=ctx.sidebarRight.mounted.getSnapshot();if(mounted&&(!sessionId||mounted===sessionId)){try{ctx.sidebarRight.openTab(kind);return true;}catch(e){if(!String(e.message).includes('no session surface'))throw e;}}await new Promise(resolve=>setTimeout(resolve,50));}return false;};
- ctx.effect(()=>{const api={openSettings,openDocker:sessionId=>openPanel('harness-docker',sessionId),openFiles:sessionId=>openPanel('files',sessionId),openChanges:sessionId=>openPanel('harness-changes',sessionId)};window.HarnessNativeUI=api;try{window.parent.HarnessNativeUI=api;}catch{}return()=>{if(window.HarnessNativeUI===api)delete window.HarnessNativeUI;try{if(window.parent.HarnessNativeUI===api)delete window.parent.HarnessNativeUI;}catch{}};},'native-workbench: settings bridge');
+ ctx.effect(()=>{const api={openSettings,openDocker:sessionId=>openPanel('harness-docker',sessionId),openFiles:sessionId=>openPanel('files',sessionId),openCodeOss:sessionId=>openPanel('harness-codeoss',sessionId),openChanges:sessionId=>openPanel('harness-changes',sessionId)};window.HarnessNativeUI=api;try{window.parent.HarnessNativeUI=api;}catch{}return()=>{if(window.HarnessNativeUI===api)delete window.HarnessNativeUI;try{if(window.parent.HarnessNativeUI===api)delete window.parent.HarnessNativeUI;}catch{}};},'native-workbench: settings bridge');
  ctx.inject(['contextMenus'],c=>c.effect(()=>c.contextMenus.register({id:'harness.workspace-settings',target:'workspace',order:120,resolve:({workspaceId})=>[{id:'settings',label:text('workspaces'),run:()=>{window.HarnessNativeWorkspaceSelection=workspaceId;window.dispatchEvent(new Event('harness-workspace-settings'));window.HarnessNativeUI?.openSettings('harness-workspaces');}}]}),'native-workbench: workspace menu'));
  ctx.effect(()=>()=>{for(const view of views)view.destroy();views.clear();},'native-workbench: cleanup');
 }

@@ -1,0 +1,15 @@
+{
+  "name": "native-project-files",
+  "publisher": "homeai",
+  "displayName": "%displayName%",
+  "version": "1.0.0",
+  "license": "MIT",
+  "engines": { "vscode": "^1.132.0" },
+  "browser": "./extension.js",
+  "extensionKind": ["web"],
+  "activationEvents": ["onFileSystem:homeai"],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": { "supported": true }
+  }
+}
