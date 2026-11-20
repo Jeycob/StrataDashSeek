@@ -209,6 +209,8 @@ function ExecutionPane(props){
 
 // Park the real browsing context rather than evicting unknown dirty buffers.
 const editorFrames=new Map();
+// Allow the Apps RPC's 125 s timeout plus Native preparation and bridge setup.
+const EDITOR_OPEN_TIMEOUT_MS=150_000;
 function parkEditor(entry){entry.frame.style.display='none';}
 function EditorSession({sessionId,useTabInfo}){
  useLanguage();const host=React.useRef(null),epoch=React.useRef(0),pending=React.useRef(null),[entry,setEntry]=React.useState(()=>editorFrames.get(sessionId)||null),[busy,setBusy]=React.useState(false),[error,setError]=React.useState(''),[confirm,setConfirm]=React.useState(false),[online,setOnline]=React.useState(navigator.onLine);
@@ -228,7 +230,7 @@ function EditorSession({sessionId,useTabInfo}){
   const ticket=++epoch.current,controller=new AbortController();pending.current=controller;setBusy(true);setError('');
   try{
    const execution=await refreshExecution();if(controller.signal.aborted||ticket!==epoch.current)return;if(execution.mode!=='isolated-guest')throw Error(text('executionUnavailable'));
-   const result=await nativeJSON('/api/workbench/editor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'open',sessionId}),signal:controller.signal},30000);
+   const result=await nativeJSON('/api/workbench/editor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'open',sessionId}),signal:controller.signal},EDITOR_OPEN_TIMEOUT_MS);
    if(ticket!==epoch.current)return;if(result.version!==1||result.sessionId!==sessionId)throw Error('Invalid editor response');
    if(result.state!=='ready'){setError(text(result.state==='starting'?'editorStarting':'editorUnavailable')+(result.code?' ('+result.code+')':''));return;}
    const url=new URL(result.url,location.href);

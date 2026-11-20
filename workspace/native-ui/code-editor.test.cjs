@@ -1,27 +1,66 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),{spawn}=require('node:child_process'),{pathToFileURL}=require('node:url');
 const {createSourceFixture}=require('./test-bundle.cjs');
-test('Native code-server pane preserves browsing context across chats, scopes model selection, rejects shared origins and works without AbortSignal static helpers',{skip:!process.env.HARNESS_NATIVE_CLI,timeout:90000},async()=>{
+test('Native code-server tolerates a long open, cancels on conversation switch, and preserves scoped drafts',{skip:!process.env.HARNESS_NATIVE_CLI,timeout:90000},async()=>{
  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'homeai-code-ui-')),toolsDir=path.join(directory,'tools');fs.mkdirSync(toolsDir);
  fs.writeFileSync(path.join(toolsDir,'package.json'),JSON.stringify({name:'editor-test-tools',type:'module',exports:{'.':'./index.mjs','./client':'./client.js','./package.json':'./package.json'},dsh:{client:{platform:'web'}}}));fs.writeFileSync(path.join(toolsDir,'index.mjs'),'export function apply(){}');fs.writeFileSync(path.join(toolsDir,'client.js'),"window.__ModuleLoader__.load({id:'editor-test-tools',factory:()=>({inject:['sessions'],apply(ctx){window.EditorFixture={create:cwd=>ctx.sessions.create({cwd})};}})});");
  const overlay=path.join(directory,'overlay.json');fs.writeFileSync(overlay,JSON.stringify([{id:'ui-settings-models',config:{credentialOnboarding:false}},{insert:[{id:'editor-workbench',name:pathToFileURL(createSourceFixture(directory)).href},{id:'editor-fixture',name:pathToFileURL(path.join(toolsDir,'index.mjs')).href}]}]));
  const child=spawn(process.execPath,[process.env.HARNESS_NATIVE_CLI,'web','--patch',overlay,'--no-open','--host','127.0.0.1','--port','0'],{cwd:directory,env:{...process.env,DSH_HOME:path.join(directory,'home'),PATH:path.dirname(process.execPath)+path.delimiter+process.env.PATH},stdio:['ignore','pipe','pipe'],windowsHide:true});let output='',browser;child.stdout.on('data',chunk=>output+=chunk);child.stderr.on('data',chunk=>output+=chunk);
  try{
   const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{clearInterval(poll);reject(Error('Native fixture did not start'));},40000),poll=setInterval(()=>{const match=output.match(/http:\/\/127\.0\.0\.1:\d+\S*/);if(match){clearInterval(poll);clearTimeout(timer);resolve(match[0]);}},50);child.once('error',reject);});
-  const {chromium}=require(process.env.HARNESS_PLAYWRIGHT_MODULE||'playwright');browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],opens=[],modelWrites=[];page.setDefaultTimeout(12000);page.on('pageerror',error=>errors.push(error.message));await page.addInitScript(()=>{AbortSignal.any=undefined;AbortSignal.timeout=undefined;});
-  const models=new Map(),origins=new Map();let shared=false;
+  const {chromium}=require(process.env.HARNESS_PLAYWRIGHT_MODULE||'playwright'),browserOptions={headless:true};
+  if(process.env.HARNESS_BROWSER_CHANNEL)browserOptions.channel=process.env.HARNESS_BROWSER_CHANNEL;
+  browser=await chromium.launch(browserOptions);
+  const page=await browser.newPage({viewport:{width:1440,height:1000}}),errors=[],opens=[],modelWrites=[];
+  page.setDefaultTimeout(12000);page.on('pageerror',error=>errors.push(error.message));
+  await page.clock.install();
+  await page.addInitScript(()=>{AbortSignal.any=undefined;AbortSignal.timeout=undefined;});
+  const models=new Map(),origins=new Map(),held=new Map();let shared=false;
+  const openButton=page.getByRole('button',{name:'Open code-server',exact:true});
+  async function holdOpen(sessionId){
+   const arrived=Promise.withResolvers(),reply=Promise.withResolvers();held.set(sessionId,{arrived,reply});
+   await openButton.click();await arrived.promise;return reply.resolve;
+  }
   await page.route('**/api/workbench/execution',route=>route.fulfill({json:{version:1,mode:'isolated-guest',available:true}}));
   await page.route('**/api/workbench/models**',async route=>{const request=route.request(),body=request.method()==='POST'?request.postDataJSON():null,id=body?.sessionId||new URL(request.url()).searchParams.get('sessionId');if(body){modelWrites.push(body);models.set(id,body.selection);}return route.fulfill({json:{version:1,sessionId:id,source:models.get(id)?'session':'workspace',selection:models.get(id)||{provider:'local',model:'strata'},workspaceDefault:{provider:'local',model:'strata'},lastUsed:null,groups:[{id:'local',name:'Local',models:[{id:'strata',name:'Local model'}]},{id:'cloud',name:'Cloud',models:[{id:'registered-model',name:'Registered cloud model'}]}]}});});
-  await page.route('**/api/workbench/editor',async route=>{const data=route.request().postDataJSON();opens.push(data);if(!origins.has(data.sessionId))origins.set(data.sessionId,'https://editor-'+(origins.size+1)+'.example');return route.fulfill({json:{version:1,sessionId:data.sessionId,state:'ready',url:(shared?[...origins.values()][0]:origins.get(data.sessionId))+'/__editor/bootstrap#grant=synthetic',expiresAt:Date.now()+600000}});});
+  await page.route('**/api/workbench/editor',async route=>{
+   const data=route.request().postDataJSON();opens.push(data);
+   const pending=held.get(data.sessionId);
+   if(pending){held.delete(data.sessionId);pending.arrived.resolve();if(!await pending.reply.promise)return;}
+   if(!origins.has(data.sessionId))origins.set(data.sessionId,'https://editor-'+(origins.size+1)+'.example');
+   return route.fulfill({json:{version:1,sessionId:data.sessionId,state:'ready',url:(shared?[...origins.values()][0]:origins.get(data.sessionId))+'/__editor/bootstrap#grant=synthetic',expiresAt:Date.now()+600000}});
+  });
   await page.route('https://editor-*.example/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Synthetic editor</title><textarea aria-label="Editor draft"></textarea><script>window.loadIdentity=crypto.randomUUID()</script>'}));
   await page.route('**/api/workbench',route=>route.fulfill({json:{defaults:{},projects:{},workspaces:[],trash:{},running:[]}}));
   await page.goto(url);await page.waitForFunction(()=>window.HarnessNativeUI&&window.EditorFixture);await page.getByRole('dialog').filter({hasText:'Preview Notice'}).getByRole('button',{name:'Continue',exact:true}).click();await page.evaluate(()=>HarnessI18n.setLanguage('en'));
-  const first=await page.evaluate(cwd=>EditorFixture.create(cwd),directory);await page.evaluate(id=>HarnessNativeUI.openFiles(id),first);await page.getByRole('button',{name:'Open code-server',exact:true}).click();const frame=page.frameLocator('.harness-code-frame').first();await frame.getByRole('textbox',{name:'Editor draft'}).fill('FIRST UNSAVED DRAFT');const identity=await page.frames().find(f=>f.url().startsWith(origins.get(first))).evaluate(()=>window.loadIdentity);
+  const first=await page.evaluate(cwd=>EditorFixture.create(cwd),directory);await page.evaluate(id=>HarnessNativeUI.openFiles(id),first);
+  const finishLongOpen=await holdOpen(first);
+  // Simulate a response after the 125 s RPC interval plus 5 s before the RPC.
+  // Let each ordinary mode refresh finish before advancing its separate lease.
+  const opening=page.getByRole('button',{name:'Opening editor…',exact:true});
+  for(let seconds=0;seconds<120;seconds+=20){
+   const refreshed=page.waitForResponse(response=>new URL(response.url()).pathname==='/api/workbench/execution');
+   await page.clock.runFor(20_000);await (await refreshed).finished();
+   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+   assert(await opening.isVisible(),await page.locator('[data-editor-session]').allTextContents());
+  }
+  await page.clock.runFor(10_000);await opening.waitFor();
+  assert.equal(await page.locator('.harness-code-frame').count(),0);
+  finishLongOpen(true);
+  const frame=page.frameLocator('.harness-code-frame').first();await frame.getByRole('textbox',{name:'Editor draft'}).fill('FIRST UNSAVED DRAFT');const identity=await page.frames().find(f=>f.url().startsWith(origins.get(first))).evaluate(()=>window.loadIdentity);
   await page.getByLabel('Model for this conversation',{exact:true}).selectOption(JSON.stringify({provider:'cloud',model:'registered-model'}));await page.waitForFunction(()=>!document.querySelector('[data-model-session] select')?.disabled);assert.deepEqual(modelWrites.map(write=>write.sessionId),[first]);assert.equal(await frame.getByRole('textbox',{name:'Editor draft'}).inputValue(),'FIRST UNSAVED DRAFT');
   page.once('dialog',dialog=>dialog.dismiss());await page.getByRole('button',{name:'Reconnect editor',exact:true}).click();assert.equal(opens.length,1);assert.equal(await frame.getByRole('textbox',{name:'Editor draft'}).inputValue(),'FIRST UNSAVED DRAFT');const launch=new URL(await page.getByRole('link',{name:'Open editor in a new tab'}).getAttribute('href'));assert.equal(launch.hash,'');assert.equal(launch.pathname,'/');
   if(process.env.HOMEAI_EDITOR_EVIDENCE)await page.screenshot({path:path.join(process.env.HOMEAI_EDITOR_EVIDENCE,'native-code-editor-desktop.png')});
   await page.setViewportSize({width:390,height:844});await page.getByRole('button',{name:'Collapse sidebar',exact:true}).waitFor({state:'hidden'});await page.waitForFunction(()=>{const r=document.querySelector('.harness-code-frame')?.getBoundingClientRect();return r&&r.left>=0&&r.right<=innerWidth;});assert.equal(await frame.getByRole('textbox',{name:'Editor draft'}).inputValue(),'FIRST UNSAVED DRAFT');if(process.env.HOMEAI_EDITOR_EVIDENCE)await page.screenshot({path:path.join(process.env.HOMEAI_EDITOR_EVIDENCE,'native-code-editor-mobile.png')});await page.setViewportSize({width:1440,height:1000});
-  const secondPath=path.join(directory,'second');fs.mkdirSync(secondPath);const second=await page.evaluate(cwd=>EditorFixture.create(cwd),secondPath);await page.evaluate(id=>HarnessNativeUI.openFiles(id),second);await page.getByRole('button',{name:'Open code-server',exact:true}).click();await page.frameLocator('.harness-code-frame').nth(1).getByRole('textbox',{name:'Editor draft'}).fill('SECOND DRAFT');
+  const secondPath=path.join(directory,'second');fs.mkdirSync(secondPath);const second=await page.evaluate(cwd=>EditorFixture.create(cwd),secondPath);await page.evaluate(id=>HarnessNativeUI.openFiles(id),second);
+  const settleSwitchedOpen=await holdOpen(second);
+  const cancelled=page.waitForEvent('requestfailed',{predicate:request=>new URL(request.url()).pathname==='/api/workbench/editor'&&request.postDataJSON()?.sessionId===second});
+  try{
+   await page.evaluate(id=>HarnessNativeUI.openFiles(id),first);
+   assert.match((await cancelled).failure().errorText,/ERR_ABORTED/);
+   assert.equal(await page.locator('.harness-code-frame').count(),1);
+  }finally{settleSwitchedOpen(false);}
+  await page.evaluate(id=>HarnessNativeUI.openFiles(id),second);await openButton.click();await page.frameLocator('.harness-code-frame').nth(1).getByRole('textbox',{name:'Editor draft'}).fill('SECOND DRAFT');
   await page.evaluate(id=>HarnessNativeUI.openFiles(id),first);await page.locator('[data-editor-session="'+first+'"]').waitFor({state:'visible'});assert.equal(await frame.getByRole('textbox',{name:'Editor draft'}).inputValue(),'FIRST UNSAVED DRAFT');assert.equal(await page.frames().find(f=>f.url().startsWith(origins.get(first))).evaluate(()=>window.loadIdentity),identity);assert.equal(models.has(second),false);
   shared=true;const thirdPath=path.join(directory,'third');fs.mkdirSync(thirdPath);const third=await page.evaluate(cwd=>EditorFixture.create(cwd),thirdPath);await page.evaluate(id=>HarnessNativeUI.openFiles(id),third);await page.getByRole('button',{name:'Open code-server',exact:true}).click();await page.getByRole('alert').filter({hasText:'already assigned'}).waitFor();assert.equal(await page.locator('.harness-code-frame').count(),2);assert.deepEqual(errors,[]);assert(opens.every(o=>[first,second,third].includes(o.sessionId)));
  }catch(error){if(browser){const page=browser.contexts()[0]?.pages()[0];if(page){await page.screenshot({path:path.join(process.env.HOMEAI_EDITOR_EVIDENCE||directory,'native-code-editor-failure.png')});console.error('Visible dialog:',await page.locator('[role="dialog"]').allTextContents());}}throw error;}finally{
