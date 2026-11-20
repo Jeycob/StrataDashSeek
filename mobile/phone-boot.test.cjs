@@ -2,6 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const {normalizeAvailability,deviceDTO,createWakeCredentials,createAvailabilityController}=require('./phone-boot.js');
 const ready={phase:'ready',sourceReady:true,runtimeReady:true,modelReady:true,reasonCode:'READY'};
+const modelLoading={phase:'model_loading',sourceReady:true,runtimeReady:true,modelReady:false,reasonCode:'MODEL_NOT_LOADED'};
 const token=()=>({version:2,wakeUrl:'https://wake.example.com',credential:'device-only-fixture-token',deviceId:'fixture-device-123',expiresAt:9999999999999,scope:['status','wake']});
 function fixture(overrides={}){
  let time=100000;const states=[],calls={health:0,status:0,wake:0,provision:0,clear:0};
@@ -38,6 +39,95 @@ test('wake failure never reports ready or sleeping; running worker never retrigg
 });
 test('reachable source exposes model-loading phase and polls without waking',async()=>{
  let f;f=fixture({health:async()=>++f.calls.health<3?{phase:'model_loading',sourceReady:true,runtimeReady:true,modelReady:false}:ready});await f.controller.start();assert(f.states.some(s=>s.phase==='model_loading'&&s.sourceReady));assert.equal(f.calls.status,0);assert.equal(f.calls.wake,0);
+});
+test('fresh model loading can outlast the measured cold hydration and finish engine load',async()=>{
+ let f;f=fixture({health:async()=>{
+  const elapsed=f.time()-started,observedAt=new Date(f.time()).toISOString();
+  return {...(elapsed<430000?modelLoading:ready),observedAt};
+ }});
+ const started=f.time(),result=await f.controller.start();
+ assert.equal(result.phase,'ready');assert.equal(f.time()-started,430000);
+ assert(f.states.some(s=>s.phase==='model_loading'&&!s.stale&&Date.parse(s.observedAt)-started>=398750));
+ assert.equal(f.calls.status,0);assert.equal(f.calls.wake,0);
+});
+test('the first fresh model observation starts a single bounded wait',async()=>{
+ let f;f=fixture({health:async()=>{
+  const elapsed=f.time()-started,observedAt=new Date(f.time()).toISOString();
+  if(elapsed<120000||elapsed===180000)return{phase:'starting_services',sourceReady:true,observedAt,retryAfterSeconds:60};
+  return{...modelLoading,observedAt,retryAfterSeconds:60};
+ }});
+ const started=f.time(),result=await f.controller.start();
+ assert.equal(result.reasonCode,'WAIT_TIMEOUT');assert.equal(f.time()-started,120000+990000);
+ assert.equal(f.calls.status,0);assert.equal(f.calls.wake,0);
+});
+test('stale and incomplete model observations keep the original connection timeout',async t=>{
+ for(const [name,overrides] of [
+  ['explicitly stale',{stale:true}],['old timestamp',{observedAt:new Date(0).toISOString()}],['unknown timestamp',{observedAt:null}],
+  ['source still starting',{sourceReady:false}],['runtime still starting',{runtimeReady:false}],['missing model readiness',{modelReady:undefined}],['invalid ready phase',{phase:'ready'}],
+ ])await t.test(name,async()=>{
+  let f;f=fixture({health:async()=>({...modelLoading,observedAt:new Date(f.time()).toISOString(),...overrides})});
+  const started=f.time(),result=await f.controller.start();
+  assert.equal(result.reasonCode,'WAIT_TIMEOUT');assert.equal(f.time()-started,360000);
+  assert.equal(f.calls.status,0);assert.equal(f.calls.wake,0);
+ });
+});
+test('a brief health transport outage after six minutes still allows a ready response',async()=>{
+ let f;f=fixture({health:async()=>{
+  const elapsed=f.time()-started,observedAt=new Date(f.time()).toISOString();
+  if(elapsed===380000)throw Object.assign(Error('proxy temporarily offline'),{status:503});
+  return{...(elapsed<380000?modelLoading:ready),observedAt};
+ }});
+ const started=f.time(),result=await f.controller.start();
+ assert.equal(result.phase,'ready');assert.equal(f.time()-started,382000);
+ assert.equal(f.calls.status,0);assert.equal(f.calls.wake,0);
+});
+test('sustained transport loss cannot wait beyond the last observation or the model deadline',async t=>{
+ for(const [lossAt,timeoutAt] of [[380000,408000],[980000,990000]])await t.test('transport loss at '+lossAt,async()=>{
+  let f;const missed=[];
+  f=fixture({health:async({timeoutMs})=>{
+   const elapsed=f.time()-started;
+   if(elapsed>=lossAt){missed.push({elapsed,timeoutMs});throw Error('offline');}
+   return{...modelLoading,observedAt:new Date(f.time()).toISOString()};
+  }});
+  const started=f.time(),result=await f.controller.start();
+  assert.equal(result.reasonCode,'WAIT_TIMEOUT');assert.equal(f.time()-started,timeoutAt);
+  assert.equal(missed[0].elapsed,lossAt);assert.deepEqual(missed.at(-1),{elapsed:timeoutAt-2000,timeoutMs:2000});
+  assert.equal(f.calls.status,0);assert.equal(f.calls.wake,0);
+ });
+});
+test('an explicit loss of verified model loading after six minutes does not use transport grace',async t=>{
+ for(const phase of ['sleeping','capacity_wait','model_loading','starting_services'])await t.test(phase,async()=>{
+  let f;f=fixture({health:async()=>{
+   const observedAt=new Date(f.time()).toISOString();
+   if(f.time()-started<380000)return{...modelLoading,observedAt};
+   return{...modelLoading,phase,observedAt,stale:phase==='model_loading',runtimeReady:phase==='model_loading'};
+  }});
+  const started=f.time(),result=await f.controller.start();
+  assert.equal(result.reasonCode,'WAIT_TIMEOUT');assert.equal(f.time()-started,380000);
+  assert.equal(f.calls.status,0);assert.equal(f.calls.wake,0);
+ });
+});
+test('Stop waiting during extended model polling ignores a late ready response until manual Retry',async()=>{
+ let f,releaseHealth,requestStarted;
+ const inFlight=new Promise(resolve=>{requestStarted=resolve;});
+ f=fixture({health:async()=>{
+  f.calls.health++;
+  const elapsed=f.time()-started,observedAt=new Date(f.time()).toISOString();
+  if(elapsed<380000)return{...modelLoading,observedAt};
+  if(!releaseHealth)return new Promise(resolve=>{releaseHealth=resolve;requestStarted();});
+  return{...ready,observedAt};
+ }});
+ const started=f.time(),first=f.controller.start();
+ await inFlight;
+ assert.equal(f.controller.state.phase,'model_loading');assert.equal(f.time()-started,380000);
+ f.controller.cancel();releaseHealth({...ready,observedAt:new Date(f.time()).toISOString()});
+ const result=await first;
+ assert.equal(result.reasonCode,'WAIT_CANCELLED');assert.equal(result.modelReady,false);
+ const healthCalls=f.calls.health;await f.controller.start();
+ assert.equal(f.calls.health,healthCalls);assert.equal(f.calls.provision,0);
+ assert(f.states.every(state=>state.phase!=='ready'));
+ assert.equal((await f.controller.start({retry:true})).phase,'ready');assert.equal(f.calls.provision,1);
+ assert.equal(f.calls.status,0);assert.equal(f.calls.wake,0);
 });
 test('cancel ignores late nonabortable health result, does not stop backend, and remains paused until Retry',async()=>{
  let resolve;const f=fixture({health:()=>new Promise(r=>resolve=r)});const request=f.controller.start();f.controller.cancel();resolve(ready);await request;assert.equal(f.controller.state.reasonCode,'WAIT_CANCELLED');assert.equal(f.controller.state.modelReady,false);

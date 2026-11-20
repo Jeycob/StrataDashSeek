@@ -5,6 +5,9 @@
 })(typeof window==='undefined'?globalThis:window,function(){
  'use strict';
  const phases=new Set(['offline','authentication_required','capacity_wait','verifying_update','starting_services','model_loading','ready','sleeping','failed']);
+ const OBSERVATION_MAX_AGE_MS=30000;
+ // A cold start can restore weights from disk before the engine can load them.
+ const MODEL_LOADING_BUDGET_MS=(15*60+90)*1000;
  const code=value=>/^[A-Z][A-Z0-9_]{0,79}$/.test(value||'')?value:'STATUS_UNKNOWN';
  function normalizeAvailability(data={},now=Date.now()){
   const sourceReady=data.sourceReady===true,runtimeReady=data.runtimeReady===true,modelReady=data.modelReady===true;
@@ -13,7 +16,7 @@
   const observed=Date.parse(data.observedAt);
   return{phase,reasonCode:code(data.reasonCode),sourceReady,runtimeReady,modelReady,
    observedAt:Number.isFinite(observed)?new Date(observed).toISOString():null,lastCheckedAt:new Date(now).toISOString(),
-   stale:data.stale===true||!Number.isFinite(observed)||now-observed>30000||observed>now+5000,
+   stale:data.stale===true||!Number.isFinite(observed)||now-observed>OBSERVATION_MAX_AGE_MS||observed>now+5000,
    retryAfterSeconds:Math.min(60,Math.max(1,Number(data.retryAfterSeconds)||2)),
    sourceCommit:/^[a-f0-9]{7,64}$/i.test(data.sourceCommit||'')?data.sourceCommit:null,
    sourcePhase:phases.has(data.sourcePhase)?data.sourcePhase:null,runtimePhase:phases.has(data.runtimePhase)?data.runtimePhase:null};
@@ -91,19 +94,39 @@
    const active=()=>{if(signal.aborted||id!==epoch)throw Object.assign(new Error('Aborted'),{name:'AbortError'});if(!visible()||!online()){cancel(!online()?'NETWORK_OFFLINE':'WAIT_HIDDEN');throw Object.assign(new Error('Aborted'),{name:'AbortError'});}};
    pending=(async()=>{
     let accepted=false,nextWake=0,nextEdge=0,attempt=0,renewed=false,provisioned=false;const deadline=now()+budgetMs;
-    while(now()<deadline){
+    let pollDeadline=deadline,modelDeadline=null,modelFreshUntil=0;
+    while(now()<pollDeadline){
      active();let data=null;
-     try{data=await health({signal});active();}catch(error){active();if(error.code==='DEVICE_REVOKED'){credentials.clear();return publish({phase:'authentication_required',reasonCode:error.code});}}
-     if(data){
-      const result=publish(data);if(result.phase==='ready'){
-       // Provision only through a reachable paired backend; a revocation tombstone prevents silent reenrolment.
-       try{await credentials.provision({signal});active();}catch(error){active();if(['DEVICE_REVOKED','AUTH_UPGRADE_REQUIRED'].includes(error.code))return publish({...result,reasonCode:error.code});}
-       return state;
+     const extended=pollDeadline>deadline&&now()>=deadline;
+     try{data=await health(extended?{signal,timeoutMs:Math.min(10000,pollDeadline-now())}:{signal});active();}catch(error){
+      active();if(error.code==='DEVICE_REVOKED'){credentials.clear();return publish({phase:'authentication_required',reasonCode:error.code});}
+      if(pollDeadline>deadline&&now()>=deadline&&(error.status===undefined||error.status>=500)){
+       // A missed health poll can use the last verified observation until it expires.
+       pollDeadline=Math.min(pollDeadline,modelFreshUntil);
+       const remaining=pollDeadline-now();if(remaining<=0)break;
+       await pause(Math.min(2000,remaining),signal);continue;
       }
-      if(['failed','authentication_required'].includes(result.phase))return result;
-      // A reachable starting service is not a sleeping GPU. Do not send another wake.
-      if(result.phase!=='sleeping'&&result.phase!=='capacity_wait'){await pause(result.retryAfterSeconds*1000,signal);continue;}
      }
+     if(extended&&now()>=pollDeadline)break;
+     const result=data?publish(data):null;
+     if(result?.phase==='ready'){
+      // Provision only through a reachable paired backend; a revocation tombstone prevents silent reenrolment.
+      try{await credentials.provision({signal});active();}catch(error){active();if(['DEVICE_REVOKED','AUTH_UPGRADE_REQUIRED'].includes(error.code))return publish({...result,reasonCode:error.code});}
+      return state;
+     }
+     if(['failed','authentication_required'].includes(result?.phase))return result;
+     if(data?.phase==='model_loading'&&data.modelReady===false&&result.sourceReady&&result.runtimeReady&&!result.stale){
+      modelDeadline??=now()+MODEL_LOADING_BUDGET_MS;
+      modelFreshUntil=Math.min(now(),Date.parse(result.observedAt))+OBSERVATION_MAX_AGE_MS;
+      pollDeadline=Math.max(deadline,modelDeadline);
+      const remaining=pollDeadline-now();if(remaining<=0)break;
+      await pause(Math.min(result.retryAfterSeconds*1000,remaining),signal);continue;
+     }
+     if(pollDeadline>deadline){
+      pollDeadline=deadline;if(now()>=deadline)break;
+     }
+     // A reachable starting service is not a sleeping GPU. Do not send another wake.
+     if(result&&result.phase!=='sleeping'&&result.phase!=='capacity_wait'){await pause(result.retryAfterSeconds*1000,signal);continue;}
      if(now()<nextEdge){await pause(Math.min(5000,nextEdge-now()),signal);continue;}
      let device=credentials.get();
      if(!device||device.expiresAt<=now()){
@@ -147,8 +170,8 @@
   controls.id='availability-controls';controls.style.cssText='width:100%;display:flex;gap:8px;flex-wrap:wrap';retry.type=cancel.type='button';retry.id='availability-retry';cancel.id='availability-cancel';details.id='availability-details';details.style.cssText='width:100%;font-size:12px;overflow-wrap:anywhere';
   label.setAttribute('role','status');label.setAttribute('aria-live','polite');label.setAttribute('aria-atomic','true');controls.append(retry,cancel);details.append(summary,detail);header.append(controls,details);
   const text=()=>copy[win.HarnessI18n?.language==='cs'?'cs':'en'];
-  async function request(url,{signal,...options}={}){
-   const abort=new AbortController(),relay=()=>abort.abort(signal.reason);signal?.addEventListener('abort',relay,{once:true});if(signal?.aborted)relay();const timer=setTimeout(()=>abort.abort(),10000);
+  async function request(url,{signal,timeoutMs=10000,...options}={}){
+   const abort=new AbortController(),relay=()=>abort.abort(signal.reason);signal?.addEventListener('abort',relay,{once:true});if(signal?.aborted)relay();const timer=setTimeout(()=>abort.abort(),timeoutMs);
    try{const r=await win.fetch(url,{cache:'no-store',...options,signal:abort.signal,headers:{...(options.body?{'Content-Type':'application/json'}:{}),...options.headers}});let data;try{data=await r.json();}catch{data={};}if(abort.signal.aborted)throw new Error('Aborted');if(!r.ok)throw Object.assign(new Error('Request failed'),{status:r.status,code:code(data.code),...(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(data.deviceId||'')?{deviceId:data.deviceId}:{}),retryAfterSeconds:Number(r.headers.get('retry-after'))||data.retryAfterSeconds});return data;}
    finally{clearTimeout(timer);signal?.removeEventListener('abort',relay);}
   }
