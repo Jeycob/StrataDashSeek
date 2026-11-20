@@ -2538,7 +2538,129 @@ function PresentedFileDownload({actionUrl}) {
  return h('a', {className:'harness-native-action', href:'/api/workbench/download?'+coordinates, download:''}, labels.download);
 }
 
+const archiveFilesCopy = {
+ en:{title:'Archived files',close:'Close',parent:'Parent folder',loading:'Loading archived files…',
+  empty:'No retained files in this folder.',unavailable:'The archived folder is unavailable.',
+  download:'Download',missing:'This file is no longer available.'},
+ cs:{title:'Soubory z archivu',close:'Zavřít',parent:'Nadřazená složka',loading:'Načítám soubory z archivu…',
+  empty:'V této složce nejsou žádné zachované soubory.',unavailable:'Archivovaná složka není dostupná.',
+  download:'Stáhnout',missing:'Tento soubor už není dostupný.'},
+};
+
+function ArchivedFilesDialog({session,close}) {
+ const labels=archiveFilesCopy[useLanguage()]??archiveFilesCopy.en;
+ const heading=React.useId(), dialog=React.useRef(null), downloadRequest=React.useRef(null);
+ const [folder,setFolder]=React.useState(''), [listing,setListing]=React.useState(null);
+ const [busy,setBusy]=React.useState(false), [missing,setMissing]=React.useState(false);
+ React.useEffect(()=>{
+  const element=dialog.current;
+  element.showModal();
+  return ()=>{
+   downloadRequest.current?.abort();
+   element.close();
+  };
+ },[]);
+ React.useEffect(()=>{
+  const controller=new AbortController();
+  void (async()=>{
+   try {
+    const response=await fetch('/api/workbench',{
+     method:'POST',credentials:'same-origin',cache:'no-store',redirect:'error',
+     headers:{'Content-Type':'application/json'},signal:controller.signal,
+     body:JSON.stringify({op:'file',sessionId:session.sessionId,operation:'list',args:{path:folder}}),
+    });
+    if (!response.ok) throw Error('ARCHIVED_FOLDER_UNAVAILABLE');
+    const result=await response.json();
+    if (!Array.isArray(result?.entries)) throw Error('ARCHIVED_FOLDER_UNAVAILABLE');
+    const entries=result.entries.filter(entry=>entry&&typeof entry.name==='string'&&entry.name&&
+     !['.','..'].includes(entry.name)&&!/[\\/]/.test(entry.name)&&!entry.symlink);
+    if (!controller.signal.aborted) setListing({folder,entries});
+   } catch {
+    if (!controller.signal.aborted) setListing({folder,entries:null});
+   }
+  })();
+  return ()=>controller.abort();
+ },[session.sessionId,folder]);
+ const pathFor=name=>folder?folder+'/'+name:name;
+ function go(next) {
+  setMissing(false);
+  setListing(null);
+  setFolder(next);
+ }
+ async function download(name) {
+  if (downloadRequest.current) return;
+  const controller=new AbortController();
+  downloadRequest.current=controller;
+  setBusy(true);
+  setMissing(false);
+  try {
+   const query=new URLSearchParams({sessionId:session.sessionId,path:pathFor(name)});
+   const response=await fetch('/api/workbench/download?'+query,{
+    credentials:'same-origin',cache:'no-store',redirect:'error',signal:controller.signal,
+   });
+   if (!response.ok) throw Error('ARCHIVED_FILE_UNAVAILABLE');
+   const blob=await response.blob();
+   controller.signal.throwIfAborted();
+   const url=URL.createObjectURL(blob);
+   const link=document.createElement('a');
+   link.href=url;
+   link.download=name;
+   document.body.append(link);
+   link.click();
+   link.remove();
+   setTimeout(()=>URL.revokeObjectURL(url),1000);
+  } catch {
+   if (!controller.signal.aborted) setMissing(true);
+  } finally {
+   downloadRequest.current=null;
+   if (!controller.signal.aborted) setBusy(false);
+  }
+ }
+ const entries=listing?.folder===folder?listing.entries:undefined;
+ const action=(label,onClick,disabled=false)=>h('button',{type:'button',className:'harness-native-action',onClick,disabled},label);
+ return h('dialog',{ref:dialog,'aria-labelledby':heading,onCancel:event=>{event.preventDefault();close();},
+  style:{width:'min(32rem, calc(100vw - 2rem))',maxHeight:'min(80vh, 36rem)',overflow:'auto',
+   color:'inherit',background:'var(--app-background, Canvas)',border:'1px solid currentColor',borderRadius:8}},
+  h('h2',{id:heading},labels.title),
+  h('p',{style:{overflowWrap:'anywhere'}},session.displayTitle,' ',h('code',null,session.sessionId)),
+  folder&&h('p',null,action(labels.parent,()=>go(folder.split('/').slice(0,-1).join('/')),busy),' ',h('code',null,folder)),
+  entries===undefined?h('p',{role:'status'},labels.loading):
+   entries===null?h('p',{role:'status'},labels.unavailable):
+   entries.length===0?h('p',{role:'status'},labels.empty):
+   h('ul',null,entries.map(entry=>h('li',{key:entry.name},
+    entry.directory?action(entry.name,()=>go(pathFor(entry.name)),busy):
+     action(labels.download+' '+entry.name,()=>void download(entry.name),busy)))),
+  missing&&h('p',{role:'alert'},labels.missing),
+  action(labels.close,close));
+}
+
+function registerArchivedFiles(ctx) {
+ ctx.inject(['workspaces','contextMenus'],scope=>{
+  let selected=null;
+  const listeners=new Set();
+  const set=value=>{selected=value;for(const listener of listeners)listener();};
+  const subscribe=listener=>{listeners.add(listener);return()=>listeners.delete(listener);};
+  const snapshot=()=>selected;
+  const archived=sessionId=>scope.workspaces.list.getSnapshot().archivedSessionIds.includes(sessionId);
+  scope.effect(()=>scope.contextMenus.register({
+   id:'harness.archived-files',target:'session',order:500,
+   observe:()=>[scope.workspaces.list],
+   resolve:target=>archived(target.sessionId)?[{
+    id:'harness.archived-files',label:(archiveFilesCopy[window.HarnessI18n.language]??archiveFilesCopy.en).title,
+    run:()=>{if(archived(target.sessionId))set({sessionId:target.sessionId,displayTitle:target.displayTitle});},
+   }]:[],
+  }),'native-workbench: archived files menu');
+  scope.effect(()=>scope.slots.inject('shell.overlay',()=>scope.slots.register({
+   name:'shell.overlay',id:'harness.archived-files',
+  },function ArchiveOverlay(){
+   const session=React.useSyncExternalStore(subscribe,snapshot);
+   return session?h(ArchivedFilesDialog,{key:session.sessionId,session,close:()=>set(null)}):null;
+  })),'native-workbench: archived files dialog');
+ });
+}
+
 function registerPreviewResults(ctx) {
+ registerArchivedFiles(ctx);
  ctx.effect(() => ctx.slots.inject('deliverables.file.actions', () => ctx.slots.register({
   name:'deliverables.file.actions', id:'harness.presented-download',
  }, PresentedFileDownload)), 'native-workbench: presented file download');
