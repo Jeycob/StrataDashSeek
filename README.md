@@ -54,6 +54,9 @@ limits, temporary process jobs and verification behavior.
    To keep a copy of the result, open **Workspace files**, select the output
    file and use **Download**. Preview links are temporary. Project files stay
    in the workspace after the preview ends.
+   For a result in **Archive** (**View options** → **Archived only**), use the
+   session's **…** menu → **Archived files** → **Download** to save a copy,
+   keeping the file in the archived conversation without a new prompt.
 3. In an isolated guest project, open **Code editor** in the right sidebar and
    select **Open code-server**. Save your changes in the editor before closing
    it. Use **Reconnect editor** if the connection expires. The editor requires
@@ -64,6 +67,8 @@ limits, temporary process jobs and verification behavior.
    Apps provisioning, follow the [installation and operation overview](docs/installation-overview.md).
    Listing Docker status does not start the guest. A sleeping instance must be
    woken before you can run a task or open its editor.
+   To see the model the server reports as loaded, check **Loaded model** under
+   **Settings** → **Advanced runtime status**.
 
 ```mermaid
 flowchart LR
