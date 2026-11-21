@@ -16,8 +16,16 @@ class ServiceLifecycle {
  }
  snapshot(){
   const services=Object.fromEntries([...this.services].map(([name,row])=>[name,{...row,failures:[...row.failures]}]));
-  const failed=Object.entries(services).find(([,row])=>row.phase==='failed'),waiting=Object.values(services).some(row=>row.phase==='starting_services');
-  return{version:1,at:this.now(),phase:failed?'failed':waiting?'starting_services':'ready',reasonCode:failed?'SERVICE_RESTART_LIMIT':waiting?'SERVICE_RESTART_BACKOFF':'SERVICES_STARTED',failedService:failed?.[0]||null,services};
+  const critical=Object.entries(services).filter(([name])=>name!=='push-watcher');
+  const failed=critical.find(([,row])=>row.phase==='failed'),waiting=critical.some(([,row])=>row.phase==='starting_services');
+  const watcher=services['push-watcher']?.phase;
+  const phase=failed?'failed':waiting?'starting_services':'ready';
+  let reasonCode='SERVICES_STARTED';
+  if(failed)reasonCode='SERVICE_RESTART_LIMIT';
+  else if(waiting)reasonCode='SERVICE_RESTART_BACKOFF';
+  else if(watcher==='failed')reasonCode='NOTIFICATION_WATCHER_UNAVAILABLE';
+  else if(watcher==='starting_services')reasonCode='NOTIFICATION_WATCHER_RESTARTING';
+  return{version:1,at:this.now(),phase,reasonCode,failedService:failed?.[0]||(watcher==='failed'?'push-watcher':null),services};
  }
 }
 module.exports={ServiceLifecycle};

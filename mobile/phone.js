@@ -56,7 +56,14 @@ byId('settings-button').onclick=()=>{if(window.HarnessNativeUI?.openSettings('ha
 byId('open-app-settings').hidden=true;
 byId('close-settings').onclick=()=>{byId('settings').hidden=true;};
 document.addEventListener('keydown',e=>{if(e.key==='Escape')byId('settings').hidden=true;});
-byId('pair-form').onsubmit=async e=>{e.preventDefault();try{await api('pair',{code:byId('pair-code').value.trim()});byId('pair-code').value='';byId('pair-message').textContent='';await refresh();byId('settings').hidden=false;note(pt('phonePaired'));}catch(err){byId('pair-message').textContent=err.message;}};
+byId('pair-form').onsubmit=async e=>{
+ e.preventDefault();
+ try{
+  await api('pair',{code:byId('pair-code').value.trim()});byId('pair-code').value='';byId('pair-message').textContent='';
+  void window.HarnessWakeCredentials?.provisionAfterPairing?.().catch(()=>{});
+  await refresh();byId('settings').hidden=false;note(pt('phonePaired'));
+ }catch(err){byId('pair-message').textContent=err.message;}
+};
 byId('enable').onclick=async()=>{
  // Permission request stays directly in the user's click. Never request on load.
  const permissionPromise=Notification.requestPermission();

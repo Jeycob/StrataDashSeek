@@ -2,6 +2,7 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {createNativeHealth}=require('./native-health.cjs');
 const SHA=/^[a-f0-9]{40}$/,MAX=32768;
+const WATCHER_DEGRADED=Object.freeze(['push-watcher']),NO_DEGRADATION=Object.freeze([]);
 
 function protectedJSON(directory,name){
  const file=path.join(directory,name),absolute=path.resolve(directory);let cursor=path.parse(absolute).root;
@@ -32,6 +33,7 @@ function createRuntimeReadiness(cfg={},deps={}){
   const sourceReady=update?.version===1&&update.enabled===true&&update.phase==='ready'&&update.signatureVerified===true&&SHA.test(update.appliedCommit||'');
   const fresh=Number.isSafeInteger(services?.at)&&now()-services.at>=-5000&&now()-services.at<15000;
   const matching=services?.sourceCommit===update?.appliedCommit;
+  const degradedServices=sourceReady&&fresh&&matching&&['NOTIFICATION_WATCHER_UNAVAILABLE','NOTIFICATION_WATCHER_RESTARTING'].includes(services.reasonCode)?WATCHER_DEGRADED:NO_DEGRADATION;
   const admissionReady=!!(admission?.version===1&&admission.enabled===true&&admission.sourceCommit===update?.appliedCommit&&/^[a-f0-9-]{36}$/.test(admission.epoch||'')&&Number.isSafeInteger(admission.observedAt)&&now()-admission.observedAt<15000&&admission.observedAt<=now()+1000);
   const recoveryBlocked=recovery?.version===1&&recovery.sourceCommit===update?.appliedCommit&&recovery.phase==='recovery_required'&&Number.isSafeInteger(recovery.observedAt)&&now()-recovery.observedAt<15000&&recovery.observedAt<=now()+1000;
   const runtimeReady=!!(sourceReady&&fresh&&matching&&services.phase==='ready'&&host?.status===200&&host.workspaceReady===true&&host.sourceCommit===update.appliedCommit&&(deps.infrastructureOnly===true||admissionReady&&!recoveryBlocked));
@@ -44,7 +46,7 @@ function createRuntimeReadiness(cfg={},deps={}){
   else if(sourceReady&&!runtimeReady){phase='starting_services';reasonCode=!fresh?'SERVICE_HEARTBEAT_STALE':!admissionReady&&deps.infrastructureOnly!==true?'RUNTIME_ADMISSION_CLOSED':'NATIVE_RUNTIME_STARTING';}
   else if(runtimeReady&&!modelReady){phase='model_loading';reasonCode='MODEL_NOT_LOADED';}
   else if(ready){phase='ready';reasonCode='ALL_CHECKS_READY';}
-  return{version:1,phase,reasonCode,retryAfterSeconds:phase==='failed'?30:2,observedAt:new Date(now()).toISOString(),sourceCommit:SHA.test(update?.appliedCommit||'')?update.appliedCommit:null,sourcePhase:sourceReady?'ready':update?.phase==='blocked'?'failed':'verifying_update',runtimePhase:runtimeReady?'ready':phase==='failed'?'failed':'starting_services',sourceReady,runtimeReady,modelReady,ready};
+  return{version:1,phase,reasonCode,retryAfterSeconds:phase==='failed'?30:2,observedAt:new Date(now()).toISOString(),sourceCommit:SHA.test(update?.appliedCommit||'')?update.appliedCommit:null,sourcePhase:sourceReady?'ready':update?.phase==='blocked'?'failed':'verifying_update',runtimePhase:runtimeReady?'ready':phase==='failed'?'failed':'starting_services',sourceReady,runtimeReady,modelReady,ready,degradedServices};
  }
  return{sample(){if(pending)return pending;if(cached&&now()<until)return Promise.resolve({...cached});pending=collect().then(value=>{cached=value;until=now()+1000;return{...value};}).finally(()=>{pending=null;});return pending;}};
 }

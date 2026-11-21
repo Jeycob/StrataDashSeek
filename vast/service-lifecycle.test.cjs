@@ -12,6 +12,20 @@ test('a failed service cannot be hidden by successful sibling starts and snapsho
  const life=new ServiceLifecycle({maxRestarts:0});life.started('harness');life.exited('harness');life.started('push');const publicCopy=life.snapshot();publicCopy.services.harness.failures.length=0;
  assert.equal(life.snapshot().phase,'failed');assert.equal(life.canStart('harness'),false);assert.equal(life.canStart('telemetry'),true);
 });
+test('notification watcher exhaustion is visible without blocking critical readiness or resetting its budget',()=>{
+ const life=new ServiceLifecycle({maxRestarts:1});life.started('harness');life.started('push-watcher');
+ assert.equal(life.exited('push-watcher').restart,true);
+ assert.equal(life.snapshot().phase,'ready');
+ assert.equal(life.snapshot().reasonCode,'NOTIFICATION_WATCHER_RESTARTING');
+ life.started('push-watcher');assert.equal(life.exited('push-watcher').restart,false);
+ assert.equal(life.canStart('push-watcher'),false);
+ assert.equal(life.snapshot().failedService,'push-watcher');
+ assert.equal(life.snapshot().reasonCode,'NOTIFICATION_WATCHER_UNAVAILABLE');
+ assert.equal(life.snapshot().phase,'ready');
+ life.exited('harness');life.started('harness');life.exited('harness');
+ assert.equal(life.snapshot().failedService,'harness');
+ assert.equal(life.snapshot().phase,'failed');
+});
 test('a controller restart preserves the remaining backoff without treating unused services as unready',()=>{
  let time=1000,saved;const first=new ServiceLifecycle({now:()=>time,changed:state=>{saved=state;}});first.started('harness');first.exited('harness');
  time=2000;const next=new ServiceLifecycle({now:()=>time,initial:saved});assert.equal(next.snapshot().phase,'ready');assert.deepEqual(next.admission('harness'),{allowed:false,retryAfterMs:2000});assert.equal(next.snapshot().phase,'starting_services');

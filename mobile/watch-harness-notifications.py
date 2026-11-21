@@ -1,14 +1,19 @@
 """Read committed Harness events locally. Never transmit message bodies or code."""
 import json
+import errno
 import hashlib
 import pathlib
 import sys
 import time
 import urllib.request
 import argparse
-from notification_watcher_state import WatcherStateStore
+from notification_watcher_state import WatcherStateCapacityError, WatcherStateStore
 
 ROOT=pathlib.Path(__file__).resolve().parents[2]
+
+def storage_pressure(error):
+    return isinstance(error, WatcherStateCapacityError) or error.errno in (errno.ENOSPC, errno.EDQUOT)
+
 def read_rows(file):
     try:
         import compression.zstd as zstd
@@ -54,14 +59,14 @@ def event_intent(event):
 class NotificationWatcher:
     def __init__(self, session_root, store, send, *, clock=time.time, reader=read_rows):
         self.root=pathlib.Path(session_root);self.store=store;self.send=send;self.clock=clock;self.reader=reader
-        self.fingerprints={};self.last_heartbeat=0;self.state=store.load()
+        self.fingerprints={};self.last_heartbeat=0;self.state=store.load();self.unsaved=False
         if self.state is None:
             self.state={'version':1,'initializedAt':int(clock()*1000),'cursors':{},'pending':{}}
             # Ignore pre-installation history exactly once. Subsequent process
             # starts resume durable cursors rather than baselining away downtime.
             for file in self.files():
                 self.state['cursors'][self.key(file)]=max((r.get('seq',0) for r in reader(file) if type(r.get('seq',0)) is int),default=0)
-            self.store.save(self.state)
+            self.unsaved=True
 
     def files(self):
         files=[]
@@ -72,7 +77,13 @@ class NotificationWatcher:
 
     def key(self,file):return file.relative_to(self.root).as_posix()
 
+    def save(self):
+        self.unsaved=True
+        self.store.save(self.state)
+        self.unsaved=False
+
     def tick(self):
+        if self.unsaved:self.save()
         now=int(self.clock()*1000);dirty=False
         if now-self.last_heartbeat>10000:
             try:self.send('heartbeat',{});self.last_heartbeat=now
@@ -105,7 +116,7 @@ class NotificationWatcher:
             self.state['cursors'][key]=highest;self.fingerprints[key]=stamp;dirty=True
         # Cursor advancement and pending intent are one durable snapshot before
         # the first enqueue request. An uncertain receipt reuses the same ID.
-        if dirty:self.store.save(self.state)
+        if dirty:self.save()
         for item,row in list(self.state['pending'].items()):
             if row['expiresAt']<=now:self.state['pending'].pop(item,None)
             elif row['dueAt']>now:continue
@@ -115,7 +126,7 @@ class NotificationWatcher:
                     if receipt.get('persisted') is not True:raise RuntimeError('Durable receipt required')
                     self.state['pending'].pop(item,None)
                 except Exception:row['dueAt']=now+10000
-            self.store.save(self.state)
+            self.save()
 
 
 def main(argv=None):
@@ -129,10 +140,17 @@ def main(argv=None):
     if not 1<=args.port<=65535:raise ValueError('Invalid internal port')
     with WatcherStateStore(args.state_file or args.key_file.parent/'notification-watcher-state.json') as store:
         watcher=NotificationWatcher(args.session_root,store,lambda route,data:post(route,data,key_file=args.key_file,port=args.port))
+        delay=2
         while True:
-            watcher.tick()
-            if args.once:return
-            time.sleep(2)
+            try:
+                watcher.tick()
+                if args.once:return
+                delay=2
+            except (WatcherStateCapacityError, OSError) as error:
+                if args.once or not storage_pressure(error):raise
+                if delay==2:print('Notification watcher waiting for storage capacity',file=sys.stderr,flush=True)
+                delay=min(30, delay*2)
+            time.sleep(delay)
 
 if __name__=='__main__':
     try:main()

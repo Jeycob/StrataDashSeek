@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from notification_watcher_state import WatcherStateStore, WatcherStateError
+from notification_watcher_state import WatcherStateCapacityError, WatcherStateStore, WatcherStateError
 
 try:
     import compression.zstd as zstd
@@ -88,6 +88,43 @@ class WatcherPersistenceTests(unittest.TestCase):
             watcher.send = inspect
             watcher.tick()
             self.assertEqual(len(store.load()['pending']), 1)
+
+    def test_capacity_pause_preserves_previous_state_and_retries_the_durable_intent_first(self):
+        sent = []
+
+        def send(route, body):
+            if route == 'event':
+                state = json.loads(self.file.read_text())
+                self.assertEqual(list(state['cursors'].values()), [1])
+                self.assertEqual(len(state['pending']), 1)
+                sent.append(body['id'])
+            return {'persisted': True}
+
+        with self.store() as store:
+            watcher = self.watcher(store, send)
+            watcher.tick()
+            previous = self.file.read_bytes()
+            self.event(1)
+            with mock.patch('notification_watcher_state.shutil.disk_usage', return_value=mock.Mock(free=0)):
+                for _ in range(2):
+                    with self.assertRaises(WatcherStateCapacityError):
+                        watcher.tick()
+                    self.assertEqual(self.file.read_bytes(), previous)
+                    self.assertEqual(sent, [])
+            watcher.tick()
+            self.assertEqual(sent, ['session-fixture:1'])
+            self.assertEqual(store.load()['pending'], {})
+
+    def test_main_backs_off_on_low_capacity_then_returns_to_its_ordinary_poll(self):
+        capacity = iter([0, 0])
+        with mock.patch.object(watcher_module, 'WatcherStateStore', return_value=self.store()), \
+                mock.patch.object(watcher_module, 'post', return_value={'persisted': True}), \
+                mock.patch.object(watcher_module.time, 'sleep', side_effect=[None, None, KeyboardInterrupt]) as sleep, \
+                mock.patch('notification_watcher_state.shutil.disk_usage', side_effect=lambda _: mock.Mock(free=next(capacity, 1024**4))):
+            with self.assertRaises(KeyboardInterrupt):
+                watcher_module.main(['--session-root', str(self.sessions), '--state-file', str(self.file)])
+        self.assertEqual(sleep.call_args_list, [mock.call(4), mock.call(8), mock.call(2)])
+        self.assertTrue(self.file.is_file())
 
     def test_lost_ack_reuses_the_same_event_id_after_restart_and_legacy_non_durable_receipts_are_not_accepted(self):
         accepted, attempts = set(), []

@@ -4,7 +4,7 @@ function worker(fetchImpl){const events={},writes=[];const self={location:{origi
 test('installed phone loads fresh controls while server is online',async()=>{const w=worker(async()=>new Response('new-app-controls'));let result;w.events.fetch({request:new Request('https://fixture.ts.net/phone/app.js'),respondWith:p=>result=p,waitUntil(){}});assert.equal(await(await result).text(),'new-app-controls');assert.deepEqual(w.writes,[['/phone/app.js','new-app-controls']]);});
 test('phone shell falls back offline and never caches application APIs',async()=>{const w=worker(async()=>{throw Error('offline')});let result;w.events.fetch({request:new Request('https://fixture.ts.net/phone/'),respondWith:p=>result=p,waitUntil(){}});assert.equal(await(await result).text(),'old-shell');let intercepted=false;w.events.fetch({request:new Request('https://fixture.ts.net/phone/api/apps/state'),respondWith(){intercepted=true;},waitUntil(){}});assert.equal(intercepted,false);assert.equal(w.writes.length,0);});
 test('an installed phone replaces the v11 cache and retains fresh boot controls offline',async()=>{
- const previous='harness-static-shell-v11-device-context',next='harness-static-shell-v12-model-cold-start';
+ const previous='harness-static-shell-v12-model-cold-start',next='harness-static-shell-v13-pairing-wake';
  const boot='/phone/boot.js',origin='https://fixture.ts.net',events={};
  const buckets=new Map([[previous,new Map([[boot,'old-boot']])],['unrelated-cache',new Map()]]);
  let skipped=false,claimed=false,online=true;

@@ -14,6 +14,10 @@ class WatcherStateError(RuntimeError):
     pass
 
 
+class WatcherStateCapacityError(WatcherStateError):
+    pass
+
+
 def validate(value):
     if not isinstance(value, dict) or value.get('version') != 1:
         raise WatcherStateError('Unsupported watcher state')
@@ -118,7 +122,7 @@ class WatcherStateStore:
             raise WatcherStateError('Watcher state exceeds limit')
         self._parent()
         if shutil.disk_usage(self.file.parent).free < self.min_free_bytes + len(data):
-            raise WatcherStateError('Watcher state capacity')
+            raise WatcherStateCapacityError('Watcher state capacity')
         try:
             self._check(self.file.lstat())
         except FileNotFoundError:

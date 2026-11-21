@@ -41,14 +41,14 @@
    const old=get(),meta=read(metaKey),verifiedId=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(serverDeviceId||'')?serverDeviceId:null;write(metaKey,{deviceId:verifiedId||old?.deviceId||meta?.deviceId||null,reason});
    try{storage.removeItem(key);}catch{}
   }
-  async function provision({signal}={}){
+  async function provision({signal,allowOwnerEntry=true}={}){
    const meta=read(metaKey);if(meta?.reason==='DEVICE_REVOKED')throw Object.assign(Error('DEVICE_REVOKED'),{code:'DEVICE_REVOKED'});
    if(pending)return pending;
    const ticket=epoch;
    pending=(async()=>{const prior=get(),options={method:'POST',body:JSON.stringify({deviceId:prior?.deviceId||meta?.deviceId||null}),signal};let response;
     try{response=await request('/phone/api/wake-credential',options);}catch(error){
      if(error.code==='DEVICE_REVOKED'){clear('DEVICE_REVOKED',error.deviceId);throw error;}
-     if(error.status!==401||!['PAIRING_REQUIRED','STATUS_UNKNOWN',undefined].includes(error.code)||prior||meta?.deviceId)throw error;
+     if(!allowOwnerEntry||error.status!==401||!['PAIRING_REQUIRED','STATUS_UNKNOWN',undefined].includes(error.code)||prior||meta?.deviceId)throw error;
      // Only a new device can use the existing Tailscale-owner entry once.
      // Revoked/expired identities never pass through this fresh-enrolment path.
      await request('/phone/api/tailscale-login',{method:'POST',body:'{}',signal});
@@ -75,7 +75,12 @@
    write(key,device);write(metaKey,{deviceId:device.deviceId,reason:null,generation:approval.generation,confirmedAt});try{storage.removeItem('harness.wake.key');}catch{}return device;
   }
   function identity(){const device=get(),meta=read(metaKey);return{deviceId:device?.deviceId||meta?.deviceId||null,revoked:meta?.reason==='DEVICE_REVOKED'};}
-  return{get,clear,provision,claimReenrollment,identity};
+  async function provisionAfterPairing(){
+   if(pending)await pending.catch(()=>{});
+   const current=identity();
+   if(!current.deviceId&&!current.revoked)await provision({allowOwnerEntry:false});
+  }
+  return{get,clear,provision,provisionAfterPairing,claimReenrollment,identity};
  }
  function createAvailabilityController({health,status,wake,credentials,onChange=()=>{},visible=()=>true,online=()=>true,now=Date.now,sleep,budgetMs=360000}){
   let state=normalizeAvailability({phase:'offline',reasonCode:'NOT_CHECKED'},now()),pending=null,controller=null,epoch=0,manuallyPaused=false;

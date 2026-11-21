@@ -14,6 +14,15 @@ test('failed runtime or signature gate stays failed despite retained positive bo
  const offline=fixture({native:async()=>null});const c=await offline.sampler.sample();assert.equal(c.phase,'starting_services');assert.equal(c.sourceReady,true);assert.equal(c.runtimeReady,false);
  for(const native of [async()=>({status:401}),async()=>({status:200,workspaceReady:true,sourceCommit:'b'.repeat(40)})])assert.equal((await fixture({native}).sampler.sample()).runtimeReady,false);
 });
+test('notification watcher degradation is exposed without opening admission or relaxing functional checks',async()=>{
+ const f=fixture();f.services.reasonCode='NOTIFICATION_WATCHER_UNAVAILABLE';
+ const ready=await f.sampler.sample();assert.equal(ready.ready,true);assert.deepEqual(ready.degradedServices,['push-watcher']);
+ f.admission.enabled=false;f.advance();const closed=await f.sampler.sample();
+ assert.equal(closed.runtimeReady,false);assert.equal(closed.reasonCode,'RUNTIME_ADMISSION_CLOSED');
+ assert.deepEqual(closed.degradedServices,['push-watcher']);
+ f.services.at=0;f.advance();const stale=await f.sampler.sample();
+ assert.equal(stale.runtimeReady,false);assert.deepEqual(stale.degradedServices,[]);
+});
 test('concurrent reads share one bounded observation and never send a model generation request',async t=>{
  const requests=[];const native=http.createServer((req,res)=>{requests.push(req.method+' '+(req.url.startsWith('/?token=')?'[local-login]':req.url));if(req.url.startsWith('/?token=')){res.writeHead(303,{'Set-Cookie':'local=fixture; HttpOnly'});return res.end();}assert.equal(req.headers.cookie,'local=fixture');res.setHeader('Content-Type','application/json');res.end(JSON.stringify({version:1,workspaceReady:true,sourceCommit:commit}));});const model=http.createServer((req,res)=>{requests.push(req.method+' '+req.url);res.setHeader('Content-Type','application/json');res.end(JSON.stringify({loaded:false}));});
  await Promise.all([new Promise(r=>native.listen(0,'127.0.0.1',r)),new Promise(r=>model.listen(0,'127.0.0.1',r))]);t.after(()=>Promise.all([new Promise(r=>native.close(r)),new Promise(r=>model.close(r))]));
