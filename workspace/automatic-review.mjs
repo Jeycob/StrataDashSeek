@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import {finalizeCriteria} from '../quality/criteria.mjs';
 import { changedApplicationCode } from './verification-guidance.mjs';
 import {acknowledgeAutomatic,recoveryState} from './automatic-recovery.mjs';
-import {watchAutomaticCancellation,releaseAutomaticCancellation} from './automatic-cancellation.mjs';
+import {watchAutomaticCancellation,releaseAutomaticCancellation,reserveAutomaticContinuation} from './automatic-cancellation.mjs';
 
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 export const AUTOMATIC_REVIEW_DEFAULTS = Object.freeze({ maxTaskSteps: 240, maxAutomaticChecks: 3 });
@@ -185,6 +185,8 @@ export async function automaticReview(manager, input, record, budget, settings, 
   let executionSettled = false, execution, abort,timer,dispatchStarted=false;
   try {
     await manager.save();
+    verificationSignal.throwIfAborted();
+    await reserveAutomaticContinuation(manager,id,operation);
     const remaining=operation.deadlineAt-Date.now();
     const expired=()=>deadline.abort(Object.assign(Error('Automatic verification deadline exceeded.'),{code:'AUTOMATIC_VERIFICATION_TIMEOUT'}));
     if(remaining<=0)expired();else{timer=setTimeout(expired,remaining);timer.unref?.();}

@@ -7,6 +7,7 @@ import {confined,digest} from '../quality/core.mjs';
 import {POLICY,WorkCard,archiveLog,summarizeLog,rewriteRisk,patchRemovals,prefixFingerprint} from './context.mjs';
 import {EventLedger,uniqueEngineRecord} from './ledger.mjs';
 import {FairGate,heavyTool,normalizeCompaction,sessionGateStatus} from './gate.mjs';
+import {createTurnScheduler} from './turn-scheduler.mjs';
 import {resourceSnapshot} from './resources.mjs';
 import {bindHeavyToolLease} from './heavy-tool-lease.mjs';
 import {checkWorkspaceHeavyAdmission} from './heavy-admission.mjs';
@@ -43,16 +44,20 @@ export async function apply(ctx,config={}){
   const projectFor=async id=>{if(!projectCache.has(id))projectCache.set(id,await review(id));return projectCache.get(id);};
   const activeFor=agent=>{const id=idOf(agent);return{id,runId:runs.get(id)??`${id}:unknown`};};
   const phase=(taskId,phase,start,end)=>emit('phase',{taskId,phase,start,end});
-  const modelGate=new FairGate({onChange:state=>{
-    try{const file=config.statusPath??path.join(directory,'queue.json'),temp=file+'.'+process.pid+'.tmp';fssync.mkdirSync(path.dirname(file),{recursive:true});fssync.writeFileSync(temp,JSON.stringify({...state,updatedAt:new Date().toISOString(),implementation:'efficiency-request-v1'}),{mode:0o600});fssync.renameSync(temp,file);}catch{}
-  }});
+  const schedule=config.schedule!==false;
+  const localProvider=provider=>provider==='strata-vast'&&providers.has(provider);
+  const writeQueue=state=>{
+    try{const file=config.statusPath??path.join(directory,'queue.json'),temp=file+'.'+process.pid+'.tmp';fssync.mkdirSync(path.dirname(file),{recursive:true});fssync.writeFileSync(temp,JSON.stringify({...state,updatedAt:new Date().toISOString(),implementation:'efficiency-turn-fifo-v1'}),{mode:0o600});fssync.renameSync(temp,file);}catch{}
+  };
+  const turnScheduler=createTurnScheduler(ctx.agents,writeQueue);
+  const modelGate=new FairGate();
   const toolGate=new FairGate({capacity:config.maxHeavyTools??1});
   // Internal read for an already-authorized session; transport/UI owns access.
   // A live snapshot avoids reconstructing current work from historical metrics.
   ctx.on('efficiency/session-status',({sessionId})=>{
     check();const agent=ctx.agents.get(sessionId);if(!agent)return undefined;
     const id=idOf(agent);if(!id)return undefined;
-    return{version:1,sessionId:id,enabled:config.schedule!==false,model:sessionGateStatus(modelGate.snapshot(),id),heavyTools:sessionGateStatus(toolGate.snapshot(),id)};
+    return{version:1,sessionId:id,enabled:schedule,model:sessionGateStatus(turnScheduler.snapshot(),id),heavyTools:sessionGateStatus(toolGate.snapshot(),id)};
   });
   // Preserve the legacy gate's output ceiling for resumed sessions.
   ctx.on('agent/request',async(_input,next)=>{
@@ -67,6 +72,10 @@ export async function apply(ctx,config={}){
     check();
     const {id}=activeFor(input.agent);
     if(providers.has(input.modelSelection.provider)){
+      if(schedule&&localProvider(input.modelSelection.provider)){
+        await turnScheduler.join(turnScheduler.start(input.agent.session,input.turn,true),input.signal);
+      }
+      check();
       await hydrate(id);
       if(input.agent.session.id===id)card(id).observeMessages(input.messages);
       await projectFor(id); // Root identity is stable; do not rescan all sources on every step.
@@ -149,12 +158,18 @@ export async function apply(ctx,config={}){
     const normalized=normalizeCompaction(options);if(normalized)return this.stream(normalized);
     let agent=options.sessionId?ctx.agents.get(String(options.sessionId)):undefined;
     if(!agent)try{const candidate=ctx.agents.currentInitiator?.();if(candidate&&ctx.agents.get(candidate.id)===candidate)agent=candidate;}catch{}
-    const id=agent?idOf(agent):String(options.sessionId??'@maintenance'),requestId=crypto.randomUUID();
+    const id=(agent&&idOf(agent))??String(options.sessionId??'@maintenance'),requestId=crypto.randomUUID();
     return(async function*(){
-      const queued=Date.now();let permit,started,firstToken,usage,finish,before;
+      const queued=Date.now();let permit,turnStream,started,firstToken,usage,finish,before;
       try{
-        if(config.schedule!==false)permit=await modelGate.acquire({rootId:id,sessionId:String(options.sessionId??id),signal:options.signal});
+        if(schedule){
+          if(localProvider(options.provider)){
+            turnStream=await turnScheduler.holdStream(agent?.session,id,requestId,options.signal);
+          }
+          permit=await modelGate.acquire({rootId:id,sessionId:String(options.sessionId??id),signal:options.signal});
+        }
         check();phase(id,'model-queue',queued,Date.now());const observed=await Promise.all([metrics(),resourceSnapshot(path.dirname(directory))]);check();before=observed[0];started=Date.now();
+        turnStream?.assertLive();
         emit('request-start',{taskId:id,requestId,provider:options.provider,model:options.model,purpose:options.purpose??'conversation',resources:observed[1],...prefixFingerprint(options)});
         for await(const chunk of await next()){
           check();
@@ -168,20 +183,40 @@ export async function apply(ctx,config={}){
             emit('request-end',{taskId:id,requestId,started,ended,firstTokenMs:firstToken===undefined?null:firstToken-started,finish:finish??(options.signal?.aborted?'aborted':'interrupted'),engine:measured,engineCorrelation:measured?'unique-new-record-within-serialized-call':'unavailable-or-ambiguous'});
             if(usage)emit('usage',{taskId:id,requestId,...usage});
           }else phase(id,'model-queue',queued,ended);
-        }finally{permit?.release();}
+        }finally{permit?.release();turnStream?.release();}
       }
     })();
   },{prepend:true,global:true});
 
   ctx.on('session/event',(session,event)=>{
     const agent=ctx.agents.get(session.id),id=agent?idOf(agent):session.id,child=id!==session.id;
-    if(event.type==='turn/start'){const runId=`${session.id}:${event.data.turn}`;if(!child){runs.set(id,runId);pendingAccepted.delete(id);if(cards.get(id)?.issues.has('verification'))repairStarts.set(id,Date.now());}emit('turn-start',{taskId:id,runId,child});}
+    if(event.type==='turn/start'){
+      if(schedule){
+        const messageId=agent?.inbox?.nextTurn?.[0]?.id??
+          agent?.inbox?.nextStep?.find(message=>message.role==='user'&&message.source?.kind==='user')?.id;
+        turnScheduler.start(session,event.data.turn,localProvider(agent?.model?.current?.()?.provider),messageId);
+      }
+      const runId=`${session.id}:${event.data.turn}`;if(!child){runs.set(id,runId);pendingAccepted.delete(id);if(cards.get(id)?.issues.has('verification'))repairStarts.set(id,Date.now());}emit('turn-start',{taskId:id,runId,child});
+    }
     if(event.type==='turn/end'){
+      if(schedule)turnScheduler.end(session.id,event.data.turn);
       const runId=`${session.id}:${event.data.turn}`,at=Date.now(),candidate=child?undefined:pendingAccepted.get(id);if(!child)pendingAccepted.delete(id);emit('turn-end',{taskId:id,runId});
       if(!child&&repairStarts.has(id)){phase(id,'repair',repairStarts.get(id),at);repairStarts.delete(id);}
       if(candidate?.runId===runId)void review(id).then(current=>{check();if(current?.sourceHash===candidate.hash)emit('accepted',{taskId:id,runId,at,sourceHash:candidate.hash});else emit('source-changed',{taskId:id,at});}).catch(()=>{});
     }
   });
+  if(schedule){
+    ctx.on('agent/inbox/inserted',({agent,message})=>{
+      if(localProvider(agent.model?.current?.()?.provider)&&agent.inbox?.nextTurn?.some(item=>item.id===message.id)){
+        turnScheduler.reserveInbox(agent.session,message.id);
+      }
+    });
+    ctx.on('agent/inbox/discarded',({agent,message})=>turnScheduler.discardInbox(agent.session.id,message.id));
+    ctx.on('agent/status',({agent,status})=>{if(status==='idle')turnScheduler.finishSession(agent.session.id);});
+    ctx.on('agent/disposed',({agent})=>turnScheduler.disposeSession(agent.session.id));
+    ctx.on('session/disposed',session=>turnScheduler.disposeSession(session.id));
+    ctx.on('efficiency/continuation-lease',(request,next)=>{check();return turnScheduler.continuationLease(request)??next();});
+  }
 
   const output={schema:{type:'object',additionalProperties:true},render:(_args,value)=>[{type:'text',text:JSON.stringify(value)}]};
   ctx.tools.register({name:'focus_context',description:'Get current task, unresolved checks, Git change summary and bounded relevant source excerpts from the isolated project. Prefer this to repeated full-file reads. Returned file hashes bind explain_rewrite to current content.',parameters:{type:'object',properties:{files:{type:'array',maxItems:6,items:{type:'object',properties:{path:{type:'string'},start:{type:'integer',minimum:1},lines:{type:'integer',minimum:1,maximum:120}},required:['path'],additionalProperties:false}}},additionalProperties:false},isConcurrencySafe:()=>true,output,async execute(args,exec){
@@ -209,6 +244,7 @@ export async function apply(ctx,config={}){
     const {id}=activeFor(exec.agent),project=await review(id);mode.assertTool(exec);if(!project||project.legacy)throw Error('Isolated project required.');const name=await confined(project.root,args.path);mode.assertTool(exec);const stat=await fs.stat(name);mode.assertTool(exec);if(!stat.isFile()||stat.size>1024*1024)throw Error('Bounded regular file required.');
     const hash=digest(await fs.readFile(name,'utf8'));mode.assertTool(exec);if(hash!==args.sha256)throw Error('File changed; refresh focus_context.');grants.set(`${id}:${name}`,{hash,reason:args.reason,validationPlan:args.validationPlan});return{recorded:true,path:args.path,sha256:hash,oneUse:true};
   }});
-  ctx.effect(()=>()=>{modelGate.close();toolGate.close();});
-  check();await fs.writeFile(path.join(directory,'loaded.json'),JSON.stringify({at:Date.now(),pid:process.pid,scheduler:config.schedule===false?'observe-only':'request-fifo',maxModelStreams:1,maxHeavyTools:toolGate.capacity}),{mode:0o600});check();
+  ctx.effect(()=>()=>{turnScheduler.close();modelGate.close();toolGate.close();});
+  if(schedule)writeQueue(turnScheduler.snapshot());
+  check();await fs.writeFile(path.join(directory,'loaded.json'),JSON.stringify({at:Date.now(),pid:process.pid,scheduler:schedule?'turn-fifo':'observe-only',maxModelStreams:1,maxHeavyTools:toolGate.capacity}),{mode:0o600});check();
 }

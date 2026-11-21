@@ -51,8 +51,9 @@ export class TurnQueue {
         ticket.reject(ticket.signal.reason ?? new Error('Turn cancelled'));
         continue;
       }
+      ticket.admittedAt = Date.now();
       ticket.receipt = Object.freeze({ rootId: ticket.rootId, sessionId: ticket.sessionId,
-        turn: ticket.turn, waitMilliseconds: Date.now() - ticket.queuedAt });
+        turn: ticket.turn, waitMilliseconds: ticket.admittedAt - ticket.queuedAt });
       this.active.set(ticket.key, ticket);
       ticket.resolve(ticket.receipt);
       this.changed('admitted', ticket);
@@ -95,7 +96,7 @@ export class TurnQueue {
 
   snapshot() {
     const publicTicket = x => ({ rootId: x.rootId, sessionId: x.sessionId, turn: x.turn,
-      sequence: x.sequence, queuedAt: x.queuedAt });
+      sequence: x.sequence, queuedAt: x.queuedAt, admittedAt: x.admittedAt ?? null });
     return { version: 1, updatedAt: new Date().toISOString(), closed: this.closed,
       owner: this.owner, active: [...this.active.values()].map(publicTicket),
       waiting: this.waiting.map(publicTicket) };

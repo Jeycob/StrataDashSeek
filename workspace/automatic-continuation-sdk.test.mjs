@@ -9,6 +9,7 @@ import {pathToFileURL} from 'node:url';
 import {WorkspaceManager} from './manager.mjs';
 import {RepairBudget,DEFAULTS} from './policy.mjs';
 import {continueAutomaticTask} from './automatic-continuation.mjs';
+import {reserveAutomaticContinuation} from './automatic-cancellation.mjs';
 import {hostExecutionBinding} from './fixtures/execution-binding.mjs';
 import {createHash} from 'node:crypto';
 const SDK=process.env.EFFICIENCY_SDK_ROOT??'/data/harness/runtime/node_modules';
@@ -40,6 +41,15 @@ async function fixture(t){
 }
 test('real SDK insertion at Session.nextSeq survives synchronous wake/claim and owner pre-step singleflight',{timeout:10000},async t=>{
  const f=await fixture(t);let entered=0,admitted=0,gateError;
+ const handoff=[];
+ f.ctx.on('efficiency/continuation-lease',input=>{
+  assert.deepEqual(input,{sessionId:'owner',turn:1,messageId:'original-human'});
+  return {bind(messageId){handoff.push(['bind',messageId]);},release(){handoff.push(['release']);}};
+ },{global:true});
+ f.ctx.on('agent/inbox/inserted',({agent,message})=>{
+  if(agent===f.agent)handoff.push(['insert',message.id]);
+ },{global:true});
+ await reserveAutomaticContinuation(f.manager,'owner',f.a.operation);
  f.ctx.on('agent/pre-step',async input=>{entered++;try{await f.manager.preStep(input);admitted++;}catch(e){gateError=e;throw e;}return{kind:'reject'};},{prepend:true,global:true});
  const baseline=f.agent.session.seq;
  // Hold the same owner singleflight while followup synchronously opens its
@@ -53,6 +63,7 @@ test('real SDK insertion at Session.nextSeq survives synchronous wake/claim and 
   releaseFlush();assert.equal(await accepted,true);release(true);await f.agent.whenIdle();
  }finally{releaseFlush();release(false);}
  const insertion=f.events.find(e=>e.type==='agent/inbox/spliced'&&e.data.inserted?.some(m=>m.id===f.a.continuation.message.id));
+ assert.deepEqual(handoff,[['bind',f.a.continuation.message.id],['insert',f.a.continuation.message.id]]);
  assert.equal(f.a.continuation.baselineSeq,baseline);assert.equal(insertion.seq,baseline,'Session.seq is the NEXT append sequence, not the last event');
  assert.equal(f.a.continuation.state,'accepted');assert.equal(f.a.continuationNeeded,false);assert.equal(entered,1);assert.equal(admitted,1,gateError?.message);assert.equal(gateError,undefined);
  assert(f.events.some(e=>e.type==='agent/inbox/spliced'&&e.data.removedCount===1));assert.equal(f.modelCalls(),0);assert.equal(f.agent.status,'idle');assert.equal(f.a.taskSteps,81,'Only the admitted next step is charged; the original task survives');

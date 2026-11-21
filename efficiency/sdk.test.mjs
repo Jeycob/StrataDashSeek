@@ -79,11 +79,190 @@ test('real SDK appends changing work context without changing the reusable syste
   const after=await assemble();assert.equal(renderPrompt(before),renderPrompt(after));assert.match(JSON.stringify(renderContextSections(after)),/keyboard access/);
   assert.deepEqual(before.tools.map(x=>x.name),after.tools.map(x=>x.name));assert.equal(messages[0].content[0].text,'Implement checkout and preserve keyboard access.');
 });
-test('real SDK can infer for another task during a heavy tool while serializing provider streams',async t=>{
+test('real SDK serializes standalone provider streams during a tool with no submitted turn',async t=>{
   const f=await fixture(t);let releaseTool,toolStarted,toolActive=false,activeModels=0,maxModels=0;
   const started=new Promise(r=>toolStarted=r),holdTool=new Promise(r=>releaseTool=r);
   f.ctx.tools.register({name:'project_exec',description:'SDK controlled heavy tool',parameters:{type:'object',properties:{command:{type:'string'}},required:['command']},output:{schema:{type:'object'},render:()=>[{type:'text',text:'done'}]},execute:async()=>{toolActive=true;toolStarted();await holdTool;toolActive=false;return{exitCode:0};}});
   const runningTool=f.call('project_exec',{command:'npm test'});await started;
   const request=async id=>{const stream=f.ctx.waterfall('llm/stream',{provider:'strata-vast',sessionId:id,messages:[],signal:new AbortController().signal},()=>async function*(){activeModels++;maxModels=Math.max(activeModels,maxModels);assert.equal(toolActive,true);try{yield{type:'text-delta',index:0,text:'OK'};await new Promise(r=>setTimeout(r,30));yield{type:'finish',reason:{kind:'stop'}};}finally{activeModels--;}}());for await(const _ of await stream){}};
   await Promise.all([request('B'),request('C')]);assert.equal(maxModels,1);assert.equal(toolActive,true);releaseTool();assert.equal((await runningTool).isError,false);
+});
+
+async function activate(fibers){
+  const deadline=Date.now()+3000;
+  while(fibers.some(fiber=>fiber.state!==2)){
+    await Promise.all(fibers.map(fiber=>fiber.await()));
+    assert(Date.now()<deadline,'The pinned SDK services did not start');
+    await new Promise(resolve=>setImmediate(resolve));
+  }
+}
+
+async function turnFixture(t,{failOwner=false,followup=false,holdStreamCleanup=false}={}){
+  const [{default:Sessions},{default:Agents},{default:Projections},{default:Llm,LlmAdapter},{default:AgentLoop},{NativeToolExecutor}]=await Promise.all(
+    ['dsh-session','dsh-agent','dsh-session-projection','dsh-llm','dsh-agent-loop','dsh-tool-executor-native'].map(name=>load(name)));
+  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'eff-sdk-turn-'));
+  const ctx=new Context(),events=[],calls=[],agents={};
+  const toolStarted=Promise.withResolvers(),holdTool=Promise.withResolvers();
+  const secondStarted=Promise.withResolvers(),holdSecond=Promise.withResolvers();
+  const cleanupStarted=Promise.withResolvers(),holdCleanup=Promise.withResolvers();
+  const local='strata-vast',cloud='cloud-fixture';
+  t.after(async()=>{
+    holdTool.resolve();holdSecond.resolve();holdCleanup.resolve();
+    await ctx.fiber.dispose();
+    assert.equal(path.dirname(await fs.realpath(directory)),await fs.realpath(os.tmpdir()));
+    assert(path.basename(directory).startsWith('eff-sdk-turn-'));
+    await fs.rm(directory,{recursive:true,force:true});
+  });
+  await activate([Sessions,Agents,Projections,Llm,SystemPrompt,Tools].map(plugin=>ctx.plugin(plugin,{})));
+  await activate([ctx.plugin(AgentLoop,{agents:[],maxParallelToolCalls:1})]);
+  ctx.tools.setExecutor(new NativeToolExecutor(ctx));
+  ctx.provide('projectExecutionMode',hostMode());
+  ctx.provide('sessionQuery',{async readSession(){return{events:[]};}});
+  ctx.provide('shell',{});ctx.provide('shellEnv',{});
+  ctx.on('workspace-runtime/review',async()=>({root:directory,sourceHash:'fixture-source',legacy:false}));
+  ctx.on('session/event',(session,event)=>{
+    if(event.type==='turn/start')events.push({id:session.id,kind:'start',turn:event.data.turn});
+    if(event.type==='turn/end')events.push({id:session.id,kind:'end',turn:event.data.turn,reason:event.data.reason.kind});
+  },{global:true});
+  ctx.tools.register({
+    name:'project_exec',description:'Inert fixture for a tool that outlasts a model call',
+    parameters:{type:'object',properties:{command:{type:'string'}},required:['command'],additionalProperties:false},
+    output:{schema:{type:'object'},render:()=>[{type:'text',text:'The fixture tool returned.'}]},
+    async execute(){events.push({id:'A',kind:'tool-start'});toolStarted.resolve();await holdTool.promise;events.push({id:'A',kind:'tool-end'});return{exitCode:0};},
+  });
+  class InertAdapter extends LlmAdapter{
+    async *stream(request){
+      const id=String(request.sessionId),number=calls.filter(item=>item.id===id).length+1;
+      assert(Object.hasOwn(agents,id),`Unexpected synthetic request for ${id}`);
+      assert(number<=(id==='A'?(followup?3:2):1),`Unexpected extra synthetic request for ${id}`);
+      const call={id,kind:'model',number,provider:request.provider,model:request.model};
+      calls.push(call);events.push(call);
+      if(id==='A'&&number===1){
+        yield{type:'block-end',index:0,block:{type:'tool-call',id:'fixture-tool-a',name:'project_exec',arguments:'{"command":"fixture build"}'}};
+      }else{
+        if(id==='A'&&number===2){
+          secondStarted.resolve();
+          if(holdStreamCleanup){
+            const {signal}=request;
+            try{
+              if(!signal.aborted)await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));
+              signal.throwIfAborted();
+            }finally{
+              cleanupStarted.resolve();await holdCleanup.promise;
+              events.push({id:'A',kind:'stream-cleanup'});
+            }
+          }else await holdSecond.promise;
+          if(failOwner)throw Error('Synthetic owner model failure');
+        }
+        yield{type:'text-delta',index:0,text:'The synthetic task is complete.'};
+      }
+      yield{type:'finish',reason:{kind:'stop'},replayState:{response:{stopReason:'stop'}}};
+    }
+  }
+  ctx.llm.registerAdapter([local,cloud],new InertAdapter());
+  const stateDirectory=path.join(directory,'efficiency');
+  await activate([ctx.plugin({name:'whole-task-sdk-fixture',apply,inject},{stateDirectory,engineMetrics:false,providers:[local]})]);
+  for(const id of ['A','B','C','cloud']){
+    const provider=id==='cloud'?cloud:local;
+    const {agent}=await ctx.agents.create({sessionId:id,meta:{cwd:directory},agentOptions:{provider,model:'fixture-'+provider}});
+    agents[id]=agent;
+  }
+  const submit=(id,task=id)=>agents[id].followup({id:'human-'+task,role:'user',source:{kind:'user'},content:[{type:'text',text:`Do synthetic task ${task}.`}]});
+  const status=id=>ctx.waterfall('efficiency/session-status',{sessionId:id},()=>undefined);
+  const end=(id,turn=1)=>events.find(event=>event.kind==='end'&&event.id===id&&event.turn===turn)?.reason;
+  const modelOrder=()=>calls.map(({id,number})=>`${id}:${number}`);
+  async function waitFor(predicate,description){
+    const deadline=Date.now()+3000;
+    while(!await predicate()){
+      assert(Date.now()<deadline,`${description}: ${JSON.stringify(events)}`);
+      await new Promise(resolve=>setTimeout(resolve,5));
+    }
+  }
+  async function enqueue(id){
+    submit(id);
+    await waitFor(async()=>{
+      assert(!calls.some(call=>call.id===id),`${id} entered the model before A ended`);
+      return (await status(id))?.model.phase==='waiting';
+    },`${id} did not enter the task queue`);
+    assert(events.some(event=>event.kind==='start'&&event.id===id));
+  }
+  function beforeModel(earlier,later,{kind='end',turn=1,call=1}={}){
+    const previous=events.findIndex(event=>event.id===earlier&&event.kind===kind&&(kind!=='end'||event.turn===turn));
+    const started=events.findIndex(event=>event.id===later&&event.kind==='model'&&event.number===call);
+    assert(previous>=0&&started>previous,`${later} inferred before ${earlier} ${kind}: ${JSON.stringify(events)}`);
+  }
+  return{agents,calls,submit,status,end,modelOrder,enqueue,beforeModel,toolStarted,holdTool,secondStarted,holdSecond,cleanupStarted,holdCleanup};
+}
+
+test('real SDK keeps submitted local tasks FIFO through the owner tool and second call while preserving a cloud route',{timeout:15000},async t=>{
+  const f=await turnFixture(t);
+  f.submit('A');await f.toolStarted.promise;
+  await f.enqueue('B');await f.enqueue('C');
+  assert.equal((await f.status('A')).model.phase,'admitted');
+  assert.deepEqual(f.modelOrder(),['A:1']);
+  f.submit('cloud');await f.agents.cloud.whenIdle();
+  assert.equal(f.end('cloud'),'completed');
+  assert.deepEqual(f.calls[1],{id:'cloud',kind:'model',number:1,provider:'cloud-fixture',model:'fixture-cloud-fixture'});
+  assert.deepEqual(f.modelOrder(),['A:1','cloud:1']);
+  f.holdTool.resolve();await f.secondStarted.promise;
+  assert.deepEqual(f.modelOrder(),['A:1','cloud:1','A:2']);
+  assert.equal((await f.status('B')).model.phase,'waiting');
+  assert.equal((await f.status('C')).model.phase,'waiting');
+  f.holdSecond.resolve();await Promise.all([f.agents.A,f.agents.B,f.agents.C].map(agent=>agent.whenIdle()));
+  assert.deepEqual(f.modelOrder(),['A:1','cloud:1','A:2','B:1','C:1']);
+  for(const id of ['A','B','C'])assert.equal(f.end(id),'completed');
+  f.beforeModel('A','B');f.beforeModel('B','C');
+});
+
+test('real SDK cancelled waiter makes no model call and owner cancellation releases the next task',{timeout:15000},async t=>{
+  const f=await turnFixture(t);
+  f.submit('A');await f.toolStarted.promise;
+  await f.enqueue('B');await f.enqueue('C');
+  f.agents.B.cancel({kind:'user'});await f.agents.B.whenIdle();
+  assert.equal(f.end('B'),'aborted');assert.equal((await f.status('B')).model.phase,'idle');
+  assert.deepEqual(f.modelOrder(),['A:1']);
+  assert.equal((await f.status('C')).model.phase,'waiting');
+  f.agents.A.cancel({kind:'user'});f.holdTool.resolve();
+  await Promise.all([f.agents.A,f.agents.C].map(agent=>agent.whenIdle()));
+  assert.equal(f.end('A'),'aborted');assert.equal(f.end('C'),'completed');
+  assert.deepEqual(f.modelOrder(),['A:1','C:1']);f.beforeModel('A','C');
+});
+
+test('real SDK model failure releases both submitted local tasks in order',{timeout:15000},async t=>{
+  const f=await turnFixture(t,{failOwner:true});
+  f.submit('A');await f.toolStarted.promise;
+  await f.enqueue('B');await f.enqueue('C');
+  f.holdTool.resolve();await f.secondStarted.promise;
+  assert.deepEqual(f.modelOrder(),['A:1','A:2']);
+  f.holdSecond.resolve();await Promise.all([f.agents.A,f.agents.B,f.agents.C].map(agent=>agent.whenIdle()));
+  assert.equal(f.end('A'),'error');assert.equal(f.end('B'),'completed');assert.equal(f.end('C'),'completed');
+  assert.deepEqual(f.modelOrder(),['A:1','A:2','B:1','C:1']);
+  f.beforeModel('A','B');f.beforeModel('B','C');
+});
+
+test('real SDK preserves accepted ordering for a followup in the active chat',{timeout:15000},async t=>{
+  const f=await turnFixture(t,{followup:true});
+  f.submit('A','A1');await f.toolStarted.promise;
+  await f.enqueue('B');f.submit('A','A2');await f.enqueue('C');
+  assert.deepEqual(f.modelOrder(),['A:1']);
+  f.holdTool.resolve();await f.secondStarted.promise;
+  f.holdSecond.resolve();await Promise.all([f.agents.A,f.agents.B,f.agents.C].map(agent=>agent.whenIdle()));
+  assert.deepEqual(f.modelOrder(),['A:1','A:2','B:1','A:3','C:1']);
+  assert.equal(f.end('A',2),'completed');
+  f.beforeModel('A','B');f.beforeModel('B','A',{call:3});f.beforeModel('A','C',{turn:2});
+});
+
+test('real SDK owner cancellation waits for the model iterator to finish its delayed cleanup',{timeout:15000},async t=>{
+  const f=await turnFixture(t,{holdStreamCleanup:true});
+  f.submit('A');await f.toolStarted.promise;
+  await f.enqueue('B');await f.enqueue('C');
+  f.holdTool.resolve();await f.secondStarted.promise;
+  f.agents.A.cancel({kind:'user'});await f.cleanupStarted.promise;
+  assert.deepEqual(f.modelOrder(),['A:1','A:2']);
+  assert.equal((await f.status('B')).model.phase,'waiting');
+  assert.equal((await f.status('C')).model.phase,'waiting');
+  f.holdCleanup.resolve();await Promise.all([f.agents.A,f.agents.B,f.agents.C].map(agent=>agent.whenIdle()));
+  assert.equal(f.end('A'),'aborted');assert.equal(f.end('B'),'completed');assert.equal(f.end('C'),'completed');
+  assert.deepEqual(f.modelOrder(),['A:1','A:2','B:1','C:1']);
+  f.beforeModel('A','B',{kind:'stream-cleanup'});f.beforeModel('A','B');f.beforeModel('B','C');
 });

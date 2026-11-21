@@ -15,14 +15,13 @@ Implemented units:
    tool-call/result pairing; do not reorder provider-owned tool declarations.
 4. Record queue, model, tools, repair and verified success. Allocate a billing
    interval once across concurrent tasks; keep idle/unknown cost explicit.
-5. Optional request-level FIFO scheduling, with at most one local inference
-   stream, cancellation-safe release and overlap between inference and tools.
-   Replace the old whole-turn gate only after coordinated isolated validation.
+5. FIFO scheduling for local tasks, with at most one local inference stream
+   and cancellation-safe release.
 
 No speed or model-quality gain is claimed until measured on the actual engine.
 Installed Strata is not assumed to accept vanilla llama.cpp flags. Read its
 actual metrics and compare repeated stable prefixes with deliberately changed
-prefixes. Do not restart or retune the live engine during this rollout.
+prefixes.
 
 ## Context and edits
 
@@ -57,12 +56,21 @@ verification. The single workspace repair budget remains authoritative.
 `cloud-homeai-turn-queue-v1` implementation. Never mount two active schedulers.
 Apply it only after checking native running sessions, model busy/queued and the
 other chats' maintenance/cold-cycle work. Existing lifecycle tracking protects
-the entire turn, including tools; it is neither removed nor replaced.
+the entire turn, including tools.
 
-Request FIFO holds one permit until its actual async iterator fully unwinds.
-Cancellation cannot release a GPU permit while a provider is still working.
-Other projects may infer during a tool/build phase. A separate FIFO limits
-heavy native tool operations to one; ordinary reads retain native scheduling.
+For `strata-vast`, pending tasks are admitted in submission order. The admitted
+root turn and its related agents keep their place across model calls and tool
+work until the turn finishes, fails, or is stopped. A cancelled waiting turn
+leaves the queue before starting local inference. Individual local model
+streams still share one permit until each iterator has fully unwound. A
+separate FIFO limits heavy native tool operations to one. Other model providers
+and ordinary reads retain their usual scheduling.
+
+A verified automatic continuation can inherit the original task's position
+through its exact continuation receipt. A new user submission receives its own
+position, including when it is queued behind a running local turn in the same
+conversation. A follow-up queued during Native maintenance or a cloud turn
+enters the local queue when its local turn opens.
 `schedule:false` provides observation/policy with the legacy scheduler retained
 for controlled comparisons. Cache switching can offset concurrency gains, so
 real traces must distinguish responsiveness from total accepted-task throughput.
@@ -70,7 +78,8 @@ real traces must distinguish responsiveness from total accepted-task throughput.
 The internal `efficiency/session-status` waterfall accepts `{sessionId}` from an
 already-authorized server caller. It returns `{version:1, sessionId, enabled,
 model, heavyTools}` for that root session and its subagents; unknown sessions
-return `undefined`. Each gate has `{phase, since, active, waiting}`. `since` is
+return `undefined`. The model status describes local turn ownership and waiting.
+Each gate has `{phase, since, active, waiting}`. `since` is
 Unix epoch milliseconds (or `null` when idle). `phase` is `idle`, `waiting`, or
 `admitted`; admitted means an occupied slot, not observed computation. When a
 project owns a slot and also queues another command, `admitted` takes priority

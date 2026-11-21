@@ -2,7 +2,7 @@ import {hasOwnedRangeProvider} from './owned-range-state.mjs';
 import {continueAutomaticTask} from './automatic-continuation.mjs';
 import {reconcileLegacyAutomatic} from './automatic-legacy.mjs';
 import {automaticBound as pauseUntil} from './automatic-bounds.mjs';
-import {releaseAutomaticCancellation} from './automatic-cancellation.mjs';
+import {releaseAutomaticCancellation,releaseAutomaticContinuation} from './automatic-cancellation.mjs';
 
 export const AUTOMATIC_CLEANUP_MS=10000;
 const own=(manager,id,a)=>!!manager.data.sessions[id]&&manager.budgets.get(id)?.automatic===a
@@ -50,7 +50,11 @@ export async function retainAutomaticProcess(manager,{execution,projectRoot,sour
   await manager.reconcileAutomatic(id);
  },()=>{}).catch(()=>manager.ctx.logger?.warn('Automatic process terminal proof could not be saved.'));
 }
-const pending=(a,reason,state='pending')=>{recoveryState(a,state,reason);return false;};
+const pending=(a,reason,state='pending')=>{
+ recoveryState(a,state,reason);
+ if(state==='blocked')releaseAutomaticContinuation(a.operation);
+ return false;
+};
 export async function reconcileAutomatic(manager,id){
  manager.automaticReconciliations??=new Map();
  if(manager.automaticReconciliations.has(id))return manager.automaticReconciliations.get(id);
