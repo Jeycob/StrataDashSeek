@@ -47,7 +47,7 @@ The public Worker knows how to wake the configured instance. Once connected, the
 
 **Infisical Cloud** is the vault for application secrets. Create or change the actual password or API key in the project's Infisical environment and folder. On a phone or desktop, open **Settings → Applications and Docker → Credential vault** to connect the Application machine identity. Its **Client Secret** authenticates HomeAI to Infisical.
 
-In the application's **Project credentials**, choose the same project ID, environment and folder, then map the names. For example, `DATABASE_URL=STORE_DATABASE_URL` makes the Infisical entry named `STORE_DATABASE_URL` available to the running app as `DATABASE_URL`. The model's `project_apps` tool reports the runtime aliases and build secret IDs. [Setup and rotation](docs/applications-v2.md#store-a-password-and-use-it-in-an-app)
+In the application's **Project credentials**, choose the same project ID, environment and folder, then map the names. For example, `DATABASE_URL=STORE_DATABASE_URL` maps the Infisical entry `STORE_DATABASE_URL` to the runtime alias `DATABASE_URL`. A Docker Compose service uses `${HARNESS_SECRET:DATABASE_URL}` as the value of its environment entry. The model's `project_apps` tool reports the runtime aliases and build secret IDs. [Setup and rotation](docs/applications-v2.md#store-a-password-and-use-it-in-an-app)
 
 The Cloudflare wake Worker has its own credentials for starting the Vast instance. [Worker secrets](docs/harness-operations.md#deploy-the-wake-worker)
 
