@@ -168,33 +168,132 @@
  const copy={en:{offline:'Cannot reach the server. Check Tailscale and your connection.',authentication_required:'This device needs pairing or renewed access.',capacity_wait:'Waiting for GPU capacity. Your files remain stored.',verifying_update:'Verifying the server update…',starting_services:'Starting Harness services…',model_loading:'Harness is open. The model is still loading…',ready:'Harness and model are ready.',sleeping:'The instance is stopped. Requesting a wake…',failed:'Connection could not be completed.',retry:'Retry',cancel:'Stop waiting',details:'Connection details',stale:'Last observation may be out of date',unchecked:'No verified observation yet'},cs:{offline:'Server není dostupný. Zkontroluj Tailscale a připojení.',authentication_required:'Toto zařízení potřebuje propojení nebo obnovit přístup.',capacity_wait:'Čekám na volnou GPU. Soubory zůstávají uložené.',verifying_update:'Ověřuji aktualizaci serveru…',starting_services:'Spouštím služby Harnessu…',model_loading:'Harness je otevřený. Model se ještě načítá…',ready:'Harness i model jsou připravené.',sleeping:'Instance je zastavená. Žádám o probuzení…',failed:'Připojení se nepodařilo dokončit.',retry:'Zkusit znovu',cancel:'Přestat čekat',details:'Podrobnosti připojení',stale:'Poslední pozorování může být zastaralé',unchecked:'Zatím bez ověřeného pozorování'}};
  copy.en.WAIT_CANCELLED='Stopped waiting on this device. Server jobs continue.';
  copy.cs.WAIT_CANCELLED='Čekání na tomto zařízení zastaveno. Úlohy na serveru pokračují.';
- function install(win){
-  const doc=win.document,header=doc.getElementById('setup-header'),label=doc.getElementById('status');if(!header||!label)return;
-  let last=null;win.harnessBackendReady=false;win.harnessModelReady=false;
-  const controls=doc.createElement('div'),retry=doc.createElement('button'),cancel=doc.createElement('button'),details=doc.createElement('details'),summary=doc.createElement('summary'),detail=doc.createElement('p');
-  controls.id='availability-controls';controls.style.cssText='width:100%;display:flex;gap:8px;flex-wrap:wrap';retry.type=cancel.type='button';retry.id='availability-retry';cancel.id='availability-cancel';details.id='availability-details';details.style.cssText='width:100%;font-size:12px;overflow-wrap:anywhere';
-  label.setAttribute('role','status');label.setAttribute('aria-live','polite');label.setAttribute('aria-atomic','true');controls.append(retry,cancel);details.append(summary,detail);header.append(controls,details);
-  const text=()=>copy[win.HarnessI18n?.language==='cs'?'cs':'en'];
-  async function request(url,{signal,timeoutMs=10000,...options}={}){
-   const abort=new AbortController(),relay=()=>abort.abort(signal.reason);signal?.addEventListener('abort',relay,{once:true});if(signal?.aborted)relay();const timer=setTimeout(()=>abort.abort(),timeoutMs);
-   try{const r=await win.fetch(url,{cache:'no-store',...options,signal:abort.signal,headers:{...(options.body?{'Content-Type':'application/json'}:{}),...options.headers}});let data;try{data=await r.json();}catch{data={};}if(abort.signal.aborted)throw new Error('Aborted');if(!r.ok)throw Object.assign(new Error('Request failed'),{status:r.status,code:code(data.code),...(/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(data.deviceId||'')?{deviceId:data.deviceId}:{}),retryAfterSeconds:Number(r.headers.get('retry-after'))||data.retryAfterSeconds});return data;}
-   finally{clearTimeout(timer);signal?.removeEventListener('abort',relay);}
+ function install(win) {
+  const doc = win.document;
+  const header = doc.getElementById('setup-header');
+  const label = doc.getElementById('status');
+  if (!header || !label) return;
+
+  let lastState = null;
+  win.harnessBackendReady = false;
+  win.harnessModelReady = false;
+
+  const controls = doc.createElement('div');
+  const retry = doc.createElement('button');
+  const cancel = doc.createElement('button');
+  const details = doc.createElement('details');
+  const summary = doc.createElement('summary');
+  const detail = doc.createElement('p');
+  controls.id = 'availability-controls';
+  controls.style.cssText = 'width:100%;display:flex;gap:8px;flex-wrap:wrap';
+  retry.type = 'button';
+  retry.id = 'availability-retry';
+  cancel.type = 'button';
+  cancel.id = 'availability-cancel';
+  details.id = 'availability-details';
+  details.style.cssText = 'width:100%;font-size:12px;overflow-wrap:anywhere';
+  label.setAttribute('role', 'status');
+  label.setAttribute('aria-live', 'polite');
+  label.setAttribute('aria-atomic', 'true');
+  controls.append(retry, cancel);
+  details.append(summary, detail);
+  header.append(controls, details);
+
+  async function request(url, {signal, timeoutMs = 10000, ...options} = {}) {
+   const abort = new AbortController();
+   const relayAbort = () => abort.abort(signal.reason);
+   signal?.addEventListener('abort', relayAbort, {once: true});
+   if (signal?.aborted) relayAbort();
+   const timer = setTimeout(() => abort.abort(), timeoutMs);
+   try {
+    const response = await win.fetch(url, {
+     cache: 'no-store',
+     ...options,
+     signal: abort.signal,
+     headers: {
+      ...(options.body ? {'Content-Type': 'application/json'} : {}),
+      ...options.headers
+     }
+    });
+    let data;
+    try {
+     data = await response.json();
+    } catch {
+     data = {};
+    }
+    if (abort.signal.aborted) throw new Error('Aborted');
+    if (!response.ok) {
+     const validDeviceId = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(data.deviceId || '');
+     throw Object.assign(new Error('Request failed'), {
+      status: response.status,
+      code: code(data.code),
+      ...(validDeviceId ? {deviceId: data.deviceId} : {}),
+      retryAfterSeconds: Number(response.headers.get('retry-after')) || data.retryAfterSeconds
+     });
+    }
+    return data;
+   } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', relayAbort);
+   }
   }
-  const credentials=createWakeCredentials({storage:win.localStorage,request});win.HarnessWakeCredentials=credentials;
-  function render(state){last=state;win.harnessBackendReady=state.sourceReady&&state.runtimeReady;win.harnessModelReady=state.phase==='ready';win.harnessAvailabilityState=state;
-   const t=text();label.textContent=t[state.reasonCode]||t[state.phase];summary.textContent=t.details;retry.textContent=t.retry;cancel.textContent=t.cancel;
-   detail.textContent=[state.reasonCode,state.observedAt||t.unchecked,state.stale?t.stale:''].filter(Boolean).join(' · ');
-   header.hidden=state.phase==='ready';controls.hidden=state.phase==='ready';cancel.hidden=['ready','failed','authentication_required'].includes(state.phase)||['WAIT_CANCELLED','WAIT_HIDDEN','NETWORK_OFFLINE'].includes(state.reasonCode);
-   retry.hidden=state.phase==='ready';win.dispatchEvent(new win.CustomEvent('harness-availability',{detail:state}));
+
+  const credentials = createWakeCredentials({storage: win.localStorage, request});
+  win.HarnessWakeCredentials = credentials;
+
+  function render(state) {
+   lastState = state;
+   const ready = state.phase === 'ready';
+   win.harnessBackendReady = state.sourceReady && state.runtimeReady;
+   win.harnessModelReady = ready;
+   win.harnessAvailabilityState = state;
+
+   const strings = copy[win.HarnessI18n?.language === 'cs' ? 'cs' : 'en'];
+   label.textContent = strings[state.reasonCode] || strings[state.phase];
+   summary.textContent = strings.details;
+   retry.textContent = strings.retry;
+   cancel.textContent = strings.cancel;
+   detail.textContent = [
+    state.reasonCode,
+    state.observedAt || strings.unchecked,
+    state.stale ? strings.stale : ''
+   ].filter(Boolean).join(' · ');
+
+   header.hidden = ready;
+   controls.hidden = ready;
+   retry.hidden = ready;
+   cancel.hidden = ['ready', 'failed', 'authentication_required'].includes(state.phase) ||
+    ['WAIT_CANCELLED', 'WAIT_HIDDEN', 'NETWORK_OFFLINE'].includes(state.reasonCode);
+   win.dispatchEvent(new win.CustomEvent('harness-availability', {detail: state}));
   }
-  const controller=createAvailabilityController({health:options=>request('/phone/health',options),credentials,visible:()=>!doc.hidden,online:()=>win.navigator.onLine!==false,onChange:render,
-   status:(device,options)=>request(device.wakeUrl+'/api/status',{...options,headers:{Authorization:'Bearer '+device.credential}}),
-   wake:(device,options)=>request(device.wakeUrl+'/api/wake',{...options,method:'POST',headers:{Authorization:'Bearer '+device.credential},body:'{}'})});
-  win.harnessPrepare=options=>controller.start(options);win.harnessCancelWait=()=>controller.cancel();
-  retry.onclick=()=>controller.start({retry:true});cancel.onclick=()=>controller.cancel();
-  doc.addEventListener('visibilitychange',()=>doc.hidden?controller.cancel('WAIT_HIDDEN'):controller.start());
-  win.addEventListener('offline',()=>controller.cancel('NETWORK_OFFLINE'));win.addEventListener('online',()=>controller.start());
-  win.addEventListener('harness-language-change',()=>last&&render(last));render(controller.state);
+
+  const controller = createAvailabilityController({
+   health: options => request('/phone/health', options),
+   credentials,
+   visible: () => !doc.hidden,
+   online: () => win.navigator.onLine !== false,
+   onChange: render,
+   status: (device, options) => request(device.wakeUrl + '/api/status', {
+    ...options,
+    headers: {Authorization: 'Bearer ' + device.credential}
+   }),
+   wake: (device, options) => request(device.wakeUrl + '/api/wake', {
+    ...options,
+    method: 'POST',
+    headers: {Authorization: 'Bearer ' + device.credential},
+    body: '{}'
+   })
+  });
+
+  win.harnessPrepare = options => controller.start(options);
+  win.harnessCancelWait = () => controller.cancel();
+  retry.onclick = () => controller.start({retry: true});
+  cancel.onclick = () => controller.cancel();
+  doc.addEventListener('visibilitychange', () => doc.hidden ? controller.cancel('WAIT_HIDDEN') : controller.start());
+  win.addEventListener('offline', () => controller.cancel('NETWORK_OFFLINE'));
+  win.addEventListener('online', () => controller.start());
+  win.addEventListener('harness-language-change', () => lastState && render(lastState));
+  render(controller.state);
  }
  return{normalizeAvailability,deviceDTO,createWakeCredentials,createAvailabilityController,install};
 });

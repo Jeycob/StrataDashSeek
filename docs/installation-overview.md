@@ -8,7 +8,9 @@ the persistent model, runtime, projects, databases and push identity.
 | Open the existing server | Private phone launcher or authenticated wake page | Starts the configured existing instance on demand |
 | Start services after boot | Installed `bootstrap/start.sh` → signed source verification → supervisor | Reuses installed services; no ordinary-boot dependency installation |
 | Update code before first requests | [Signed startup gate](startup-updates.md) | Verifies pinned signatures, dependencies and disk reserve before activating source |
-| First Harness installation | `vast/install.sh`, then README configuration steps | Installs pinned runtime; requires an existing compatible Strata/model installation |
+| First Harness installation | [Install the harness](harness-operations.md#install-the-harness) | Installs the pinned runtime on an existing compatible Strata/model installation |
+| Configure cloud wake and phone access | [Deploy the wake Worker](harness-operations.md#deploy-the-wake-worker) and [pair a phone](harness-operations.md#pair-a-phone) | Connects the existing rental to the authenticated wake service and private mobile interface |
+| Investigate idle shutdown or an interrupted task | [Idle and maintenance](harness-operations.md#idle-and-maintenance) and [task budgets and recovery](harness-operations.md#task-budgets-and-recovery) | Explains guard decisions, time and token limits, and how to resume an eligible incomplete turn |
 | Enable optional Apps | [Applications](applications.md) and [v2 workflows](applications-v2.md) | Explicit dedicated container worker, preview, checks, releases and rollback |
 | Isolate projects and verify results | [Workspace runtime](workspace-runtime.md) | Native project roots, verification and per-project state |
 | Tune context, scheduling and measure cost | [Efficiency](../efficiency/README.md) | Coordinated profile extension and separate billing collector |
@@ -29,8 +31,8 @@ through the installed stable bootstrap. Confirm signed update readiness before
 the first Harness request. Pair the phone, enable optional Apps and development
 tools, then prove task execution, persistence and a cold cycle before enabling
 automatic idle stop. The idle guard may remain disabled during validation;
-the separate startup update policy must remain enabled. The detailed README
-steps are the executable procedure. Do not replay first installation over a
+the separate startup update policy must remain enabled. Follow the detailed
+[operations guide](harness-operations.md#install-the-harness) for the commands. Do not replay first installation over a
 configured live profile or replace credentials with example values.
 
 Keep bootstrap provisioning separate from routine startup. A staged release

@@ -4,21 +4,44 @@ from preview_settings import PreviewSettings
 from runtime_paths import RuntimePaths
 ROOT=pathlib.Path('/data/harness')
 RUNTIME=None
+DEFAULT_IDLE_SECONDS = 300
+
 def load(path): return json.loads(path.read_text())
-def decide(now, last, lifecycle, model, jobs, lease_until, idle_seconds=300, applications=None):
-    if now < lease_until: return False,'maintenance lease'
-    if now-lifecycle.get('at',0)/1000>20: return False,'lifecycle heartbeat unavailable'
-    if lifecycle.get('active',0): return False,'agent turn active'
-    if model.get('busy') is not False or model.get('queued',0): return False,'model busy or unknown'
+
+
+def idle_elapsed_seconds(now, last, lifecycle, applications):
+    last_turn = lifecycle.get('lastActivity', now * 1000) / 1000
+    last_app = (applications or {}).get('lastActivity', 0) / 1000
+    return now - max(last, last_turn, last_app)
+
+
+def decide(now, last, lifecycle, model, jobs, lease_until, idle_seconds=DEFAULT_IDLE_SECONDS, applications=None):
+    if now < lease_until:
+        return False, 'maintenance lease'
+    if now - lifecycle.get('at', 0) / 1000 > 20:
+        return False, 'lifecycle heartbeat unavailable'
+    if lifecycle.get('active', 0):
+        return False, 'agent turn active'
+    if model.get('busy') is not False or model.get('queued', 0):
+        return False, 'model busy or unknown'
+
     if applications is not None:
-        if now-applications.get('at',0)/1000>20:return False,'application worker heartbeat unavailable'
-        if applications.get('active',0):return False,'application build or test active'
-        if applications.get('holdUntil',0)>now*1000:return False,'application awake lease'
-        worker=applications.get('worker') or {}
-        if worker.get('pid') and worker.get('phase') not in ('ready','asleep'):return False,'application worker transition or error'
-    if jobs: return False,'workspace process active'
-    if now-max(last,lifecycle.get('lastActivity',now*1000)/1000,(applications or {}).get('lastActivity',0)/1000)<idle_seconds: return False,'idle countdown'
-    return True,'idle'
+        if now - applications.get('at', 0) / 1000 > 20:
+            return False, 'application worker heartbeat unavailable'
+        if applications.get('active', 0):
+            return False, 'application build or test active'
+        if applications.get('holdUntil', 0) > now * 1000:
+            return False, 'application awake lease'
+        worker = applications.get('worker') or {}
+        if worker.get('pid') and worker.get('phase') not in ('ready', 'asleep'):
+            return False, 'application worker transition or error'
+
+    if jobs:
+        return False, 'workspace process active'
+    if idle_elapsed_seconds(now, last, lifecycle, applications) < idle_seconds:
+        return False, 'idle countdown'
+    return True, 'idle'
+
 def preview_processes(processes):
     """Recognize development listeners; unknown builds remain active jobs."""
     ignored=set()
@@ -99,16 +122,27 @@ def main():
             try:preview_settings.tick()
             except Exception as e:audit('preview_settings_error',error=type(e).__name__)
             cfg=load(ROOT/'root-secrets/guard.json')
+            idle_timeout = cfg.get('idleSeconds', DEFAULT_IDLE_SECONDS)
+            ignore_previews = cfg.get('ignoreDetachedPreviews', False)
             now=time.time();life=RUNTIME.read_agent('lifecycle.json')
             with urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=4) as r:model=json.load(r)
             app_path=ROOT/'state/applications/activity.json'
             applications=RUNTIME.read_agent('applications/activity.json')
             app_cfg=ROOT/'apps-config.json'
             if app_cfg.exists() and load(app_cfg).get('enabled') and applications is None:raise RuntimeError('Enabled application service has no heartbeat')
-            jobs=jobs_running(cfg.get('ignoreDetachedPreviews',False),applications);lease=(RUNTIME.read_agent('maintenance.json',4096) or {}).get('until',0)
-            if life.get('active') or model.get('busy') or model.get('queued') or jobs or applications and applications.get('active'):last=now
-            stop,reason=decide(now,last,life,model,jobs,lease,cfg.get('idleSeconds',300),applications)
-            state={'at':now,'canStop':stop,'reason':reason,'idleTimeoutSeconds':cfg.get('idleSeconds',300),'idleSeconds':max(0,int(now-max(last,life.get('lastActivity',now*1000)/1000,(applications or {}).get('lastActivity',0)/1000)))}
+            jobs = jobs_running(ignore_previews, applications)
+            lease = (RUNTIME.read_agent('maintenance.json', 4096) or {}).get('until', 0)
+            if (life.get('active') or model.get('busy') or model.get('queued')
+                    or jobs or (applications and applications.get('active'))):
+                last = now
+            stop, reason = decide(now, last, life, model, jobs, lease, idle_timeout, applications)
+            state = {
+                'at': now,
+                'canStop': stop,
+                'reason': reason,
+                'idleTimeoutSeconds': idle_timeout,
+                'idleSeconds': max(0, int(idle_elapsed_seconds(now, last, life, applications))),
+            }
             RUNTIME.publish('idle-status.json',state)
             if stop and cfg.get('enabled',False):
                 # Second read prevents stopping across an observed new turn.
@@ -116,7 +150,12 @@ def main():
                 life2=RUNTIME.read_agent('lifecycle.json')
                 with urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=4) as r:model2=json.load(r)
                 apps2=RUNTIME.read_agent('applications/activity.json')
-                if not decide(time.time(),last,life2,model2,jobs_running(cfg.get('ignoreDetachedPreviews',False),apps2),lease,cfg.get('idleSeconds',300),apps2)[0]:continue
+                stop, _ = decide(
+                    time.time(), last, life2, model2, jobs_running(ignore_previews, apps2),
+                    lease, idle_timeout, apps2,
+                )
+                if not stop:
+                    continue
                 token=None
                 try:
                     if apps2 is not None:
@@ -126,7 +165,11 @@ def main():
                     life3=RUNTIME.read_agent('lifecycle.json');apps3=RUNTIME.read_agent('applications/activity.json')
                     with urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=4) as r:model3=json.load(r)
                     lease3=(RUNTIME.read_agent('maintenance.json',4096) or {}).get('until',0)
-                    if not decide(time.time(),last,life3,model3,jobs_running(cfg.get('ignoreDetachedPreviews',False),apps3),lease3,cfg.get('idleSeconds',300),apps3)[0]:
+                    stop, _ = decide(
+                        time.time(), last, life3, model3, jobs_running(ignore_previews, apps3),
+                        lease3, idle_timeout, apps3,
+                    )
+                    if not stop:
                         audit('sleep_cancelled',reason='new activity after Docker save');continue
                     if token and application_call('confirm-sleep',{'token':token},10).get('ready') is not True:raise RuntimeError('Application sleep token changed')
                     key=pathlib.Path(cfg.get('vastApiKeyFile',str(ROOT/'root-secrets/vast-api.key'))).read_text().strip()

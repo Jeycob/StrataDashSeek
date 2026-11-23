@@ -1,20 +1,30 @@
 'use strict';
-// Linux integration fixture: isolated real Harness and a loopback fake LLM.
-// No production conversation, GPU call or model configuration is modified.
-const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),cp=require('node:child_process'),crypto=require('node:crypto'),assert=require('node:assert/strict'),{createRequire}=require('node:module');
+// Run an isolated Harness against the live model to compare reasoning settings.
+const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),crypto=require('node:crypto'),assert=require('node:assert/strict'),{createRequire}=require('node:module');
 const R='/data/harness',node=R+'/node/bin/node',runtime=R+'/runtime',yaml=createRequire(runtime+'/node_modules/@deepseek-ai/dsh/package.json')('yaml');
 const {addWorkspaceRuntime}=require('./install.cjs');
 const origin='http://127.0.0.1:3196',dir=R+'/home/.reasoning-benchmark-'+Date.now(),home=dir+'/.dsh',profile=home+'/profiles/web',source=dir+'/source',log=dir+'/harness.log';
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));let child,server,cookie='',plan=[],calls=0,wire=[],failures=[];
-const checks={};
-async function check(name,fn){try{await fn();checks[name]=true;}catch(e){checks[name]=false;failures.push({name,error:e.message});throw e;}}
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+let child, server, cookie = '';
 async function request(route,body){return fetch(origin+route,{method:body?'POST':'GET',headers:{Origin:origin,Cookie:cookie,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,redirect:'manual',signal:AbortSignal.timeout(30000)});}
 async function rpc(method,args){const r=await request('/api/'+method,{type:'client-request',rpcId:crypto.randomUUID(),method,payload:{args:method==='session/list'?{_request:args}:{request:args}}}),d=await r.json();if(!r.ok||!d.result?.ok)throw Error(method+': '+JSON.stringify(d).slice(0,500));return d.result.value;}
 async function api(body,expected=200){const r=await request('/api/workbench',body),v=await r.json();assert.equal(r.status,expected,JSON.stringify(v).slice(0,400));return v;}
 async function events(id){const p=await rpc('session/projections',{sessionId:id});const page=await rpc('session/page',{address:{kind:'session',sessionId:id},throughSeq:p.asOfSeq,maxMessages:1000});return page.records.filter(x=>x.type==='event').map(x=>x.event);}
-async function turn(id,prompt){const start=calls;await rpc('session/prompt',{sessionId:id,requestId:crypto.randomUUID(),mode:'queue',content:[{type:'text',text:prompt}]});for(let i=0;i<1600;i++){const s=(await rpc('session/list',{})).items.find(x=>x.sessionId===id);if(s&&!s.running)return{events:await events(id),calls:calls-start};await sleep(150);}throw Error('Fixture turn timeout');}
-const command=text=>({name:'project_exec',args:{command:text,description:'Run isolated integration fixture'}});
-function respond(res,item){const base={id:'chatcmpl-workspace-'+calls,object:'chat.completion.chunk',created:1,model:'fixture'},delta=typeof item==='string'?{content:item}:{tool_calls:[{index:0,id:'fixture-tool-'+calls,type:'function',function:{name:item.name,arguments:JSON.stringify(item.args)}}]};res.writeHead(200,{'Content-Type':'text/event-stream'});for(const [d,f]of [[{role:'assistant',...delta},null],[{},typeof item==='string'?'stop':'tool_calls']])res.write('data: '+JSON.stringify({...base,choices:[{index:0,delta:d,finish_reason:f}]})+'\n\n');res.write('data: '+JSON.stringify({...base,choices:[],usage:{prompt_tokens:100,completion_tokens:20,total_tokens:120}})+'\n\n');res.end('data: [DONE]\n\n');}
+async function turn(id, prompt) {
+  await rpc('session/prompt', {
+    sessionId: id,
+    requestId: crypto.randomUUID(),
+    mode: 'queue',
+    content: [{ type: 'text', text: prompt }]
+  });
+  for (let attempt = 0; attempt < 1600; attempt++) {
+    const sessions = await rpc('session/list', {});
+    const session = sessions.items.find(item => item.sessionId === id);
+    if (session && !session.running) return events(id);
+    await sleep(150);
+  }
+  throw Error('Fixture turn timeout');
+}
 (async()=>{
  const admin=require('./owner-api.cjs'),ownerCookie=await admin.login(),active=(await admin.call('session/list',{},ownerCookie)).items.filter(s=>s.running);if(active.length)throw Error('Production work is active; benchmark refused.');
  fs.mkdirSync(profile,{recursive:true,mode:0o700});fs.mkdirSync(source,{mode:0o700});fs.mkdirSync(dir+'/state',{mode:0o700});fs.writeFileSync(source+'/sentinel.txt','SOURCE_UNCHANGED');
@@ -32,7 +42,7 @@ function respond(res,item){const base={id:'chatcmpl-workspace-'+calls,object:'ch
  let ready=false;for(let i=0;i<80;i++){try{const r=await request('/api/workbench');if(r.status===200){ready=true;break;}}catch{}await sleep(100);}if(!ready)throw Error('Workspace plugin did not load');
  const workspace=(await rpc('workspace/create',{path:source})).workspace,results=[];
  const tasks=[{name:'binary-search-trace',prompt:'Do not use tools. Analyze this JavaScript function: function find(a,t){let l=0,r=a.length-1;while(l<=r){let m=(l+r)>>1;if(a[m]===t)return m;if(a[m]<t)l=m+1;else r=m-1;}return -1}. For a=[2,4,8,16,32], return JSON only with key answer holding [find(a,2),find(a,16),find(a,7)].',expected:[0,3,-1]},{name:'async-order-trace',prompt:'Do not use tools. Analyze JavaScript execution order: const a=[];a.push(1);Promise.resolve().then(()=>a.push(3));a.push(2);await Promise.resolve();a.push(4); Return JSON only with key answer holding the final array a.',expected:[1,2,3,4]}];
- for(const effort of ['off','low','medium'])for(const task of tasks){const defaults=(await api()).defaults;await api({op:'settings',workspaceId:workspace.workspaceId,settings:{...defaults,reasoningEffort:effort,thinkingBudget:effort==='low'?2048:4096,maxTokens:8192,temperature:0}});const id=(await rpc('session/create',{workspaceId:workspace.workspaceId})).sessionId,start=Date.now(),result=await turn(id,task.prompt),messages=result.events.filter(e=>e.type==='assistant/message').map(e=>e.data),last=messages.at(-1),content=last?.message?.content??last?.content??[],text=content.filter(c=>c.type==='text').map(c=>c.text).join(''),thinking=content.filter(c=>['thinking','reasoning'].includes(c.type)).map(c=>c.thinking??c.text??'').join('');let correct=false;try{correct=JSON.stringify(JSON.parse(text.replace(/^```(?:json)?\s*|```$/g,'').trim()).answer)===JSON.stringify(task.expected);}catch{}const trace=JSON.parse(fs.readFileSync(dir+'/model-wire.json')).filter(w=>w.sessionId===id);results.push({effort,task:task.name,sessionId:id,elapsedSeconds:(Date.now()-start)/1000,usage:last?.usage??last?.message?.usage,reasoningCharacters:thinking.length,reasoningPresent:content.some(c=>c.type==='reasoning'||c.type==='thinking'),answerCharacters:text.length,correct,wire:trace,assistantShape:Object.keys(last??{}),contentTypes:content.map(x=>x.type),answer:text.slice(0,400)});fs.writeFileSync('/data/migration/reasoning-benchmark-result.json',JSON.stringify({at:Date.now(),complete:false,results},null,2));console.log(JSON.stringify(results.at(-1)));}
+ for(const effort of ['off','low','medium'])for(const task of tasks){const defaults=(await api()).defaults;await api({op:'settings',workspaceId:workspace.workspaceId,settings:{...defaults,reasoningEffort:effort,thinkingBudget:effort==='low'?2048:4096,maxTokens:8192,temperature:0}});const id=(await rpc('session/create',{workspaceId:workspace.workspaceId})).sessionId,start=Date.now(),runEvents=await turn(id,task.prompt),messages=runEvents.filter(e=>e.type==='assistant/message').map(e=>e.data),last=messages.at(-1),content=last?.message?.content??last?.content??[],text=content.filter(c=>c.type==='text').map(c=>c.text).join(''),thinking=content.filter(c=>['thinking','reasoning'].includes(c.type)).map(c=>c.thinking??c.text??'').join('');let correct=false;try{correct=JSON.stringify(JSON.parse(text.replace(/^```(?:json)?\s*|```$/g,'').trim()).answer)===JSON.stringify(task.expected);}catch{}const trace=JSON.parse(fs.readFileSync(dir+'/model-wire.json')).filter(w=>w.sessionId===id);results.push({effort,task:task.name,sessionId:id,elapsedSeconds:(Date.now()-start)/1000,usage:last?.usage??last?.message?.usage,reasoningCharacters:thinking.length,reasoningPresent:content.some(c=>c.type==='reasoning'||c.type==='thinking'),answerCharacters:text.length,correct,wire:trace,assistantShape:Object.keys(last??{}),contentTypes:content.map(x=>x.type),answer:text.slice(0,400)});fs.writeFileSync('/data/migration/reasoning-benchmark-result.json',JSON.stringify({at:Date.now(),complete:false,results},null,2));console.log(JSON.stringify(results.at(-1)));}
  fs.writeFileSync('/data/migration/reasoning-benchmark-result.json',JSON.stringify({at:Date.now(),complete:true,results},null,2));
 })().catch(e=>{console.error(e.stack);process.exitCode=1;}).finally(async()=>{
  
