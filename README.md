@@ -59,9 +59,9 @@ sequenceDiagram
     end
 ```
 
-- **While Qwen loads** the signed source and the running Harness must pass their own checks before the phone opens the workspace. Inference waits for the model. A fresh phone needs its first successful pairing before it can use the cached wake screen. [Readiness checks](docs/runtime-readiness.md)
+- **While Qwen loads** the signed source and the running Harness must pass their own checks before the phone opens the workspace. A model request can wait for up to three minutes by default. A fresh phone needs its first successful pairing before it can use the cached wake screen. [Readiness checks](docs/runtime-readiness.md)
 - **During a task** the local FIFO admits one root task at a time and keeps its place across tool calls. Closing Safari does not cancel the task. The idle guard observes active turns, model activity, workspace processes and application work. [Scheduling](efficiency/README.md) · [Idle decision](vast/idle-guard.py)
-- **After work finishes** the default idle timeout is **5 minutes** when automatic stop is enabled. Reading the monitor or leaving a chat open does not extend it. Apps has a separate 15-minute hold. A stale heartbeat or a failed sleep check can keep the instance running. [Idle and maintenance](docs/harness-operations.md#idle-and-maintenance)
+- **After work finishes** the default idle timeout is **5 minutes** when automatic stop is enabled. Reading the monitor or leaving a chat open does not extend it. Apps can request a 15-minute awake hold. A stale heartbeat or a failed sleep check can keep the instance running. [Idle and maintenance](docs/harness-operations.md#idle-and-maintenance)
 - **After stop** the disk persists and GPU capacity is released. The wake link can request the original instance again. Another customer may be using that GPU, in which case opening the full workspace has to wait. Storage charges continue while the rental is stopped.
 
 ## Set up, operate or contribute
@@ -75,4 +75,4 @@ sequenceDiagram
 | Test a change and verify its deployment | [Local checks](docs/harness-operations.md#run-the-local-checks) · [Release CI](docs/release-ci.md) · [Signed startup](docs/startup-updates.md) |
 | Estimate cost or compare a previous run | [Request budget](docs/request-budget.md) · [Recorded deployments](docs/harness-operations.md#recorded-deployments) |
 
-To check what a particular server is running, compare `state.update.appliedCommit` in the owner Workbench API with the revision you expect, then inspect the readiness flags from `/phone/health`.
+To check what a particular server is running, compare `update.appliedCommit` in the owner Workbench API with the revision you expect, then inspect the readiness flags from `/phone/health`.

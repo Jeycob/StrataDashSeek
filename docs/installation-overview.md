@@ -26,8 +26,9 @@ currently installed server revision are separate facts.
 For a fresh installation, finish these stages in order: verify the existing
 model and disk headroom; install the pinned Harness/runtime; configure private
 network and credentials; install the mandatory startup gate with an independently
-verified public keyring and full primary fingerprint; then start core services
-through the installed stable bootstrap. Confirm signed update readiness before
+verified public keyring and full primary fingerprint; verify the initial managed
+release pointer and protected execution policy; then start core services through
+the installed stable bootstrap. Confirm signed update readiness before
 the first Harness request. Pair the phone, enable optional Apps and development
 tools, then prove task execution, persistence and a cold cycle before enabling
 automatic idle stop. The idle guard may remain disabled during validation;
