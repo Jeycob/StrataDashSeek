@@ -52,6 +52,16 @@ The helper image is an operator-pinned immutable Node image with label `io.strat
 
 ## Infisical
 
+### Store a password and use it in an app
+
+1. Open your Infisical Cloud workspace in the region your organization uses. In the application's project, select an environment and folder and save the secret there. For example, create an entry named `STORE_DATABASE_URL` and enter the connection string as its value. [Infisical secret management](https://infisical.com/docs/documentation/platform/secrets-mgmt/overview)
+2. From the HomeAI phone or desktop UI, open **Settings → Applications and Docker → Credential vault**. Select the region, enter the Application machine identity's **Client ID** and **Client Secret**, then select **Verify and save connection**. Give this identity read access to the project's secrets. The connection status shows the region and client ID. The bootstrap identity is stored on the Vast host in an owner-only file (mode `0600`), by default `/data/harness/secrets/vault-machine.json`.
+3. Open the registered application's card and expand **Project credentials**. Enter the Infisical project ID, environment and folder from step 1. In the runtime mapping, enter `DATABASE_URL=STORE_DATABASE_URL` and save. At deployment, the running application receives the value through `DATABASE_URL`. Use the build mapping for a BuildKit secret needed during a build.
+
+To rotate a credential, update it at its issuer and in Infisical. Redeploy the application to give a new container the updated runtime environment, or rebuild an image that consumes a build secret. Removing a mapping affects future uses. Existing containers retain the environment they started with. A HomeAI release export carries references, so access to the Infisical project is part of recovery.
+
+### Machine identities and scope
+
 The selected provider is Infisical Cloud Free. [Current pricing](https://infisical.com/pricing) lists five human/machine identities, unlimited projects and three environments. The basic Viewer role was verified in the actual account. Advanced roles, audit/history and automatic rotation have paid-tier limits. Bitwarden Secrets Manager Free is another zero-subscription option, with a three-project limit. A GitHub PAT authenticates GitHub requests; Actions secrets cannot be read back as general runtime secret values, so neither replaces this vault.
 
 Connect the **Application** machine identity in Harness settings. The region, Client ID and an authentication check are shown; the Client Secret is never returned by state APIs. An optional saved expiry date is displayed. Keep operational and application identities separate, with organization **No Access** and project **Viewer**. Migration uses a temporary project writer, whose memberships are removed after transfer. One limited bootstrap identity must remain available to each runtime; secret values must still be used in memory by their consumers.

@@ -16,17 +16,20 @@ flowchart TB
     client["Phone or desktop"]
     wake["Cloudflare Worker<br/>Wake and status"]
     api["Vast.ai API<br/>Instance power"]
+    vault["Infisical Cloud<br/>Application passwords and API keys"]
     client -->|Wake existing instance| wake
     wake --> api
     subgraph host["Vast.ai · one instance"]
         edge["Tailscale HTTPS<br/>Private phone and desktop entry"]
         harness["DeepSeek Harness<br/>Chats, tools and editor"]
+        apps["Apps service<br/>Project credential mappings"]
         scheduler["Local task FIFO"]
         adapter["Model adapter"]
         strata["Strata + Qwen IQ3_S<br/>CPU RAM and GPU"]
         disk[("Persistent disk<br/>Sessions, projects and model files")]
         guard["Idle guard"]
         edge --> harness
+        harness -->|Manage project credentials| apps
         harness --> scheduler --> adapter --> strata
         harness -->|Read and save| disk
         strata -->|Load weights| disk
@@ -34,10 +37,19 @@ flowchart TB
         strata -.->|Model status| guard
     end
     client -->|Private chat and files| edge
+    apps -->|Fetch mapped secrets for builds and runs| vault
     guard -->|Request stop when idle| api
 ```
 
 The public Worker knows how to wake the configured instance. Once connected, the browser sends chat and file traffic directly to the private Harness over Tailscale. Code – OSS uses the current project in host mode. The optional [Apps and Docker worker](docs/applications.md) adds container builds and deployments for installations that enable it.
+
+## Where are passwords and API keys stored?
+
+**Infisical Cloud** is the vault for application secrets. Create or change the actual password or API key in the project's Infisical environment and folder. On a phone or desktop, open **Settings → Applications and Docker → Credential vault** to connect the Application machine identity. Its **Client Secret** authenticates HomeAI to Infisical.
+
+In the application's **Project credentials**, choose the same project ID, environment and folder, then map the names. For example, `DATABASE_URL=STORE_DATABASE_URL` makes the Infisical entry named `STORE_DATABASE_URL` available to the running app as `DATABASE_URL`. The model's `project_apps` tool reports the runtime aliases and build secret IDs. [Setup and rotation](docs/applications-v2.md#store-a-password-and-use-it-in-an-app)
+
+The Cloudflare wake Worker has its own credentials for starting the Vast instance. [Worker secrets](docs/harness-operations.md#deploy-the-wake-worker)
 
 ## What happens when you wake it?
 
