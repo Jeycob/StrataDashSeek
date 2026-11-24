@@ -16,6 +16,6 @@ The HomeAI Native supervisor includes the plugin in both launch modes. A separat
       name: file:///ABSOLUTE_SIGNED_RELEASE/runtime/output-continuation/index.mjs
 ```
 
-Include the plugin directory and `runtime/require.cjs` in that release. The plugin resolves the reviewing SDK through the active profile's install anchor and uses the runtime resolver as a fallback. The supported `@deepseek-ai/dsh-agent-loop@0.2.2-rc.2` entry point has SHA-256 `f09f60814d4e96a880f41b9fc3832f33c56a28f954f48810d8439ce83ad6ffa8`. An unreviewed loop keeps its original terminal behavior and the browser describes its partial result.
+Keep the plugin directory, `runtime/require.cjs` and the same release's `workspace/` modules together. A thin bundle needs `workspace/policy.mjs`, `workspace/storage.mjs`, `workspace/source-private.cjs` and their relative imports. The plugin resolves the reviewing SDK through the active profile's install anchor and uses the runtime resolver as a fallback. The supported `@deepseek-ai/dsh-agent-loop@0.2.2-rc.2` entry point has SHA-256 `f09f60814d4e96a880f41b9fc3832f33c56a28f954f48810d8439ce83ad6ffa8`. An unreviewed loop keeps its original terminal behavior and the browser describes its partial result.
 
 After loading the release, an existing chat uses recovery for subsequent turns. Historical incomplete turns remain visible and a restart does not replay them.
