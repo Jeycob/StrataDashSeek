@@ -115,8 +115,23 @@ test('Native Code-OSS keeps a protected draft and uses each chat’s real projec
   const {chromium} = require(process.env.HARNESS_PLAYWRIGHT_MODULE || 'playwright');
   browser = await chromium.launch({headless:true});
   const page = await browser.newPage({viewport:{width:1440,height:980}});
+  const context = page.context();
   page.setDefaultTimeout(12000);
   const oldEditor = [], nonLocal = [];
+  const workbenchUrl = new URL('/api/workbench',url).href;
+  function workbenchWrite(request) {
+   if (request.url()!==workbenchUrl || request.method()!=='POST') return;
+   let data;
+   try { data = request.postDataJSON(); } catch { return; }
+   if (data?.op==='file' && data.operation==='write') return data;
+  }
+  context.on('request', request => {
+   const write = workbenchWrite(request);
+   if (write) notes.push('Code OSS write requested for '+write.sessionId+' '+write.args?.path);
+  });
+  context.on('requestfailed', request => {
+   if (workbenchWrite(request)) notes.push('Code OSS write request failed '+request.failure()?.errorText);
+  });
   page.on('request', request => {
    const target = new URL(request.url());
    if (target.pathname==='/api/workbench/editor' || /^(?:\/phone)?\/api\/apps(?:\/|$)/.test(target.pathname)) oldEditor.push(target.pathname);
@@ -146,6 +161,24 @@ test('Native Code-OSS keeps a protected draft and uses each chat’s real projec
    await editor.locator('.explorer-folders-view').getByText(name,{exact:true}).click();
   }
   function content(editor) { return editor.locator('.part.editor .monaco-editor .view-lines').filter({visible:true}).first(); }
+  async function saveCounter(editor, sessionId, diskPath, text) {
+   await content(editor).getByText(text,{exact:true}).waitFor();
+   const [response] = await Promise.all([
+    context.waitForEvent('response',{
+     predicate(response) {
+      const write = workbenchWrite(response.request());
+      return write?.sessionId===sessionId && write.args?.path==='counter.txt';
+     },
+     timeout:15000,
+    }),
+    page.keyboard.press('Control+s'),
+   ]);
+   const {args} = workbenchWrite(response.request());
+   assert.equal(args.text,text);
+   assert.equal(typeof args.version,'string');
+   assert.equal(response.status(),200,'Code OSS save was rejected: '+await response.text());
+   assert.equal(await fs.readFile(diskPath,'utf8'),text);
+  }
   const firstEditor = await open(first,true);
   const mainAsset = new URL('/_homeai/codeoss-0.30.3/vscode/vs/workbench/workbench.web.main.internal.js',url);
   const [br, gzip, identity] = await Promise.all([
@@ -201,11 +234,7 @@ test('Native Code-OSS keeps a protected draft and uses each chat’s real projec
   await content(firstEditor).click();
   await page.keyboard.press('Control+a');
   await page.keyboard.insertText('manual saved update');
-  await page.keyboard.press('Control+s');
-  for (let i=0;i<100 && (await fs.readFile(paths[0],'utf8'))!=='manual saved update';i++) {
-   await new Promise(resolve=>setTimeout(resolve,50));
-  }
-  assert.equal(await fs.readFile(paths[0],'utf8'),'manual saved update');
+  await saveCounter(firstEditor,first,paths[0],'manual saved update');
   await content(firstEditor).click();
   await page.keyboard.press('Control+a');
   await page.keyboard.insertText('protected manual draft');
@@ -238,11 +267,7 @@ test('Native Code-OSS keeps a protected draft and uses each chat’s real projec
   await content(reloaded).click();
   await page.keyboard.press('Control+a');
   await page.keyboard.insertText('saved after explicit revert');
-  await page.keyboard.press('Control+s');
-  for (let i=0;i<100 && (await fs.readFile(paths[0],'utf8'))!=='saved after explicit revert';i++) {
-   await new Promise(resolve=>setTimeout(resolve,50));
-  }
-  assert.equal(await fs.readFile(paths[0],'utf8'),'saved after explicit revert');
+  await saveCounter(reloaded,first,paths[0],'saved after explicit revert');
   const recorded = await stats();
   assert.equal(recorded.prompts,0);
   assert.equal(recorded.streams,0);
