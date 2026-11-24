@@ -9,6 +9,8 @@ HomeAI runs DeepSeek Harness and a Strata-hosted Qwen model on one stoppable Vas
 3. Open **Code – OSS** in the right sidebar to edit the current chat’s project. **Changes** shows saved changes as tools work. Use **Workspace files → Download** for a lasting copy of an output. A preview URL can expire while its source files remain on disk.
 4. To return later, reopen the chat. For an archived chat, use **View options → Archived only → … → Archived files**. **More → Monitor serveru** shows the running server’s GPU, memory, disk and recent model requests.
 
+Opening a chat starts with its latest 12 messages. Scroll up for older history. When you revisit a chat in the same browser tab, HomeAI can show a few lines from recent messages while it retrieves the current conversation. The sidebar keeps familiar chat names during reconnection. After a reload, the tab verifies access before restoring its encrypted preview.
+
 ## Architecture
 
 ```mermaid

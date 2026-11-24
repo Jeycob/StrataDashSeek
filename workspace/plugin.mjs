@@ -24,6 +24,7 @@ import { createProjectStarters, installProjectStarterDiscovery } from './project
 import { createTaskBudgets } from './task-budget.mjs';
 import { installQaReceipts } from './qa-receipt.mjs';
 import { installCodeOss } from './codeoss-web/assets.mjs';
+import { installChatCache } from '../runtime/ui-cache/native.mjs';
 const { doctor } = createRequire(import.meta.url)('../development/doctor.cjs');
 
 export const name = 'workspace-runtime';
@@ -42,6 +43,7 @@ export async function applyTrustedWorkspace(ctx, config = {}, compositionFactori
   execution.assertUnchanged();
   const manager = new WorkspaceManager(ctx, config, execution); await manager.initialize();
   installCodeOss(ctx, manager);
+  installChatCache(ctx);
   installProjectMemory(ctx, manager);
   const projectStarters = manager.projectStarters = createProjectStarters(manager, config.applicationStarters !== false);
   installProjectStarterDiscovery(ctx, projectStarters);

@@ -16,9 +16,11 @@ test('phone to desktop resumes one running Native turn, then restores its saved 
  fs.writeFileSync(path.join(tools,'index.mjs'),`
 import {createHash} from 'node:crypto';
 import {writeFile} from 'node:fs/promises';
+import {installChatCache} from ${JSON.stringify(pathToFileURL(path.join(root,'runtime/ui-cache/native.mjs')).href)};
 import {LlmAdapter} from ${JSON.stringify(pathToFileURL(path.resolve(path.dirname(process.env.HARNESS_NATIVE_CLI),'../../dsh-llm/lib/index.js')).href)};
 export const inject=['sessions','agents','connection','llm','workspaceRegistry','sessionTitle'];
 export function apply(ctx){
+ installChatCache(ctx);
  const project=${JSON.stringify(project)},provider='restore-fixture',gate=Promise.withResolvers();
  let own=null,streams=0,unexpectedDispatches=0,fileWritten=false;
  const admittedSessions=[];
@@ -119,9 +121,12 @@ export function apply(ctx){
    try{await surface.waitForFunction(()=>Boolean(window.HarnessNativeUI&&window.RestoreFixture));}
    catch{throw Error('Local Native restore fixture did not mount: '+output.split(/\r?\n/).filter(line=>/failed|error|cannot|not found/i.test(line)).slice(-4).join(' ').replace(/https?:\S+/g,'[fixture-url]').slice(0,1200));}
    const preview=surface.getByRole('button',{name:'Continue',exact:true});
-   await preview.waitFor({timeout:3000}).catch(()=>{});if(await preview.isVisible())await preview.click();
+   await preview.waitFor({timeout:3000}).catch(()=>{});
+   if(await preview.isVisible())await preview.click({timeout:3000}).catch(async error=>{if(await preview.isVisible())throw error;});
    const onboarding=surface.getByRole('dialog').filter({hasText:'Get started'});
    await onboarding.waitFor({timeout:2000}).catch(()=>{});if(await onboarding.isVisible())await onboarding.getByRole('button',{name:'Close',exact:true}).click();
+   assert(await surface.evaluate(()=>Boolean(window.__HOMEAI_CHAT_CACHE_ACCESS__) &&
+     window.__DSH_BOOT__.batches.some(batch=>batch.url.startsWith('_homeai/chat-ui/'))));
   }
   async function phoneSurface(page){
    await page.goto(new URL('/phone/',url).href);

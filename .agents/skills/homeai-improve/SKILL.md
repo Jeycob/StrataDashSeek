@@ -34,7 +34,7 @@ Pro malou lokální opravu nevyžaduj celý provozní audit. Historii otevři kv
 
 Novému subagentovi dej stručné samostatné zadání: výsledek, vlastněné soubory, potřebná omezení a oprávnění, přijetí a odkazy na podklady. Celou historii předej jen při skutečné potřebě; existujícímu autorovi posílej pouze změny. Počet rolí není povinný počet aktivních agentů. Čti relevantní sekce a filtrované logy, nikoli opakovaně celý archiv; chybějící rozhodující kontext vždy doplň.
 
-Lokálně ověř dotčené chování; zachovej povinné CI přesného kandidáta, požadované kontroly na main a potřebné živé přijetí. Platné zelené kontroly ručně neopakuj bez změny zdrojů či prostředí nebo konkrétní pochybnosti. U samotné dokumentace kontroluj obsah, odkazy a schéma podle potřeby. Běžné testy samy modelové tokeny nevyžadují; šetři hlavně čtení a opakovaný rozbor jejich výstupů. Modelové benchmarky inferenci využívají.
+Během vývoje připrav cílené testy a zkontroluj změny ve zdrojích. Hotového kandidáta ověř před nasazením na Vast.ai v GitHub CI a zachovej povinné kontroly na `main`. Celý tým používá výsledek přesného SHA. Průběžné testy ani Chromium a Playwright na uživatelově počítači nespouštěj. Po vydání ověří koordinátor změněnou funkci přímo na Vastu.
 
 Předávej výsledek, verzi a odkaz na ověření, zbývající blocker a další krok s vlastníkem. Úspěšné logy shrň, při selhání načti relevantní chybu. Čekej přednostně na dokončení nebo používej kompaktní snapshot s cursorem; nezměněný stav opakovaně nerozebírej. Podrobnosti jsou v části „Menší tokenová a koordinační režie“ workflow nebo `docs/homeai-delivery.md`. Úsporu netvrď procentem bez měření a nezaváděj pro ni další reporting.
 
