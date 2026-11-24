@@ -1,0 +1,139 @@
+name: Retry exact failed Basalt checks
+on:
+  push:
+    branches:
+      - codex/retry-basalt-64d09da-20261125
+    paths:
+      - .github/workflows/retry-basalt-64d09da.yml
+
+permissions: {}
+
+jobs:
+  retry:
+    if: github.repository == 'Jeycob/StrataDashSeek' && github.ref == 'refs/heads/codex/retry-basalt-64d09da-20261125'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_RETRY_TOKEN: ${{ github.token }}
+    steps:
+      - name: Retry the failed job of the exact Basalt push once
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          const sha = '64d09da2ca1268a3a152ce3bfb9f964c2b74bd57';
+          const runId = 45506848599;
+          const repo = 'Jeycob/StrataDashSeek';
+          const base = 'https://api.github.com/repos/' + repo;
+          const headers = {
+            Accept: 'application/vnd.github+json',
+            Authorization: 'Bearer ' + process.env.GH_RETRY_TOKEN,
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'HomeAI-exact-main-ci-retry',
+          };
+
+          async function request(path, method = 'GET') {
+            return fetch(base + path, {
+              method, headers, redirect: 'error', signal: AbortSignal.timeout(10000),
+            });
+          }
+
+          async function read(path) {
+            const response = await request(path);
+            if (!response.ok) throw Error('GitHub read returned ' + response.status);
+            return response.json();
+          }
+
+          const runPath = '/actions/runs/' + runId;
+          const [run, ref] = await Promise.all([read(runPath), read('/git/ref/heads/codex/basalt-presented-file-20261124')]);
+          const exact = run.id === runId && run.head_sha === sha &&
+            run.head_branch === 'codex/basalt-presented-file-20261124' && run.event === 'push' &&
+            run.path === '.github/workflows/release-checks.yml' &&
+            run.head_repository?.full_name === repo && ref.object?.sha === sha;
+          if (!exact) throw Error('Exact main run or its current ref changed');
+          if (run.run_attempt !== 1 || run.status !== 'completed' || run.conclusion !== 'failure') {
+            throw Error('Expected first completed failed attempt');
+          }
+          const retry = await request(runPath + '/rerun-failed-jobs', 'POST');
+          if (retry.status !== 201) throw Error('GitHub retry returned ' + retry.status);
+          console.log(JSON.stringify({ runId, sha, accepted: true }));
+          JS
+
+  diagnostic:
+    if: github.repository == 'Jeycob/StrataDashSeek' && github.ref == 'refs/heads/codex/retry-basalt-64d09da-20261125'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      actions: read
+    steps:
+      - name: Read the named artifact from the failed Basalt run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: release-checks-64d09da2ca1268a3a152ce3bfb9f964c2b74bd57
+          run-id: '45506848599'
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/native-codeoss-archive
+          skip-decompress: true
+      - name: Annotate the synthetic failure type and source line
+        run: |
+          python3 - "$RUNNER_TEMP/native-codeoss-archive" <<'PY'
+          import pathlib
+          import re
+          import sys
+          import zipfile
+
+          fixture = 'workspace/native-ui/native-codeoss.test.cjs'
+          member = 'portable/workspace__native-ui__native-codeoss.test.cjs.log'
+          limit = 1024 * 1024
+          archive_files = list(pathlib.Path(sys.argv[1]).iterdir())
+          if len(archive_files) != 1 or not archive_files[0].is_file() or archive_files[0].is_symlink():
+              raise SystemExit('Expected one release evidence archive')
+          with zipfile.ZipFile(archive_files[0]) as archive:
+              matches = [entry for entry in archive.infolist() if entry.filename == member]
+              if len(matches) != 1 or not 0 < matches[0].file_size <= limit:
+                  raise SystemExit('Expected one bounded Native Code OSS TAP member')
+              with archive.open(matches[0]) as stream:
+                  raw = stream.read(limit + 1)
+          if len(raw) > limit:
+              raise SystemExit('Native Code OSS TAP exceeded its size limit')
+
+          lines = raw.decode('utf-8', 'replace').splitlines()
+          failure_index = next((index for index, line in enumerate(lines)
+                                if re.match(r'^not ok [1-9][0-9]{0,5}\b', line)), None)
+          if failure_index is None:
+              raise SystemExit('The selected Native Code OSS TAP member contains no top-level failed test')
+
+          details = []
+          for line in lines[failure_index + 1:]:
+              if re.match(r'^(?:  \.\.\.$|(?:not )?ok [0-9]+\b|# Subtest:)', line):
+                  break
+              details.append(line)
+
+          allowed = {
+              'failureType': {'testCodeFailure', 'testTimeoutFailure', 'testAborted', 'cancelledByParent',
+                              'subtestsFailed', 'hookFailed', 'uncaughtException', 'unhandledRejection'},
+              'name': {'AssertionError', 'TimeoutError', 'Error', 'TypeError', 'ReferenceError', 'SyntaxError'},
+              'code': {'ERR_ASSERTION', 'ERR_TEST_FAILURE', 'ERR_TEST_TIMEOUT', 'ERR_TEST_CANCELLED',
+                       'ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'EPIPE', 'ENOENT'},
+          }
+          fields = {}
+          for line in details:
+              found = re.fullmatch(r"\s+(failureType|name|code): ['\"]?([A-Za-z0-9_]{1,40})['\"]?\s*", line)
+              if found and found[2] in allowed[found[1]]:
+                  fields.setdefault(found[1], found[2])
+
+          frame = re.compile(r'[/\\]native-codeoss\.test\.cjs:([1-9][0-9]{0,3}):([1-9][0-9]{0,3})\)?[ \t]*$')
+          stack_index = next((index for index, line in enumerate(details)
+                              if re.match(r'^\s+stack:', line)), len(details))
+          source = next((match for line in details[stack_index:] if (match := frame.search(line))), None)
+          if source:
+              location = f',line={source[1]},col={source[2]}'
+          else:
+              location = ''
+          summary = ', '.join(f'{key}={value}' for key, value in fields.items()) or 'No allowlisted error type'
+          if not source:
+              summary += ', no fixture frame in TAP stack'
+          print(f'::notice file={fixture}{location},title=Native Code OSS TAP run 45506848599::{summary}')
+          PY
