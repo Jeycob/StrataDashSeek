@@ -2,12 +2,27 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
+const {request} = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const {spawn} = require('node:child_process');
 const {once} = require('node:events');
+const {buffer} = require('node:stream/consumers');
 const {pathToFileURL} = require('node:url');
+const {brotliDecompressSync, gunzipSync} = require('node:zlib');
 const {createSourceFixture} = require('./test-bundle.cjs');
+
+function assetResponse(url, encoding, method = 'GET') {
+ return new Promise((resolve, reject) => {
+  const req = request(url, {method, headers: encoding ? {'Accept-Encoding': encoding} : {}}, async response => {
+   try { resolve({status:response.statusCode, headers:response.headers, body:await buffer(response)}); }
+   catch (error) { reject(error); }
+  });
+  req.on('error', reject);
+  req.setTimeout(10000, () => req.destroy(Error('Asset request timed out')));
+  req.end();
+ });
+}
 
 test('Native Code-OSS keeps a protected draft and uses each chat’s real project without Apps', {timeout:120000}, async () => {
  const cli = process.env.HARNESS_NATIVE_CLI;
@@ -132,6 +147,43 @@ test('Native Code-OSS keeps a protected draft and uses each chat’s real projec
   }
   function content(editor) { return editor.locator('.part.editor .monaco-editor .view-lines').filter({visible:true}).first(); }
   const firstEditor = await open(first,true);
+  const mainAsset = new URL('/_homeai/codeoss-0.30.3/vscode/vs/workbench/workbench.web.main.internal.js',url);
+  const [br, gzip, identity] = await Promise.all([
+   assetResponse(mainAsset,'gzip, br'),
+   assetResponse(mainAsset,'br;q=0, gzip;q=1'),
+   assetResponse(mainAsset),
+  ]);
+  for (const [header, response, encoding] of [
+   ['gzip, br',br,'br'], ['br;q=0, gzip;q=1',gzip,'gzip'], ['',identity,undefined],
+  ]) {
+   assert.equal(response.status,200);
+   assert.equal(response.headers['content-encoding'],encoding);
+   assert.equal(response.headers.vary,'Accept-Encoding');
+   assert.equal(response.headers['cache-control'],'public, max-age=86400, no-transform');
+   const head = await assetResponse(mainAsset,header,'HEAD');
+   assert.equal(head.status,response.status);
+   for (const name of ['content-encoding','content-length','vary','cache-control']) {
+    assert.equal(head.headers[name],response.headers[name]);
+   }
+   assert.equal(head.body.length,0);
+  }
+  assert.equal(Number(identity.headers['content-length']),identity.body.length);
+  assert.deepEqual(brotliDecompressSync(br.body),identity.body);
+  assert.deepEqual(gunzipSync(gzip.body),identity.body);
+  assert(br.body.length < 0.9 * gzip.body.length);
+  const unencoded = await assetResponse(mainAsset,'br;q=0, gzip;q=0','HEAD');
+  assert.equal(unencoded.headers['content-length'],identity.headers['content-length']);
+  assert.equal(unencoded.headers['content-encoding'],undefined);
+  const weighted = await assetResponse(mainAsset,'br;q=0.5, gzip;q=0.8','HEAD');
+  assert.equal(weighted.headers['content-encoding'],'gzip');
+  const refused = await assetResponse(mainAsset,'*;q=0','HEAD');
+  assert.equal(refused.status,406);
+  assert.equal(refused.headers.vary,'Accept-Encoding');
+  const transfer = await firstEditor.locator('html').evaluate((_,href)=>{
+   const [resource] = performance.getEntriesByName(href);
+   return [resource?.encodedBodySize, resource?.decodedBodySize];
+  },mainAsset.href);
+  assert.deepEqual(transfer,[br.body.length,identity.body.length]);
   for (const name of ['LICENSE-Code-OSS.txt','LICENSE-GitHub1s.txt','ThirdPartyNotices.txt']) {
    const response = await page.request.get(new URL('/_homeai/codeoss-0.30.3/'+name,url).href);
    assert.equal(response.status(),200);
