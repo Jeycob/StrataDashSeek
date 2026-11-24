@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import runtime from '../require.cjs';
+import { captureFileDelivery, observeFileDelivery, recordFileDelivery, verifyFileDelivery } from './file-delivery.mjs';
 import { bindFileRecoveryTarget, createFileRecovery, cutFileTool, fileRecoverySection, fileRecoveryTools,
   firstStepFileTools, guardFileRecovery, isCreateOnlyRecoveryWrite, observeFileRecovery } from './file-recovery.mjs';
 
@@ -81,9 +82,15 @@ export function apply(ctx) {
       let outcome;
       try { outcome = await original.call(this, next); }
       finally { state.inStep = false; }
+      if (state.file?.delivery?.presented.size && await observeFileDelivery(state.file.delivery, signal)) state.stalled = 0;
+      if (signal.aborted) return outcome;
       // Some providers terminate with reasoning or no answer at all after a
       // cut. A clean finish chunk alone is insufficient to clear that cut.
       if (outcome?.kind === 'completed') {
+        if (state.file && await verifyFileDelivery(state.file.delivery, signal)) {
+          state.file.confirmed = true;
+          state.toolConcluded = true;
+        }
         if (state.file && !state.file.confirmed) {
           outcome = { kind: 'max-tokens' };
           // A genuine explanation of a blocker is terminal. An empty stop can
@@ -95,14 +102,18 @@ export function apply(ctx) {
       }
       if (outcome?.kind !== 'max-tokens' || signal.aborted || attached.get(agent) !== entry) return outcome;
       if (state.fileToolCut) {
-        if (!state.file) state.file = createFileRecovery();
-        else state.file.repeatedCut = true;
+        if (!state.file) {
+          state.file = createFileRecovery();
+          if (tools.some(tool => tool.name === 'present')) {
+            state.file.delivery = await captureFileDelivery(ctx, this, signal);
+          }
+        } else state.file.repeatedCut = true;
       }
       if (!state.file && state.output && state.output !== state.priorCut) {
         state.stalled = 0;
         state.priorCut = state.output;
       } else if (state.recovering) state.stalled++;
-      if (state.attempts >= maxContinuations || state.stalled >= maxStalledContinuations || state.toolHistoryFull) return outcome;
+      if (signal.aborted || state.attempts >= maxContinuations || state.stalled >= maxStalledContinuations || state.toolHistoryFull) return outcome;
       state.attempts++;
       state.pending = true;
       return null;
@@ -127,6 +138,7 @@ export function apply(ctx) {
     const entry = sessions.get(session), state = entry?.state;
     if (!state || state.turn !== event.data?.turn) return;
     if (event.type === 'turn/end') entry.state = null;
+    if (event.type === 'deliverables/presented' && state.inStep) recordFileDelivery(state.file?.delivery, event.data);
     if (event.type === 'assistant/message' && state.inStep) {
       state.fileToolCut = cutFileTool(event.data.stream);
       const visible = event.data.message.content.flatMap(block => {

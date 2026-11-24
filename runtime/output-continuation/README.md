@@ -6,6 +6,8 @@ A turn allows up to eight continuations and stops after two consecutive stalled 
 
 The first request offers incremental writes in the `write` description when both `write` and `edit` are available. When a cut includes a discarded `write` or `edit` call, the recorded prompt and bounded file schemas remain active through later steps of the turn. Recovery requires a project-relative path. The native filesystem can exclusively create a small complete seed and tracks edits by resolved target identity. The isolated 9p workspace permits targeted edits to existing files. A recovery write there reports that the backend cannot safely publish a new file without replacing a concurrent creation. A confirmed content change counts as progress. A read, a rejected mutation, and a repeated identical edit do not. An empty stop while the file is still unconfirmed uses only the remaining ordinary continuation allowance.
 
+The stock Native `present` tool can also confirm a real delivery following an alternate write. Recovery keeps a bounded project snapshot at the cut. A durable delivery event in the same turn must name a non-empty project file that is new or has different bytes, and its delivered version must still exist at the clean finish. Empty presentations and generic tool success are insufficient. This check uses the scoped Native filesystem and is unavailable for isolated guest paths.
+
 The HomeAI Native supervisor includes the plugin in both launch modes. A separate Native profile such as Basalt/Inkling can add this Loader overlay from its signed release:
 
 ```yaml
