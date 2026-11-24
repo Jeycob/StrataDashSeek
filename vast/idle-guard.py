@@ -156,7 +156,6 @@ def apps_sleep_mode(now, settings, applications, service_pid):
 def read_idle_inputs(cfg):
     settings = load(ROOT/'apps-config.json')
     applications = RUNTIME.read_agent('applications/activity.json')
-    roles = RUNTIME.read_private('services.json', {}).get('names', {})
     # A disabled controller never exempts an old guest from live process checks.
     jobs = jobs_running(cfg.get('ignoreDetachedPreviews', False), applications if settings.get('enabled') is True else None)
     with urllib.request.urlopen('http://127.0.0.1:8080/status', timeout=4) as response:
@@ -164,6 +163,8 @@ def read_idle_inputs(cfg):
     life = RUNTIME.read_agent('lifecycle.json')
     queue = RUNTIME.read_agent('turn-queue.json')
     lease = (RUNTIME.read_agent('maintenance.json', 4096) or {}).get('until', 0)
+    applications = RUNTIME.read_agent('applications/activity.json')
+    roles = RUNTIME.read_private('services.json', {}).get('names', {})
     now = time.time()
     mode = apps_sleep_mode(now, settings, applications, roles.get('applications'))
     authority = (mode, settings, roles.get('applications')) if mode and load(ROOT/'root-secrets/guard.json') == cfg else None
@@ -174,7 +175,7 @@ def read_idle_inputs(cfg):
 
 def still_idle(authority, last, read_inputs, owns_drain=False):
     observed, inputs = read_inputs()
-    if observed != authority or (inputs['applications']['draining'] and not owns_drain):
+    if observed != authority or inputs['applications']['draining'] is not owns_drain:
         return None
     return inputs if decide(last=last, **inputs)[0] else None
 

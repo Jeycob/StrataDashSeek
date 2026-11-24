@@ -148,6 +148,13 @@ class SleepOperation(unittest.TestCase):
         self.assertFalse(self.attempt(state[0], [state,draining,leased], operations))
         self.assertEqual(operations, ['prepare-sleep','confirm-sleep','cancel-sleep'])
 
+    def test_new_activity_can_cancel_the_drain_after_confirm(self):
+        state = self.sample({'enabled':True}, enabled=True)
+        draining = self.sample({'enabled':True}, enabled=True, draining=True)
+        operations = []
+        self.assertFalse(self.attempt(state[0], [state,draining,state], operations))
+        self.assertEqual(operations, ['prepare-sleep','confirm-sleep','cancel-sleep'])
+
     def test_confirm_failure_cancels_and_preserves_provider_state(self):
         state = self.sample({'enabled':True}, enabled=True)
         draining = self.sample({'enabled':True}, enabled=True, draining=True)
