@@ -83,6 +83,7 @@ sequenceDiagram
 | I want to… | Start here |
 | --- | --- |
 | Install HomeAI on an existing Strata host | [Installation overview](docs/installation-overview.md) · [Installation commands](docs/harness-operations.md#install-the-harness) |
+| Try Inkling 2 Mini with DeepSeek Harness on a separate Blackwell GPU | [Basalt experiment and first run](experiments/basalt-inkling/README.md) |
 | Configure mobile access and the wake link | [Deploy the Worker](docs/harness-operations.md#deploy-the-wake-worker) · [Pair a phone](docs/harness-operations.md#pair-a-phone) |
 | Use the sidebar, project tools or containers | [Workspace guide](docs/workspace-runtime.md) · [Embedded editor](workspace/codeoss-web/README.md) · [Applications](docs/applications.md) |
 | Understand a budget, a stopped task or its files | [Task budgets and recovery](docs/harness-operations.md#task-budgets-and-recovery) · [Checkpoint recovery](docs/checkpoint-recovery.md) |
