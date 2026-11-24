@@ -53,8 +53,8 @@ jobs:
             run.path === '.github/workflows/release-checks.yml' &&
             run.head_repository?.full_name === repo && ref.object?.sha === sha;
           if (!exact) throw Error('Exact main run or its current ref changed');
-          if (run.run_attempt !== 1 || run.status !== 'completed' || run.conclusion !== 'failure') {
-            throw Error('Expected first completed failed attempt');
+          if (run.run_attempt !== 2 || run.status !== 'completed' || run.conclusion !== 'failure') {
+            throw Error('Expected second completed failed attempt');
           }
           const retry = await request(runPath + '/rerun-failed-jobs', 'POST');
           if (retry.status !== 201) throw Error('GitHub retry returned ' + retry.status);
