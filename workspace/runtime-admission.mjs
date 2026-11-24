@@ -4,10 +4,16 @@ import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 const SHA=/^[a-f0-9]{40}$/,HASH=/^[a-f0-9]{64}$/,EPOCH=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const operations=new Set(['start_turn','model_step','session_create','file_mutation','tool_dispatch','apps_enqueue','socket_enqueue']);
 const fail=(code,reasonCode)=>Object.assign(Error(code),{code,...(reasonCode?{reasonCode}:{})});
+const explainedFailure=(code,reasonCode)=>Object.assign(Error(`${code} (${reasonCode})`),{code,reasonCode});
+const statusFailure=reasonCode=>explainedFailure('RUNTIME_ADMISSION_STATUS_UNTRUSTED',reasonCode);
+// The launcher checks health every second and publishes a heartbeat every three.
+const observationDelays=[0,250,1000,2000];
+const ioTimeoutMs=1500;
 const requiredLocation=process.platform==='linux'&&/^\/data\/harness\/(?:releases\/[a-f0-9]{40}|app)\/workspace\//.test(fileURLToPath(import.meta.url));
 const fingerprint=key=>crypto.createHash('sha256').update(key.export({type:'spki',format:'der'})).digest('hex');
 
@@ -46,8 +52,13 @@ async function protectedBytes(file,maxBytes,signal,{replaceable=false}={}){
 }
 export async function readAdmissionTrust({publicKeyFile,statusFile,signal}){
  const [pem,raw]=await Promise.all([protectedBytes(publicKeyFile,8192,signal),protectedBytes(statusFile,4096,signal,{replaceable:true})]);
- let key,status;try{key=crypto.createPublicKey(pem);status=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw));}catch{throw fail('RUNTIME_ADMISSION_TRUST_INVALID');}
- if(key.asymmetricKeyType!=='ed25519'||!status||status.publicKeyFingerprint!==fingerprint(key))throw fail('RUNTIME_ADMISSION_TRUST_INVALID');return{key,status};
+ let key,status;
+ try{key=crypto.createPublicKey(pem);}catch{throw explainedFailure('RUNTIME_ADMISSION_TRUST_INVALID','KEY_INVALID');}
+ try{status=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw));}catch{throw explainedFailure('RUNTIME_ADMISSION_TRUST_INVALID','STATUS_INVALID');}
+ if(key.asymmetricKeyType!=='ed25519')throw explainedFailure('RUNTIME_ADMISSION_TRUST_INVALID','KEY_INVALID');
+ if(!status||typeof status.publicKeyFingerprint!=='string')throw explainedFailure('RUNTIME_ADMISSION_TRUST_INVALID','STATUS_INVALID');
+ if(status.publicKeyFingerprint!==fingerprint(key))throw explainedFailure('RUNTIME_ADMISSION_TRUST_INVALID','KEY_MISMATCH');
+ return{key,status};
 }
 export function postAdmission({port,body,signal}){return new Promise((resolve,reject)=>{
  const request=http.request({hostname:'127.0.0.1',port,path:'/v1/admit',method:'POST',agent:false,signal,headers:{'Content-Type':'application/json','Accept':'application/json','Content-Length':Buffer.byteLength(body)}},response=>{
@@ -57,7 +68,14 @@ export function postAdmission({port,body,signal}){return new Promise((resolve,re
 });}
 function validateTrust(trust,expectedCommit,port,now){
  const status=trust?.status,keys=['version','enabled','sourceCommit','epoch','port','publicKeyFingerprint','observedAt'];
- if(!status||typeof status!=='object'||Array.isArray(status)||Object.keys(status).some(key=>!keys.includes(key))||status.version!==1||status.enabled!==true||status.sourceCommit!==expectedCommit||!EPOCH.test(status.epoch||'')||status.port!==port||!HASH.test(status.publicKeyFingerprint||'')||!Number.isSafeInteger(status.observedAt)||now-status.observedAt>15000||status.observedAt>now+1000||trust.key?.asymmetricKeyType!=='ed25519'||fingerprint(trust.key)!==status.publicKeyFingerprint)throw fail('RUNTIME_ADMISSION_STATUS_UNTRUSTED');return status;
+ if(!status||typeof status!=='object'||Array.isArray(status)||Object.keys(status).some(key=>!keys.includes(key))||status.version!==1||typeof status.enabled!=='boolean'||typeof status.epoch!=='string'||!EPOCH.test(status.epoch)||!Number.isSafeInteger(status.observedAt)||status.observedAt<0)throw statusFailure('STATUS_INVALID');
+ if(status.sourceCommit!==expectedCommit)throw statusFailure('SOURCE_MISMATCH');
+ if(status.port!==port)throw statusFailure('PORT_MISMATCH');
+ if(typeof status.publicKeyFingerprint!=='string'||!HASH.test(status.publicKeyFingerprint)||trust.key?.asymmetricKeyType!=='ed25519'||fingerprint(trust.key)!==status.publicKeyFingerprint)throw statusFailure('KEY_MISMATCH');
+ if(status.observedAt>now+1000)throw statusFailure('HEARTBEAT_IN_FUTURE');
+ if(now-status.observedAt>15000)return 'HEARTBEAT_STALE';
+ if(!status.enabled)return 'BROKER_DISABLED';
+ return null;
 }
 function validateAck(ack,request,key,sentAt,now){
  const keys=['version','sourceCommit','epoch','challenge','admitted','issuedAt','expiresAt','reasonCode','signature'];
@@ -73,16 +91,62 @@ export function createRuntimeAdmission(config={},dependencies={}){
  const required=requiredLocation||process.env.HARNESS_RUNTIME_ADMISSION_REQUIRED==='1'||config.production===true;
  const port=config.port??3094,expectedCommit=config.expectedCommit,publicKeyFile=config.publicKeyFile??'/data/harness/runtime-status/admission-public.pem',statusFile=config.statusFile??'/data/harness/runtime-status/runtime-admission.json';
  const readTrust=dependencies.readTrust??readAdmissionTrust,transport=dependencies.transport??postAdmission,now=dependencies.now??Date.now,newChallenge=dependencies.challenge??(()=>crypto.randomBytes(32).toString('hex'));
- async function bounded(action,external){
+ // This records only the identity of a previously verified signed grant, never a grant itself.
+ let lastGrantedAuthority;
+ async function bounded(action,external,timeoutMs=ioTimeoutMs){
   if(!SHA.test(expectedCommit||'')||!Number.isInteger(port)||port<1024||port>65535||!path.isAbsolute(publicKeyFile)||!path.isAbsolute(statusFile))throw fail('RUNTIME_ADMISSION_CONFIGURATION_REQUIRED');
   const abort=new AbortController();let timedOut=false;const cancel=()=>abort.abort();if(external?.aborted)throw fail('RUNTIME_ADMISSION_ABORTED');external?.addEventListener('abort',cancel,{once:true});let timer;
-  try{return await Promise.race([Promise.resolve().then(()=>action(abort.signal)),new Promise((_,reject)=>{abort.signal.addEventListener('abort',()=>reject(fail(timedOut?'RUNTIME_ADMISSION_TIMEOUT':'RUNTIME_ADMISSION_ABORTED')),{once:true});timer=setTimeout(()=>{timedOut=true;abort.abort();},1500);})]);}
+  try{return await Promise.race([Promise.resolve().then(()=>action(abort.signal)),new Promise((_,reject)=>{abort.signal.addEventListener('abort',()=>reject(fail(timedOut?'RUNTIME_ADMISSION_TIMEOUT':'RUNTIME_ADMISSION_ABORTED')),{once:true});timer=setTimeout(()=>{timedOut=true;abort.abort();},timeoutMs);})]);}
   catch(error){if(abort.signal.aborted)throw fail(timedOut?'RUNTIME_ADMISSION_TIMEOUT':'RUNTIME_ADMISSION_ABORTED');if(/^RUNTIME_ADMISSION_[A-Z_]+$/.test(error.code||''))throw error;throw fail('RUNTIME_ADMISSION_UNAVAILABLE');}
   finally{clearTimeout(timer);external?.removeEventListener('abort',cancel);}
  }
- return{required,async status({signal}={}){if(!required)return{version:1,enabled:false,enforced:false};return bounded(async abort=>{const trust=await readTrust({publicKeyFile,statusFile,signal:abort});abort.throwIfAborted();const status=validateTrust(trust,expectedCommit,port,now());return{version:1,enabled:true,enforced:true,sourceCommit:status.sourceCommit,epoch:status.epoch,observedAt:status.observedAt};},signal);},
+ async function observe(abort){
+  const trust=await readTrust({publicKeyFile,statusFile,signal:abort});
+  abort.throwIfAborted();
+  return {...trust,unavailable:validateTrust(trust,expectedCommit,port,now())};
+ }
+ return{required,async status({signal}={}){
+   if(!required)return{version:1,enabled:false,enforced:false};
+   return bounded(async abort=>{
+    const {status,unavailable}=await observe(abort);
+    if(unavailable)throw statusFailure(unavailable);
+    return{version:1,enabled:true,enforced:true,sourceCommit:status.sourceCommit,epoch:status.epoch,observedAt:status.observedAt};
+   },signal);
+  },
   async admit(operation,{signal}={}){
    if(!required)return{admitted:true,enforced:false};if(!operations.has(operation))throw fail('RUNTIME_ADMISSION_OPERATION_INVALID');
-   return bounded(async abort=>{const trust=await readTrust({publicKeyFile,statusFile,signal:abort});abort.throwIfAborted();const status=validateTrust(trust,expectedCommit,port,now()),challenge=newChallenge();if(!HASH.test(challenge))throw fail('RUNTIME_ADMISSION_CHALLENGE_INVALID');const request={version:1,sourceCommit:expectedCommit,epoch:status.epoch,challenge,operation},sentAt=now();const ack=await transport({port,body:JSON.stringify(request),signal:abort});abort.throwIfAborted();return validateAck(ack,request,trust.key,sentAt,now());},signal);
+   const prior=(operation==='model_step'||operation==='tool_dispatch')&&lastGrantedAuthority;
+   let waitingOn,deadline=performance.now()+ioTimeoutMs;
+   for(const [attempt,delay] of observationDelays.entries()){
+    if(delay){
+     deadline+=delay;
+     try{await sleep(delay,undefined,{signal});}catch(error){if(signal?.aborted)throw fail('RUNTIME_ADMISSION_ABORTED');throw error;}
+    }
+    const remaining=Math.ceil(deadline-performance.now());
+    if(remaining<=0)throw fail('RUNTIME_ADMISSION_TIMEOUT');
+    const grant=await bounded(async abort=>{
+     const {key,status,unavailable}=await observe(abort);
+     abort.throwIfAborted();
+     // Source and port are already pinned by configuration. Pin the remaining
+     // authority fields for the entire wait, before the first and only POST.
+     const authority=status.epoch+'/'+status.publicKeyFingerprint;
+     if((waitingOn||unavailable)&&prior&&(authority!==prior||lastGrantedAuthority!==prior))throw statusFailure('AUTHORITY_CHANGED');
+     if(waitingOn&&(status.observedAt<waitingOn.observedAt||(!unavailable&&status.observedAt===waitingOn.observedAt&&waitingOn.reason==='HEARTBEAT_STALE')))throw statusFailure('HEARTBEAT_NOT_RENEWED');
+     if(unavailable){
+      if(!prior||attempt===observationDelays.length-1)throw statusFailure(unavailable);
+      waitingOn={observedAt:status.observedAt,reason:unavailable};
+      return null;
+     }
+     const challenge=newChallenge();
+     if(!HASH.test(challenge))throw fail('RUNTIME_ADMISSION_CHALLENGE_INVALID');
+     const request={version:1,sourceCommit:expectedCommit,epoch:status.epoch,challenge,operation},sentAt=now();
+     const ack=await transport({port,body:JSON.stringify(request),signal:abort});
+     abort.throwIfAborted();
+     const verified=validateAck(ack,request,key,sentAt,now());
+     lastGrantedAuthority=authority;
+     return verified;
+    },signal,Math.min(ioTimeoutMs,remaining));
+    if(grant)return grant;
+   }
   }};
 }

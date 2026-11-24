@@ -153,6 +153,20 @@ source/runtime/model readiness authority. Do not spread recovery status over
 that response or infer ready from the saved applied commit. Reconciliation and
 admission mutations are private root operations; public status is read-only.
 
+## When a running turn waits for admission
+
+The supervisor refreshes `service-health.json` by replacing the file. If the
+reader sees two different files during that replacement, it checks the new
+file's ownership, permissions and contents before using its health report.
+
+Before a model step or tool call, a Native client that previously received a
+signed grant can briefly wait for the same broker to publish a fresh, open
+status. During that wait the client only reads the protected status and key.
+Once the checks pass it requests a new signed grant and dispatches the step
+once. Stop cancels the wait. If the broker stays closed or its identity changes,
+the turn fails with a reason in the journal. A tool result just before that
+failure still belongs to the completed tool call.
+
 ## Validation and remaining work
 
 Portable tests use controlled root-hook fixtures and a real on-disk test

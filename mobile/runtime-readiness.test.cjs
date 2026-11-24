@@ -43,3 +43,46 @@ test('protected status reader rejects hardlinks and writable parents without exp
  fs.linkSync(file,path.join(root,'retained'));assert.throws(()=>protectedJSON(dir,'startup-update.json'),/Untrusted/);fs.unlinkSync(path.join(root,'retained'));
  if(process.platform==='linux'){fs.chmodSync(dir,0o777);assert.throws(()=>protectedJSON(dir,'startup-update.json'),/Untrusted/);}
 });
+
+test('infrastructure readiness reads a stable protected supervisor heartbeat across atomic publication',async t=>{
+ const scenarios=[
+  ['before-open','ALL_CHECKS_READY',2],['after-open','ALL_CHECKS_READY',2],
+  ['during-read','ALL_CHECKS_READY',2],['failed-service','SERVICE_RESTART_LIMIT',2],
+  ['hardlink','SERVICE_HEARTBEAT_STALE',1],['unstable','SERVICE_HEARTBEAT_STALE',3],
+  ['io-error','SERVICE_HEARTBEAT_STALE',1]
+ ];
+ for(const [scenario,reason,expectedOpens] of scenarios)await t.test(scenario,async sub=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'runtime-heartbeat-'));
+  sub.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+  const file=path.join(directory,'service-health.json'),staging=path.join(directory,'next');
+  const now=Date.now(),fresh={version:1,at:now,sourceCommit:commit,phase:'ready'};
+  const old=['before-open','after-open','during-read'].includes(scenario)?{...fresh,at:0}:fresh;
+  fs.writeFileSync(file,JSON.stringify(old));
+  fs.writeFileSync(path.join(directory,'startup-update.json'),JSON.stringify({version:1,enabled:true,phase:'ready',appliedCommit:commit,signatureVerified:true}));
+  function replace(){
+   fs.writeFileSync(staging,JSON.stringify(scenario==='failed-service'?{...fresh,phase:'failed'}:fresh));
+   if(scenario==='hardlink')fs.linkSync(staging,path.join(directory,'retained'));
+   fs.renameSync(staging,file);
+  }
+  const open=fs.openSync,read=fs.readSync;let opens=0,reading;
+  sub.mock.method(fs,'openSync',(target,...args)=>{
+   if(target!==file)return open(target,...args);
+   opens++;
+   if(opens!==1&&scenario!=='unstable')return open(target,...args);
+   if(scenario==='io-error')throw Object.assign(Error('read unavailable'),{code:'EIO'});
+   if(scenario==='during-read'){reading=open(target,...args);return reading;}
+   if(scenario==='after-open'){const fd=open(target,...args);replace();return fd;}
+   replace();return open(target,...args);
+  });
+  if(scenario==='during-read')sub.mock.method(fs,'readSync',(fd,...args)=>{
+   const count=read(fd,...args);
+   if(fd===reading){reading=undefined;replace();}
+   return count;
+  });
+  const sampler=createRuntimeReadiness({runtimeStatusDir:directory},{infrastructureOnly:true,now:()=>now,
+   native:async()=>({status:200,workspaceReady:true,sourceCommit:commit}),model:async()=>({loaded:true})});
+  const result=await sampler.sample();
+  assert.equal(opens,expectedOpens);assert.equal(result.reasonCode,reason);
+  assert.equal(result.runtimeReady,reason==='ALL_CHECKS_READY');
+ });
+});

@@ -33,6 +33,116 @@ test('stale authority, wrong fingerprint, source mismatch or expired ACK fail wi
  for(const patch of [{observedAt:1},{sourceCommit:'b'.repeat(40)},{epoch:'unknown'},{publicKeyFingerprint:'0'.repeat(64)},{enabled:false},{unreviewedField:true}]){const f=fixture();Object.assign(f.status,patch);await assert.rejects(f.client().admit('start_turn'),{code:'RUNTIME_ADMISSION_STATUS_UNTRUSTED'});assert.equal(f.calls(),0);}
  const f=fixture();f.dependencies.transport=async({body})=>f.sign(JSON.parse(body),{issuedAt:95000,expiresAt:99999});await assert.rejects(f.client().admit('start_turn'),{code:'RUNTIME_ADMISSION_ACK_INVALID'});
 });
+function observations(f,...sequence){
+ let reads=0;
+ f.dependencies.readTrust=async()=>{
+  const observation=sequence[reads++];
+  assert(observation,'unexpected protected read');
+  if(observation instanceof Error)throw observation;
+  const {key=pair.publicKey,...patch}=observation;
+  return {key,status:{...f.status,publicKeyFingerprint:fingerprint(key),...patch}};
+ };
+ return ()=>reads;
+}
+const statusError=reasonCode=>({code:'RUNTIME_ADMISSION_STATUS_UNTRUSTED',reasonCode,message:`RUNTIME_ADMISSION_STATUS_UNTRUSTED (${reasonCode})`});
+test('active model and tool wait for a fresh open observation of the signed authority before a single POST',async()=>{
+ for(const [operation,unavailable] of [['model_step',{observedAt:100000}],['tool_dispatch',{enabled:false,observedAt:118000}]]){
+  const f=fixture(),reads=observations(f,{},unavailable,{observedAt:118010});
+  let challenges=0;
+  f.dependencies.challenge=()=>(++challenges).toString(16).padStart(64,'0');
+  const client=f.client(),previous=await client.admit('start_turn');
+  f.advance(18010);
+  assert(previous.expiresAt<f.dependencies.now());
+  const grant=await client.admit(operation);
+  assert.equal(grant.admitted,true);
+  assert.notEqual(grant.challenge,previous.challenge);
+  assert.equal(grant.expiresAt,121010);
+  assert.equal(f.previous().operation,operation);
+  assert.equal(reads(),3);
+  assert.equal(f.calls(),2);
+  assert.equal(challenges,2);
+ }
+});
+test('a read-only status, cold client, new work and health checks never wait for a closed broker',async()=>{
+ const f=fixture(),reads=observations(f,{}, {enabled:false}, {},...Array(6).fill({enabled:false})),client=f.client();
+ await client.status();
+ await assert.rejects(client.admit('model_step'),statusError('BROKER_DISABLED'));
+ assert.equal(f.calls(),0);
+ await client.admit('start_turn');
+ for(const operation of ['start_turn','session_create','file_mutation','apps_enqueue','socket_enqueue']){
+  await assert.rejects(client.admit(operation),statusError('BROKER_DISABLED'));
+ }
+ await assert.rejects(client.status(),statusError('BROKER_DISABLED'));
+ assert.equal(f.calls(),1);
+ assert.equal(reads(),9);
+});
+test('an active step fails closed on a changed identity, malformed status, unsafe file or clock anomaly while waiting',async()=>{
+ const changedKey=crypto.generateKeyPairSync('ed25519').publicKey;
+ const unsafe=Object.assign(Error('RUNTIME_ADMISSION_TRUST_UNSAFE'),{code:'RUNTIME_ADMISSION_TRUST_UNSAFE'});
+ for(const [replacement,expected] of [
+  [{epoch:crypto.randomUUID()},statusError('AUTHORITY_CHANGED')],[{key:changedKey},statusError('AUTHORITY_CHANGED')],
+  [{sourceCommit:'b'.repeat(40)},statusError('SOURCE_MISMATCH')],[{port:3095},statusError('PORT_MISMATCH')],
+  [{enabled:'false'},statusError('STATUS_INVALID')],[{unexpected:'private text'},statusError('STATUS_INVALID')],
+  [{observedAt:101001},statusError('HEARTBEAT_IN_FUTURE')],[{observedAt:99999},statusError('HEARTBEAT_NOT_RENEWED')],
+  [unsafe,{code:'RUNTIME_ADMISSION_TRUST_UNSAFE'}],
+ ]){
+  const f=fixture(),reads=observations(f,{}, {enabled:false},replacement),client=f.client();
+  await client.admit('start_turn');
+  await assert.rejects(client.admit('model_step'),expected);
+  assert.equal(reads(),3);
+  assert.equal(f.calls(),1);
+ }
+ const f=fixture(),reads=observations(f,{}, {enabled:false,epoch:crypto.randomUUID()}),client=f.client();
+ await client.admit('start_turn');
+ await assert.rejects(client.admit('model_step'),statusError('AUTHORITY_CHANGED'));
+ assert.equal(reads(),2);
+ assert.equal(f.calls(),1);
+});
+test('persistent closure or staleness returns the journal reason and never dispatches the waiting tool',async()=>{
+ await Promise.all([[{enabled:false},'BROKER_DISABLED'],[{observedAt:1},'HEARTBEAT_STALE']].map(async([observation,reason])=>{
+  const f=fixture(),reads=observations(f,{},...Array(4).fill(observation)),client=f.client();
+  await client.admit('start_turn');
+  await assert.rejects(client.admit('tool_dispatch'),statusError(reason));
+  assert.equal(reads(),5);
+  assert.equal(f.calls(),1);
+ }));
+});
+test('cancellation during the heartbeat wait prevents a new read and dispatch',async()=>{
+ const f=fixture(),abort=new AbortController();
+ let reads=0,observed;
+ const closed=new Promise(resolve=>{observed=resolve;});
+ f.dependencies.readTrust=async()=>{
+  reads++;
+  if(reads===2)observed();
+  return {key:pair.publicKey,status:{...f.status,enabled:reads!==2}};
+ };
+ const client=f.client();
+ await client.admit('start_turn');
+ const pending=client.admit('tool_dispatch',{signal:abort.signal});
+ await closed;
+ await new Promise(resolve=>setImmediate(resolve));
+ abort.abort();
+ await assert.rejects(pending,{code:'RUNTIME_ADMISSION_ABORTED'});
+ assert.equal(reads,2);
+ assert.equal(f.calls(),1);
+});
+test('a signed denial or lost response after renewal never retries the POST',async()=>{
+ for(const outcome of ['denied','lost']){
+  const f=fixture(),reads=observations(f,{}, {observedAt:1}, {});
+  let requests=0;
+  f.dependencies.transport=async({body})=>{
+   const request=JSON.parse(body);
+   if(++requests===1)return f.sign(request);
+   if(outcome==='denied')return f.sign(request,{admitted:false,reasonCode:'RUNTIME_RECOVERY_ADMISSION_CLOSED'});
+   throw Error('private transport error');
+  };
+  const client=f.client();
+  await client.admit('start_turn');
+  await assert.rejects(client.admit('tool_dispatch'),outcome==='denied'?{code:'RUNTIME_ADMISSION_DENIED',reasonCode:'RUNTIME_RECOVERY_ADMISSION_CLOSED'}:{code:'RUNTIME_ADMISSION_UNAVAILABLE',message:'RUNTIME_ADMISSION_UNAVAILABLE'});
+  assert.equal(reads(),3);
+  assert.equal(requests,2);
+ }
+});
 test('caller cancellation rejects even when a fixture transport ignores abort and returns a valid ACK later',async()=>{
  const f=fixture(),abort=new AbortController();let response;f.dependencies.transport=({body})=>new Promise(resolve=>{response=()=>resolve(f.sign(JSON.parse(body)));});const pending=f.client().admit('start_turn',{signal:abort.signal});while(!response)await new Promise(r=>setTimeout(r,1));abort.abort();await assert.rejects(pending,{code:'RUNTIME_ADMISSION_ABORTED'});response();await new Promise(r=>setTimeout(r,10));
 });

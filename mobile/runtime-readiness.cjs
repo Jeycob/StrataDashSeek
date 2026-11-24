@@ -4,15 +4,38 @@ const {createNativeHealth}=require('./native-health.cjs');
 const SHA=/^[a-f0-9]{40}$/,MAX=32768;
 const WATCHER_DEGRADED=Object.freeze(['push-watcher']),NO_DEGRADATION=Object.freeze([]);
 
+function assertStatusFile(stat,allowUnlinked=false){
+ if(!stat.isFile()||stat.isSymbolicLink()||stat.size>MAX||
+    (stat.nlink!==1&&!(allowUnlinked&&stat.nlink===0))||
+    (process.platform==='linux'&&(stat.uid!==0||stat.mode&0o022)))throw Error('Untrusted runtime status file');
+}
 function protectedJSON(directory,name){
- const file=path.join(directory,name),absolute=path.resolve(directory);let cursor=path.parse(absolute).root;
- for(const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)){
-  cursor=path.join(cursor,part);const s=fs.lstatSync(cursor);
-  if(!s.isDirectory()||s.isSymbolicLink()||process.platform==='linux'&&(s.uid!==0||s.mode&0o022&&!(s.mode&0o1000)))throw Error('Untrusted runtime status directory');
+ const file=path.join(directory,name),absolute=path.resolve(directory);
+ const heartbeat=name==='service-health.json',attempts=heartbeat?3:1;
+ const sameInode=(a,b)=>a.dev===b.dev&&a.ino===b.ino;
+ for(let attempt=1;attempt<=attempts;attempt++){
+  let cursor=path.parse(absolute).root;
+  for(const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)){
+   cursor=path.join(cursor,part);const s=fs.lstatSync(cursor);
+   if(!s.isDirectory()||s.isSymbolicLink()||process.platform==='linux'&&(s.uid!==0||s.mode&0o022&&!(s.mode&0o1000)))throw Error('Untrusted runtime status directory');
+  }
+  const before=fs.lstatSync(file);assertStatusFile(before);
+  const fd=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0));
+  try{
+   const opened=fs.fstatSync(fd);assertStatusFile(opened,heartbeat);
+   if(opened.nlink===1&&sameInode(opened,before)){
+    const buffer=Buffer.alloc(MAX+1),count=fs.readSync(fd,buffer,0,buffer.length,0);
+    if(count>MAX)throw Error('Runtime status exceeds limit');
+    const after=heartbeat?fs.fstatSync(fd):opened;assertStatusFile(after,heartbeat);
+    if(after.nlink===1)return JSON.parse(buffer.subarray(0,count).toString('utf8'));
+   }
+   // The supervisor publishes each heartbeat by rename. Discard a raced read
+   // only after checking the replacement, then verify the whole path again.
+   if(attempt===attempts)throw Error('Runtime status changed');
+   const current=fs.lstatSync(file);assertStatusFile(current);
+   if(sameInode(current,before))throw Error('Runtime status changed');
+  }finally{fs.closeSync(fd);}
  }
- const before=fs.lstatSync(file);if(!before.isFile()||before.isSymbolicLink()||before.nlink!==1||before.size>MAX||process.platform==='linux'&&(before.uid!==0||before.mode&0o022))throw Error('Untrusted runtime status file');
- const fd=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW||0)|(fs.constants.O_NONBLOCK||0));
- try{const s=fs.fstatSync(fd);if(s.dev!==before.dev||s.ino!==before.ino||s.nlink!==1||s.size>MAX)throw Error('Runtime status changed');const buffer=Buffer.alloc(MAX+1),count=fs.readSync(fd,buffer,0,buffer.length,0);if(count>MAX)throw Error('Runtime status exceeds limit');return JSON.parse(buffer.subarray(0,count).toString('utf8'));}finally{fs.closeSync(fd);}
 }
 function probe(port,route,{json=false,timeoutMs=1500,hostHeader,cookie,captureCookies=false}={}){
  return new Promise(resolve=>{let done=false,request,timer;const finish=value=>{if(done)return;done=true;clearTimeout(timer);request?.destroy();resolve(value);};
