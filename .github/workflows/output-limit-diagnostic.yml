@@ -1,0 +1,140 @@
+name: Output-limit fixture diagnostics
+
+on:
+  push:
+    branches: ['diagnostics/output-limit-20261124']
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Output-limit diagnostics (${{ matrix.group }})
+    if: github.ref == 'refs/heads/diagnostics/output-limit-20261124'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [sdk, chromium]
+    env:
+      HOMEAI_RUNTIME: ${{ github.workspace }}/runtime
+      EFFICIENCY_SDK_ROOT: ${{ github.workspace }}/runtime/node_modules
+      HARNESS_NATIVE_CLI: ${{ github.workspace }}/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js
+      HARNESS_PLAYWRIGHT_MODULE: ${{ github.workspace }}/development/ci/node_modules/playwright
+      PLAYWRIGHT_BROWSERS_PATH: /opt/stratadashseek-ci-browsers
+      DIAGNOSTIC_GROUP: ${{ matrix.group }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify diagnostic source
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD^)" = 39b632e18afc0b9c5044fdc8bb3bbde94fa59e5f
+          test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/output-limit-diagnostic.yml
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.22.1'
+          cache: npm
+          cache-dependency-path: |
+            runtime/package-lock.json
+            development/ci/package-lock.json
+      - name: Install the pinned SDK
+        run: npm ci --prefix runtime --no-audit --no-fund
+      - name: Install pinned Chromium and prepare its existing sandbox policy
+        if: matrix.group == 'chromium'
+        run: |
+          npm ci --prefix development/ci --no-audit --no-fund
+          sudo -n install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
+          node development/ci/node_modules/playwright/cli.js install --with-deps chromium
+          sudo -n chown -R root:root "$PLAYWRIGHT_BROWSERS_PATH"
+          sudo -n chmod -R go-w "$PLAYWRIGHT_BROWSERS_PATH"
+          if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] &&
+             [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == 1 ]]; then
+            sudo -n apt-get install --no-install-recommends -y apparmor
+            revision=$(node -p 'require("./development/ci/node_modules/playwright-core/browsers.json").browsers.find(browser => browser.name === "chromium-headless-shell").revision')
+            [[ "$revision" =~ ^[0-9]+$ ]]
+            shell="$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-$revision/chrome-headless-shell-linux64/chrome-headless-shell"
+            test -x "$shell"
+            test "$(realpath -- "$shell")" = "$shell"
+            sudo -n apparmor_parser --replace --skip-read-cache <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile stratadashseek-ci-preview "$shell" flags=(unconfined) {
+            userns,
+          }
+          EOF
+          fi
+      - name: Run fixtures and annotate exact failures
+        run: |
+          node --input-type=module <<'NODE'
+          import { relative } from 'node:path';
+          import { run } from 'node:test';
+          import { stripVTControlCharacters } from 'node:util';
+
+          const suites = {
+            sdk: [
+              'runtime/output-continuation/continuation.test.mjs',
+              'experiments/basalt-inkling/launcher.test.cjs',
+            ],
+            chromium: ['workspace/native-ui/task-budget.test.cjs'],
+          };
+          const files = suites[process.env.DIAGNOSTIC_GROUP];
+          if (!files) throw Error('Unknown diagnostic fixture group');
+
+          const escapeData = text => text.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+          const escapeProperty = text => escapeData(text).replaceAll(':', '%3A').replaceAll(',', '%2C');
+          function bounded(value, limit) {
+            return stripVTControlCharacters(String(value))
+              .replace(/https?:\/\/[^\s<>"']+/gi, '[URL omitted]')
+              .replace(/\b(?:bearer|basic)\s+[a-z0-9._+/=~-]+/gi, '[redacted authorization]')
+              .replace(/\b(?:authorization|(?:api|private)[_-]?key|(?:access|refresh)[_-]?token|secret|password)\b["']?\s*[:=]\s*["']?[^\s"',;]+/gi, '[redacted field]')
+              .slice(0, limit);
+          }
+          const scalar = value => value === null || ['boolean', 'number', 'string'].includes(typeof value);
+          function shortValue(value) {
+            if (scalar(value)) return bounded(JSON.stringify(value), 150);
+            if (Array.isArray(value) && value.length <= 8 && value.every(scalar)) {
+              return bounded(JSON.stringify(value), 150);
+            }
+            return undefined;
+          }
+          function annotate({ name, file, line, details }) {
+            const error = details?.error;
+            const cause = error?.cause ?? error;
+            const location = typeof file === 'string' ? relative(process.cwd(), file) : '';
+            const properties = ['title=' + escapeProperty(bounded(name, 170))];
+            if (files.includes(location)) {
+              properties.push('file=' + location);
+              if (Number.isInteger(line) && line > 0) properties.push('line=' + line);
+            }
+            const kind = [cause?.name, cause?.code ?? error?.code].filter(Boolean).join(' ');
+            const message = [kind, cause?.message ?? error?.message ?? 'No error message returned'];
+            for (const key of ['actual', 'expected']) {
+              const value = shortValue(cause?.[key]);
+              if (value !== undefined) message.push(key + '=' + value);
+            }
+            console.log('::error ' + properties.join(',') + '::' + escapeData(bounded(message.join('\n'), 1200)));
+          }
+
+          let passed = 0;
+          let failed = 0;
+          for await (const event of run({ files, concurrency: 1, timeout: 120000 })) {
+            if (event.type === 'test:fail') {
+              failed++;
+              annotate(event.data);
+            } else if (event.type === 'test:pass') {
+              const { skip, todo, name } = event.data;
+              if (skip || todo) {
+                failed++;
+                annotate({ ...event.data, name, details: { error: { message: 'Diagnostic fixture was skipped or marked todo' } } });
+              } else {
+                passed++;
+              }
+            }
+          }
+          console.log('Diagnostic results: ' + passed + ' passed, ' + failed + ' failed');
+          if (failed || passed === 0) process.exitCode = 1;
+          NODE
