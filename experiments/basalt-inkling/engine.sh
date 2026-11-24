@@ -155,6 +155,13 @@ if [[ $current != "$(<"$model_receipt")" ]]; then
     verify "$model" "$model_bytes" "$model_sha" || die "Inkling 2 Mini differs from its pin. Check the installation."
     record_verified_model
 fi
+here=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 cd -- "$runtime"
-exec bin/basalt serve "$model" --python "$runtime/.venv/bin/python" --alias inkling-2-mini --host 127.0.0.1 --port 8080 \
-    --gpu 0 --parallel 1 --max-context 131072 --kv fp8 --vision dynamic --image-remote-only
+args=(--alias inkling-2-mini --host 127.0.0.1 --port 8080
+      --gpu 0 --parallel 1 --max-context 131072 --kv fp8 --vision dynamic --image-remote-only)
+case ${BASALT_IDLE_ENGINE:-0} in
+    0) exec bin/basalt serve "$model" --python "$runtime/.venv/bin/python" "${args[@]}" ;;
+    1) exec "$runtime/.venv/bin/python" -I -B -X pycache_prefix=/dev/null "$here/idle-engine.py" \
+           --engine-bin "$runtime/bin/basalt" --model "$model" "${args[@]}" ;;
+    *) die 'BASALT_IDLE_ENGINE must be 0 or 1' ;;
+esac

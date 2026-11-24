@@ -46,6 +46,32 @@ def private_process(args, log_name):
                                 start_new_session=True, cwd='/', close_fds=True, env=CLEAN_ENV)
 
 
+def process_start(pid):
+    try:
+        return Path(f'/proc/{pid}/stat').read_text().rsplit(') ', 1)[1].split()[19]
+    except FileNotFoundError:
+        return None
+
+
+def root_service(name, args):
+    record = ROOT_RUN / (name + '.json')
+    if record.is_file():
+        old = json.loads(record.read_text())
+        if process_start(old['pid']) == old['start'] and old['start'] is not None:
+            actual = Path(f'/proc/{old["pid"]}/cmdline').read_bytes().rstrip(b'\0').split(b'\0')
+            if actual == [os.fsencode(x) for x in args]:
+                return
+            raise RuntimeError(f'unexpected live {name} process')
+    child = private_process(args, name + '.log')
+    for _ in range(10):
+        if child.poll() is not None:
+            raise RuntimeError(f'{name} exited during startup')
+        time.sleep(.05)
+    staged = record.with_suffix('.tmp')
+    staged.write_text(json.dumps({'pid': child.pid, 'start': process_start(child.pid)}))
+    staged.replace(record)
+
+
 def socket_listens(path, uid):
     try:
         item = path.lstat()
@@ -122,6 +148,11 @@ def main():
     user = pwd.getpwnam(USER)
     with (ROOT_RUN / 'boot.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        managing = (BASE / 'managed-release').is_symlink()
+        here = Path(__file__).parent
+        if managing:
+            directory(Path('/etc/basalt-idle'), 0, 0, 0o700)
+            root_service('native-idle-bridge', ['/usr/bin/python3', '-I', str(here / 'native-idle-bridge.py')])
         restore_tailnet()
         directory(PAIR_RUN, user.pw_uid, user.pw_gid, 0o700)
         if not socket_listens(PAIR_SOCKET, user.pw_uid):
@@ -134,6 +165,8 @@ def main():
         verify_private_routes()
         if not all(socket_listens(p, user.pw_uid) for p in (PAIR_SOCKET, READY_SOCKET)):
             raise RuntimeError('owner pairing or readiness socket unavailable')
+        if managing:
+            root_service('idle-supervisor', ['/opt/basalt-node-v24.22.3/bin/node', str(here / 'idle-supervisor.mjs')])
         print('Basalt, Native and the private owner entry are ready.', flush=True)
 
 

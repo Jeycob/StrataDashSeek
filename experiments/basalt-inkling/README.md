@@ -67,6 +67,12 @@ python3 -I /usr/local/libexec/homeai-basalt/cold-boot.py
 
 The boot script starts the enrolled Tailscale daemon, the pairing and readiness endpoints, and the existing unprivileged lab launcher. It reuses the installed model and the persisted chat data. Boot output is available under `/var/log/basalt-lab-control`. The private SSH setup above remains available. [Vast instance lifecycle](https://docs.vast.ai/guides/reference/faq/instances)
 
+### Stop the GPU after five idle minutes
+
+Install the reviewed release under `/workspace/homeai-basalt/releases/<full-commit>`. In a quiet window, run `select-managed-release.py <full-commit>` as root and restart the lab services with the installed cold-boot script. This enrolls the Native and model admission controls. The next Vast start uses the same selection. `install-cold-boot.py` also installs the root broker and supervisor into `/usr/local/libexec/homeai-basalt`.
+
+Before enabling automatic stops, pair an owner browser with the lab's separate external wake portal and verify a successful authenticated status request for this instance. Keep a normal signed-in Vast console available during the first stop/start acceptance. To allow stops, install `/etc/basalt-idle/enabled` as root:root, mode `0600`, containing the decimal contract ID `62357205`. A root-owned `/etc/basalt-idle/maintenance` suspends new stop attempts during deployment or operator testing. The supervisor waits for five consecutive minutes of confirmed inactivity, closes new work admission, and checks both services once more before asking the provider to stop the GPU. Ordinary page views and the readiness image can stay open. [Clock and signals](idle-stop.md) · [Provider transition and recovery](idle-supervisor.md)
+
 ## First acceptance check
 
 In the lab workspace, open a new chat. Ask: **Create `sum.cjs` that prints the sum of its numeric command-line arguments. Run `node sum.cjs 19 23` and show the observed output.** Check the actual file, a tool result of `42`, and the model used for the answer. A response that only prints proposed source code does not verify the integration.

@@ -41,7 +41,9 @@ def main():
         raise RuntimeError('installation requires root on the Basalt lab')
     if not Path('/etc/basalt-pair-owner').is_file():
         raise RuntimeError('install the enrolled owner pairing before the cold-boot hook')
-    scripts = [Path(__file__).with_name(name) for name in ('cold-boot.py', 'serve-ready-image.py')]
+    scripts = [Path(__file__).with_name(name) for name in (
+        'cold-boot.py', 'serve-ready-image.py', 'native-idle-bridge.py', 'idle-supervisor.mjs',
+        'idle-supervisor-host.py', 'idle-guard.mjs', 'idle-engine.py')]
     for script in scripts:
         check_private(script)
     original = check_private(ONSTART)

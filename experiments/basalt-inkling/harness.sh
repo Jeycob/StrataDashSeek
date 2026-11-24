@@ -39,6 +39,9 @@ node_bin=$(type -P node) || die 'Install Node.js 24 with npm for this account.'
 # Do not inherit account credentials, SDK overlays, proxies, HOME or XDG paths.
 lab_env=(env -i "PATH=$PATH" "HOME=$lab_home" "DSH_HOME=$lab_home/.dsh"
     "TMPDIR=$lab/tmp" "LANG=${LANG:-C.UTF-8}" DSH_TELEMETRY_DISABLED=1)
+if [[ ${BASALT_IDLE_BRIDGE:-0} == 1 ]]; then
+    lab_env+=(BASALT_IDLE_BRIDGE=1)
+fi
 if [[ $action == setup ]]; then
     npm_bin=$(type -P npm) || die 'Install npm alongside Node.js 24.'
     cp -- "$source_runtime/package.json" "$source_runtime/package-lock.json" "$runtime/"
@@ -59,11 +62,20 @@ trap 'rm -f -- "$stage"' EXIT
 mv -T -- "$stage" "$overlay"
 trap - EXIT
 
-launch=("$node_bin" "$cli" web --patch "$overlay")
+launch=("$node_bin")
+if [[ $action == serve && ${BASALT_IDLE_BRIDGE:-0} == 1 ]]; then
+    launch+=(--import "$here/idle-preload.mjs")
+fi
+launch+=("$cli" web --patch "$overlay")
 if [[ $action == config ]]; then
     exec "${lab_env[@]}" "${launch[@]}" --dump-config
 fi
 # The pi-ai OpenAI client requires a credential even on a keyless loopback server.
 # Never reuse a real provider key. Native browser pairing is handled by the SDK.
+access_args=(--public-url http://127.0.0.1:8787/)
+if [[ ${BASALT_ANDORRA_TAILNET:-0} == 1 ]]; then
+    access_args=(--public-url https://basalt-inkling.tail9a42c6.ts.net/
+        --trusted-host basalt-inkling.tail9a42c6.ts.net 127.0.0.1:8787)
+fi
 exec "${lab_env[@]}" BASALT_LOOPBACK_KEY=local-only "${launch[@]}" \
-    --no-open --host 127.0.0.1 --port 8787 --public-url http://127.0.0.1:8787/
+    --no-open --host 127.0.0.1 --port 8787 "${access_args[@]}"

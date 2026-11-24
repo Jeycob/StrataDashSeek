@@ -74,4 +74,9 @@ const patches = [
     name: continuation.href,
   }] },
 ];
+if (process.env.BASALT_IDLE_BRIDGE === '1') {
+  const idle = new URL('./idle-native.mjs', import.meta.url);
+  await access(idle);
+  patches.push({ insert: [{ id: 'basalt-idle-activity', name: idle.href }] });
+}
 process.stdout.write(JSON.stringify(patches, null, 2) + '\n');

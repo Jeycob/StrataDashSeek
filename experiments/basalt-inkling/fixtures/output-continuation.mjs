@@ -4,6 +4,7 @@ import { realpath, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { verifyIdleSocket } from './idle-socket.mjs';
 
 const [runtime, releaseRuntime, overlay, proof] = process.argv.slice(2);
 const sdk = createRequire(path.join(runtime, 'package.json'));
@@ -48,6 +49,7 @@ try {
   const output = events.filter(e => e.type === 'assistant/message')
     .flatMap(e => e.data.message.content).filter(block => block.type === 'text').map(block => block.text);
   assert.deepEqual(output, ['Partial fixture.', 'Finished fixture.']);
+  await verifyIdleSocket(ctx, sdk, sessionId);
   await writeFile(proof, 'same-turn recovery and served web client\n', { flag: 'wx' });
   exitCode = 0;
 } finally {
