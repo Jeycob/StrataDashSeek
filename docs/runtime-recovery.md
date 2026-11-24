@@ -135,6 +135,16 @@ leaves recovery required and is never replayed automatically.
    the counters look idle. An accepted-work latch permanently prohibits
    automatic rollback for that attempt.
 
+On a cold launcher start after the fallback pointer and applied record have
+already switched, the root bootstrap can resume that exact verified last-good
+release before fetching main. It requires the original closed zero-work fence,
+the supervisor lock, an empty service UID, enabled startup policy with protected
+trust files, and no unfinished pointer transaction.
+The existing health reconciliation must still confirm the fallback before it
+can admit work. This starts processes only and preserves the consumed candidate
+and rollback history. A later regular update still needs an eligible signed
+candidate.
+
 `status()` returns a sanitized recovery sub-object without filesystem paths,
 cookies or fence tokens. `phase:healthy` and `functionalHealthConfirmed` describe
 a historical verified transition, **not live uptime**. Its sourceReady and

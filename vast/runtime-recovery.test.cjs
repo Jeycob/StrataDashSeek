@@ -41,6 +41,25 @@ test('ambiguous switch is never replayed after restart and requires observed fal
  const f=fixture(t),{c,id}=await begin(f);f.hooks.switchRelease=async({to})=>{f.setPointer(to);throw Error('lost switch acknowledgement');};f.advance(90000);assert.equal((await c.observe(id,{...f.health(),runtimeReady:false})).phase,'recovery_required');assert.deepEqual(f.counts(),{switches:0,restarts:0});
  const restarted=f.controller();assert.equal((await restarted.reconcile(id,{...f.health(),runtimeReady:false})).recoveryRequired,true);assert.equal((await restarted.reconcile(id,f.health())).phase,'rolled_back');assert.deepEqual(f.counts(),{switches:0,restarts:0});
 });
+test('cold fallback proof requires an already-switched previous release and the durable zero-work fence',async t=>{
+ const f=fixture(t),{c,id}=await begin(f);f.advance(90000);
+ f.hooks.restart=async()=>{throw Error('fallback supervisor did not start');};
+ assert.equal((await c.observe(id,{...f.health(),runtimeReady:false})).phase,'recovery_required');
+ const cold=f.controller(),stored=fs.readFileSync(f.file,'utf8');
+ const admission={version:1,epoch:id,sourceCommit:candidate,open:false,acceptedWork:0,fenceToken:'4'.repeat(64)};
+ assert.equal((await cold.fallbackForStartup(admission)).commit,old);
+ assert.equal((await cold.fallbackForStartup({...admission,sourceCommit:old})).commit,old);
+ for(const changes of [{open:true},{epoch:'b'.repeat(36)},{acceptedWork:1},{sourceCommit:'c'.repeat(40)},{fenceToken:null}])
+  await assert.rejects(cold.fallbackForStartup({...admission,...changes}),{code:'RUNTIME_RECOVERY_FALLBACK_FENCE_UNPROVEN'});
+ f.setPointer(candidate);
+ await assert.rejects(cold.fallbackForStartup(admission),{code:'RUNTIME_RECOVERY_POINTER_MISMATCH'});
+ f.setPointer(old);
+ assert.equal(fs.readFileSync(f.file,'utf8'),stored);
+ await assert.rejects(cold.admitWork(id,old),{code:'RUNTIME_RECOVERY_ADMISSION_CLOSED'});
+ assert.equal((await cold.reconcile(id,f.health())).phase,'rolled_back');
+ await assert.rejects(cold.begin(candidate),{code:'RUNTIME_RECOVERY_ATTEMPT_LIMIT'});
+ assert.deepEqual(f.counts(),{switches:1,restarts:0});
+});
 test('policy changes, damaged journals and backward clocks cannot silently reset a durable attempt budget',async t=>{
  const f=fixture(t),{c}=await begin(f),state=f.store.read();f.advance(-1);await assert.rejects(c.status(),{code:'RUNTIME_RECOVERY_CLOCK_UNCERTAIN'});f.advance(1);f.store.write({...state,policyHash:'0'.repeat(64)});await assert.rejects(f.controller().status(),{code:'RUNTIME_RECOVERY_STATE_UNTRUSTED'});f.store.write({...state,history:[{...state.history[0],record:{}}]});await assert.rejects(c.status(),{code:'RUNTIME_RECOVERY_RELEASE_UNSAFE'});assert.deepEqual(f.counts(),{switches:0,restarts:0});
 });

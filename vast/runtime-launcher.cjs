@@ -3,7 +3,7 @@
 // supervisor. Model and Tailscale processes survive a startup-only rollback.
 const fs=require('node:fs'),path=require('node:path'),cp=require('node:child_process'),crypto=require('node:crypto'),{pathToFileURL}=require('node:url');
 const runtime=require('./runtime-paths.cjs'),release=require('./runtime-release.cjs'),update=require('./startup-update.cjs');
-const {createRootAdmission}=require('./runtime-admission-server.cjs'),{createRuntimeRecovery}=require('./runtime-recovery.cjs');
+const {createRootAdmission}=require('./runtime-admission-server.cjs'),{createRuntimeRecovery,rollbackPending}=require('./runtime-recovery.cjs');
 const fault=code=>Object.assign(Error(code),{code});
 function agentProcesses(uid){
  if(process.platform!=='linux'||process.getuid?.()!==0||!Number.isInteger(uid)||uid<1)throw fault('RUNTIME_LAUNCH_ROOT_REQUIRED');
@@ -16,17 +16,56 @@ function inheritedLease(root){
  const checked=cp.spawnSync('/usr/bin/flock',['-n','9'],{stdio:['ignore','ignore','ignore','ignore','ignore','ignore','ignore','ignore','ignore',9],timeout:1000,env:{PATH:'/usr/bin:/bin',HOME:'/nonexistent'}});if(checked.status!==0)throw fault('RUNTIME_LAUNCH_LEASE_BUSY');
 }
 async function listen(server,port){await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,'127.0.0.1',resolve);});}
+function assertFallbackApplied(root,proof){
+ const directory=path.join(root,'root-secrets');
+ const policy=path.join(directory,'startup-update.json');
+ runtime.trustedFile(policy);runtime.trustedFile(path.join(directory,'startup-update-signers.gpg'));
+ update.config(JSON.parse(fs.readFileSync(policy,'utf8')));
+ if(runtime.trustedFile(path.join(directory,'startup-update-transaction.json'),{optional:true}))
+  throw fault('RUNTIME_LAUNCH_UPDATE_TRANSACTION_PENDING');
+ const file=path.join(directory,'startup-update-applied.json'),before=runtime.trustedFile(file);
+ const fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+ try{
+  const opened=fs.fstatSync(fd),bytes=Buffer.alloc(4097);
+  if(opened.dev!==before.dev||opened.ino!==before.ino||opened.size!==before.size||opened.size>4096)
+   throw fault('RUNTIME_LAUNCH_FALLBACK_APPLIED_UNPROVEN');
+  const count=fs.readSync(fd,bytes,0,bytes.length,0),applied=JSON.parse(bytes.subarray(0,count));
+  if(count!==opened.size||applied?.commit!==proof.commit||applied.digest!==proof.digest)
+   throw fault('RUNTIME_LAUNCH_FALLBACK_APPLIED_UNPROVEN');
+ }finally{fs.closeSync(fd);}
+}
 class RuntimeLauncher{
  constructor({root,uid,gid}){Object.assign(this,{root,uid,gid});this.executionFloor=require('./project-execution-floor.cjs').createExecutionFloor({rootDirectory:path.resolve(root)}).capturePolicy();this.supervisor=null;this.controller=null;this.readiness=null;this.pending=false;this.closing=false;this.gatedLaunch=null;}
  assertExecution(commit){this.executionFloor.assertPolicyUnchanged();if(commit)this.executionFloor.assertReleaseAllowed(commit);}
  assertCurrent(commit){this.assertExecution(commit);if(release.currentCommit(this.root)!==commit)throw fault('RUNTIME_LAUNCH_RELEASE_CHANGED');}
+ installRecovery(proof,current){
+  this.controller=createRuntimeRecovery({root:this.root,lockModule:pathToFileURL(path.join(__dirname,'process-lock.mjs')).href,
+   policy:{enabled:true,compatibilityId:proof.compatibilityId,minimumSecurityEpoch:2,deniedCommits:[]},hooks:{
+    verifyRelease:({commit,signal})=>release.verify(this.root,commit,{signal}),currentCommit:async()=>current(),
+    fence:args=>this.broker.fence(args),switchRelease:intent=>this.switchRelease(intent),restart:async()=>this.launchUi()
+   }});
+ }
  async initialize(){
   // The inherited supervisor flock excludes another trusted launcher. Refuse
   // any pre-existing agent/terminal/VM process before the cold-start boundary.
   inheritedLease(this.root);assertNoAgentProcesses(this.uid);runtime.prepare(this.root,{uid:this.uid,gid:this.gid});
   const current=()=>release.currentCommit(this.root);
-  this.assertExecution(current());
-  this.broker=createRootAdmission({root:this.root,sourceCommit:current(),currentCommit:current,executionFloor:this.executionFloor,controller:{status:()=>this.controller?.status()??Promise.resolve({phase:'uninitialized'}),admitWork:async(...args)=>{this.assertExecution();if(!this.controller)throw fault('RUNTIME_RECOVERY_NOT_ENROLLED');const value=await this.controller.admitWork(...args);this.assertExecution();return value;}},quiescence:async()=>{
+  const installed=current();this.assertExecution(installed);
+  const saved=runtime.readPrivate(this.root,'runtime-recovery.json');
+  const recorded=saved?.history.find(row=>row.id===saved.active);
+  if(saved?.active!=null&&!recorded)throw fault('RUNTIME_RECOVERY_STATE_UNTRUSTED');
+  let fallback,closedAdmission;
+  if(rollbackPending(recorded?.phase)){
+   // The broker constructor closes admission. Capture and prove the pre-existing
+   // fence before that constructor can change the state or generate a new one.
+   closedAdmission=runtime.readPrivate(this.root,'runtime-admission-controller.json');
+   const proof=await release.verify(this.root,installed);this.assertCurrent(installed);
+   this.installRecovery(proof,current);
+   fallback=await this.controller.fallbackForStartup(closedAdmission);
+   if(fallback?.commit!==installed)throw fault('RUNTIME_LAUNCH_FALLBACK_UNPROVEN');
+   assertFallbackApplied(this.root,fallback);this.assertCurrent(installed);assertNoAgentProcesses(this.uid);
+  }
+  this.broker=createRootAdmission({root:this.root,sourceCommit:installed,currentCommit:current,executionFloor:this.executionFloor,controller:{status:()=>this.controller?.status()??Promise.resolve({phase:'uninitialized'}),admitWork:async(...args)=>{this.assertExecution();if(!this.controller)throw fault('RUNTIME_RECOVERY_NOT_ENROLLED');const value=await this.controller.admitWork(...args);this.assertExecution();return value;}},quiescence:async()=>{
    const absent=agentProcesses(this.uid).length===0;
    // This is a root-owned dispatch proof, not a PID or open-port health check:
    // no grant has been issued since the verified cold boundary and every known
@@ -34,20 +73,24 @@ class RuntimeLauncher{
    const gated=this.gatedLaunch?.epoch===this.broker.state.epoch&&this.broker.state.acceptedWork===0;
    return{activeRequests:absent||gated?0:null,activeJobs:absent||gated?0:null,processesAbsent:absent,observedAt:Date.now()};
   }});
+  if(fallback&&JSON.stringify(this.broker.state)!==JSON.stringify(closedAdmission))
+   throw fault('RUNTIME_LAUNCH_FENCE_CHANGED');
   this.server=this.broker.createServer();await listen(this.server,3094);this.assertExecution(current());
   this.heartbeat=setInterval(()=>{try{this.assertExecution();this.broker.heartbeat();}catch{this.broker.state.open=false;void this.broker.closeAdmission().catch(()=>{});}},3000);this.heartbeat.unref();
-  await update.update(this.root,{onVerified:({commit,digest})=>{
+  if(!fallback)await update.update(this.root,{onVerified:({commit,digest})=>{
    this.assertExecution(commit);
    const proof=release.attest(this.root,commit,{commitSignatureVerified:true,sourceDigest:digest});
-   if(!this.controller)this.controller=createRuntimeRecovery({root:this.root,lockModule:pathToFileURL(path.join(__dirname,'process-lock.mjs')).href,policy:{enabled:true,compatibilityId:proof.compatibilityId,minimumSecurityEpoch:2,deniedCommits:[]},hooks:{
-    verifyRelease:({commit,signal})=>release.verify(this.root,commit,{signal}),currentCommit:async()=>current(),fence:args=>this.broker.fence(args),
-    switchRelease:intent=>this.switchRelease(intent),restart:async()=>this.launchUi()
-   }});
+   if(!this.controller)this.installRecovery(proof,current);
   },beforeActivate:async({commit})=>{
    this.assertExecution(commit);const state=await this.controller.status();this.assertExecution(commit);if(state.phase==='uninitialized')return;
    const attempt=await this.controller.begin(commit);this.assertExecution(commit);if(attempt.phase!=='monitoring')throw fault('RUNTIME_LAUNCH_RECOVERY_REQUIRED');
   }});
-  await this.launchUi();this.timer=setInterval(()=>void this.tick(),1000);this.timer.unref();await this.tick();return this;
+  if(fallback){
+   assertFallbackApplied(this.root,fallback);this.assertCurrent(fallback.commit);
+   update.statusWriter(this.root)({phase:'ready',appliedCommit:fallback.commit,targetCommit:fallback.commit,
+    signatureVerified:true,error:null});
+  }
+  await this.launchUi(fallback?.commit);this.timer=setInterval(()=>void this.tick(),1000);this.timer.unref();await this.tick();return this;
  }
  async switchRelease(intent){
   this.assertCurrent(intent.from);
@@ -56,8 +99,8 @@ class RuntimeLauncher{
   await this.stopUi();this.assertCurrent(intent.from);this.assertExecution(intent.to);assertNoAgentProcesses(this.uid);
   update.activate(this.root,path.join(this.root,'releases',intent.to),intent.to);update.statusWriter(this.root)({phase:'ready',appliedCommit:intent.to,targetCommit:intent.to,signatureVerified:true,error:null});
  }
- async launchUi(){
-  if(this.supervisor)throw fault('RUNTIME_LAUNCH_SUPERVISOR_EXISTS');const commit=release.currentCommit(this.root);this.assertCurrent(commit);await release.verify(this.root,commit);this.assertCurrent(commit);
+ async launchUi(commit=release.currentCommit(this.root)){
+  if(this.supervisor)throw fault('RUNTIME_LAUNCH_SUPERVISOR_EXISTS');this.assertCurrent(commit);await release.verify(this.root,commit);this.assertCurrent(commit);
   // Runs on every cold/recovery start, under FD9, before any Native/plugin
   // writer is spawned. An unfinished purge must reconcile or keep Native shut.
   await require('./offline-purge-maintenance.cjs').beforeNativeStart({root:this.root,uid:this.uid,broker:this.broker,assertNoAgentProcesses,inheritedLease});
@@ -80,7 +123,7 @@ class RuntimeLauncher{
    if(health.sourceReady&&health.runtimeReady)state=await this.controller.adoptHealthy(release.currentCommit(this.root),health);
    else if(Date.now()-this.launchAttempt.startedAt>=90000){await this.broker.closeAdmission();runtime.writePrivate(this.root,'runtime-launch-attempt.json',{...this.launchAttempt,phase:'recovery_required',reasonCode:'RUNTIME_RECOVERY_LAST_GOOD_REQUIRED'});this.publishStatus({version:1,phase:'recovery_required',reasonCode:'RUNTIME_RECOVERY_LAST_GOOD_REQUIRED'});return;}
   }else if(state.phase==='monitoring')state=await this.controller.observe(state.attemptId,health);
-  else if(['rollback_intent','rollback_switched','recovery_required'].includes(state.phase))state=await this.controller.reconcile(state.attemptId,health);
+  else if(rollbackPending(state.phase))state=await this.controller.reconcile(state.attemptId,health);
   this.assertExecution();if(['healthy','rolled_back'].includes(state.phase)&&require('./runtime-recovery.cjs').healthy(health,release.currentCommit(this.root),Date.now())){this.assertExecution(release.currentCommit(this.root));await this.broker.open(health);this.assertExecution();runtime.writePrivate(this.root,'runtime-launch-attempt.json',{...this.launchAttempt,phase:'healthy'});}else await this.broker.closeAdmission();
   this.publishStatus(state);
  }catch(error){await this.broker.closeAdmission().catch(()=>{});try{this.publishStatus({version:1,phase:'recovery_required',reasonCode:/^[A-Z_]+$/.test(error.code||'')?error.code:'RUNTIME_LAUNCH_OBSERVATION_FAILED'});}catch{}}finally{this.pending=false;}}

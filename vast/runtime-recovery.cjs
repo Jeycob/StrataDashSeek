@@ -4,6 +4,7 @@
 const crypto=require('node:crypto'),path=require('node:path');
 const SHA=/^[a-f0-9]{40}$/,HASH=/^[a-f0-9]{64}$/,UUID=/^[a-f0-9-]{36}$/,WINDOW=86400000,TIMEOUT=90000;
 const UNSAFE_BASELINE='505460d62e63c389def4fba5c82da8b9ab9cfd13';
+const rollbackPending=phase=>['rollback_intent','rollback_switched','recovery_required'].includes(phase);
 const fault=code=>Object.assign(Error(code),{code,status:409});
 const digest=value=>crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function policyOf(value={}){
@@ -86,9 +87,26 @@ class RuntimeRecovery {
    row.reasonCode='ROLLED_BACK_RUNTIME_STARTING';await this.save(state);return this.statusOf(state);
   }catch{return this.hold(state,row,'RUNTIME_RECOVERY_OUTCOME_UNCERTAIN');}
  });}
+ // A cold launcher may prove that the existing fallback can be started without
+ // changing the pointer or consuming another attempt. The caller owns FD9 and
+ // the process boundary. Reconciliation still requires fresh functional health.
+ async fallbackForStartup(admission){return this.locked(async(state,now)=>{
+  const row=state.history.find(item=>item.id===state.active),previous=row?.previous;
+  if(!rollbackPending(row?.phase)||row.rollbackAt===null||row.rollbackAt>now||row.acceptedWork||
+     !previous||!state.lastGood||previous.commit===row.candidate||digest(previous)!==digest(state.lastGood))
+   throw fault('RUNTIME_RECOVERY_FALLBACK_UNPROVEN');
+  if(admission?.version!==1||admission.open!==false||admission.epoch!==row.id||admission.acceptedWork!==0||
+     ![row.candidate,previous.commit].includes(admission.sourceCommit)||!HASH.test(admission.fenceToken||''))
+   throw fault('RUNTIME_RECOVERY_FALLBACK_FENCE_UNPROVEN');
+  if(await this.call('currentCommit')!==previous.commit)throw fault('RUNTIME_RECOVERY_POINTER_MISMATCH');
+  const checked=await this.release(previous.commit);
+  if(digest(checked)!==digest(previous))throw fault('RUNTIME_RECOVERY_LAST_GOOD_CHANGED');
+  return checked;
+ });}
+
  // Only observation, never a repeated switch/restart after a controller crash.
  async reconcile(id,observation){return this.locked(async(state,now)=>{
-  const row=this.row(state,id);if(!['rollback_intent','rollback_switched','recovery_required'].includes(row.phase)||row.rollbackAt===null)return this.statusOf(state);
+  const row=this.row(state,id);if(!rollbackPending(row.phase)||row.rollbackAt===null)return this.statusOf(state);
   if(row.acceptedWork)return this.hold(state,row,'RUNTIME_RECOVERY_USER_WORK_ACCEPTED');
   try{if(await this.call('currentCommit')!==row.previous.commit||!healthy(observation,row.previous.commit,now,row.rollbackAt)||digest(await this.release(row.previous.commit))!==digest(row.previous))return this.hold(state,row,'RUNTIME_RECOVERY_OUTCOME_UNCERTAIN');await this.fence(row,row.previous.commit,now);}catch{return this.hold(state,row,'RUNTIME_RECOVERY_OUTCOME_UNCERTAIN');}
   row.phase='rolled_back';row.servingCommit=row.previous.commit;row.reasonCode='ROLLED_BACK_RUNTIME_READY';await this.save(state);return this.statusOf(state);
@@ -105,4 +123,4 @@ function createRuntimeRecovery({root='/data/harness',policy,hooks,lockModule=new
  const runtime=require('./runtime-paths.cjs'),directory=runtime.control(root).privateState;
   return new RuntimeRecovery({policy,hooks,store:{read:()=>runtime.readPrivate(root,'runtime-recovery.json'),write:value=>runtime.writePrivate(root,'runtime-recovery.json',value)},exclusive:async action=>{const{acquireProcessLock}=await import(lockModule);const lock=await acquireProcessLock(path.join(directory,'runtime-recovery.lock'),{timeoutMs:2000});try{return await action();}finally{await lock.release();}}});
 }
-module.exports={RuntimeRecovery,createRuntimeRecovery,policyOf,verifiedRelease,healthy};
+module.exports={RuntimeRecovery,createRuntimeRecovery,policyOf,verifiedRelease,healthy,rollbackPending};
