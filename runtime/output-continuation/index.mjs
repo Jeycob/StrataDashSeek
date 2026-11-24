@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import runtime from '../require.cjs';
-import { captureFileDelivery, observeFileDelivery, recordFileDelivery, verifyFileDelivery } from './file-delivery.mjs';
+import { captureFileDelivery, recordFileDelivery, trackFileDelivery, verifyFileDelivery } from './file-delivery.mjs';
 import { bindFileRecoveryTarget, createFileRecovery, cutFileTool, fileRecoverySection, fileRecoveryTools,
   firstStepFileTools, guardFileRecovery, isCreateOnlyRecoveryWrite, observeFileRecovery } from './file-recovery.mjs';
 
@@ -81,13 +81,17 @@ export function apply(ctx) {
       state.toolConcluded = false;
       let outcome;
       try { outcome = await original.call(this, next); }
-      finally { state.inStep = false; }
-      if (state.file?.delivery?.presented.size && await observeFileDelivery(state.file.delivery, signal)) state.stalled = 0;
+      finally {
+        state.inStep = false;
+        state.file?.delivery?.pending.clear();
+      }
       if (signal.aborted) return outcome;
       // Some providers terminate with reasoning or no answer at all after a
       // cut. A clean finish chunk alone is insufficient to clear that cut.
       if (outcome?.kind === 'completed') {
-        if (state.file && await verifyFileDelivery(state.file.delivery, signal)) {
+        const delivered = state.file && await verifyFileDelivery(ctx, state.file.delivery, this, signal).catch(() => false);
+        if (signal.aborted) return outcome;
+        if (delivered) {
           state.file.confirmed = true;
           state.toolConcluded = true;
         }
@@ -105,7 +109,7 @@ export function apply(ctx) {
         if (!state.file) {
           state.file = createFileRecovery();
           if (tools.some(tool => tool.name === 'present')) {
-            state.file.delivery = await captureFileDelivery(ctx, this, signal);
+            state.file.delivery = await captureFileDelivery(ctx, this, signal).catch(() => undefined);
           }
         } else state.file.repeatedCut = true;
       }
@@ -138,7 +142,7 @@ export function apply(ctx) {
     const entry = sessions.get(session), state = entry?.state;
     if (!state || state.turn !== event.data?.turn) return;
     if (event.type === 'turn/end') entry.state = null;
-    if (event.type === 'deliverables/presented' && state.inStep) recordFileDelivery(state.file?.delivery, event.data);
+    if (event.type === 'deliverables/presented' && state.inStep && recordFileDelivery(state.file?.delivery, event.data)) state.stalled = 0;
     if (event.type === 'assistant/message' && state.inStep) {
       state.fileToolCut = cutFileTool(event.data.stream);
       const visible = event.data.message.content.flatMap(block => {
@@ -154,6 +158,12 @@ export function apply(ctx) {
     remember(state, exec.callId);
     if (state.file ? observeFileRecovery(state.file, exec, result) : result.isError === false) state.stalled = 0;
     if (result.concludesTurn === true) state.toolConcluded = true;
+  }, { global: true });
+  ctx.on('tools/execute', (exec, next) => {
+    const state = attached.get(exec.agent)?.state;
+    const delivery = state?.file?.delivery;
+    if (exec.name !== 'present' || !state?.inStep || !delivery) return next();
+    return trackFileDelivery(ctx, delivery, state.turn, exec, next);
   }, { global: true });
   ctx.tools.guard(exec => {
     const state = attached.get(exec.agent)?.state;

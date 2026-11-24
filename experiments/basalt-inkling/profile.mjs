@@ -4,10 +4,12 @@ import { access } from 'node:fs/promises';
 
 const continuation = new URL('../../runtime/output-continuation/index.mjs', import.meta.url);
 try {
-  await Promise.all(['index.mjs', 'file-recovery.mjs', 'file-delivery.mjs', 'package.json', 'client.js', '../require.cjs']
+  await Promise.all(['index.mjs', 'file-recovery.mjs', 'package.json', 'client.js', '../require.cjs']
     .map(file => access(new URL(file, continuation))));
+  // Load the delivery verifier and its project-path policies before starting Native.
+  await import(new URL('file-delivery.mjs', continuation));
 } catch (cause) {
-  throw new Error('The lab release must include runtime/output-continuation and runtime/require.cjs from the same revision as this launcher', { cause });
+  throw new Error('The lab release must include runtime/output-continuation and its dependencies from the same revision. Use experiments/basalt-inkling/release-paths.txt.', { cause });
 }
 const origin = 'http://127.0.0.1:8080/v1';
 const response = await fetch(`${origin}/models`, {

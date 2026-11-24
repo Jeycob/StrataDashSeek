@@ -49,23 +49,19 @@ test('actual web profile binds only verified Inkling and round-trips a streamed 
   const lab = await fs.mkdtemp(path.join(os.tmpdir(), 'basalt-harness-'));
   t.after(() => fs.rm(lab, { recursive: true, force: true }));
   const runtime = path.join(lab, 'runtime');
-  const sourceRuntime = path.resolve(__dirname, '../../runtime');
+  const repo = path.resolve(__dirname, '../..');
+  const sourceRuntime = path.join(repo, 'runtime');
   // Exercise the minimal release archive layout, with the SDK installed separately.
   const release = path.join(lab, 'extracted lab release');
   const releaseRuntime = path.join(release, 'runtime');
   const launchers = path.join(release, 'experiments', 'basalt-inkling');
-  await fs.mkdir(releaseRuntime, { recursive: true });
-  await fs.mkdir(launchers, { recursive: true });
-  for (const file of ['harness.sh', 'profile.mjs']) {
-    await fs.copyFile(path.join(__dirname, file), path.join(launchers, file));
+  const releasePaths = await fs.readFile(path.join(__dirname, 'release-paths.txt'), 'utf8');
+  for (const file of releasePaths.trim().split(/\r?\n/)) {
+    await fs.cp(path.join(repo, file), path.join(release, file), { recursive: true });
   }
-  await fs.copyFile(path.join(sourceRuntime, 'require.cjs'), path.join(releaseRuntime, 'require.cjs'));
-  await fs.cp(path.join(sourceRuntime, 'output-continuation'),
-    path.join(releaseRuntime, 'output-continuation'), { recursive: true });
   await fs.mkdir(runtime);
   for (const manifest of ['package.json', 'package-lock.json']) {
     await fs.copyFile(path.join(sourceRuntime, manifest), path.join(runtime, manifest));
-    await fs.copyFile(path.join(sourceRuntime, manifest), path.join(releaseRuntime, manifest));
   }
   await fs.symlink(path.join(sourceRuntime, 'node_modules'), path.join(runtime, 'node_modules'), 'dir');
   const sdk = createRequire(path.join(sourceRuntime, 'package.json'));
@@ -213,8 +209,8 @@ if (args[1] === 'web') {
   });
   assert.equal(await fs.readFile(proof, 'utf8'), 'same-turn recovery and served web client\n');
   assert.deepEqual(requests.slice(2).map(row => row.body.model), [modelId, modelId]);
-  for (const name of ['file-recovery.mjs', 'file-delivery.mjs']) {
-    const required = path.join(releaseRuntime, 'output-continuation', name);
+  for (const name of ['runtime/output-continuation/file-recovery.mjs', 'runtime/output-continuation/file-delivery.mjs', 'quality/criteria.mjs']) {
+    const required = path.join(release, name);
     await fs.rename(required, required + '.missing');
     await assert.rejects(dump(), error => error.code === 1 && /must include runtime\/output-continuation/.test(error.stderr));
     await fs.rename(required + '.missing', required);

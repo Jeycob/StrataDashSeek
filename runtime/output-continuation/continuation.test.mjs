@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import * as continuation from './index.mjs';
+import { recordFileDelivery } from './file-delivery.mjs';
 import * as fifo from '../../vast/turn-queue/plugin.mjs';
 
 const sdk = process.env.EFFICIENCY_SDK_ROOT ?? '/data/harness/runtime/node_modules';
@@ -35,7 +36,7 @@ async function active(fibers) {
     await new Promise(resolve => setImmediate(resolve));
   }
 }
-async function fixture(t, script, { queued = false, gate, fileRoot, fileAction } = {}) {
+async function fixture(t, script, { queued = false, gate, fileRoot, fileAction, fileCwd } = {}) {
   const ctx = new Context(), events = [], requests = [], operations = [];
   let fixed = false;
   t.after(async () => {
@@ -49,7 +50,7 @@ async function fixture(t, script, { queued = false, gate, fileRoot, fileAction }
   ctx.tools.setExecutor(new NativeToolExecutor(ctx));
   if (fileRoot) {
     const [{ LocalFileSystem }, toolFs] = await Promise.all([load('dsh-fs-local'), load('dsh-tool-fs')]);
-    ctx.provide('workingDirectory', { ensure: async () => fileRoot });
+    ctx.provide('workingDirectory', { ensure: async () => fileCwd ? fileCwd() : fileRoot });
     new LocalFileSystem(ctx, { cwd: fileRoot, diffBasisMaxBytes: 1024 * 1024 });
     await active([ctx.plugin(toolFs, { readImage: false })]);
     if (fileAction) await active([ctx.plugin(await load('dsh-tool-present'), {})]);
@@ -295,7 +296,9 @@ test('cut-off content-first write recovers to real working HTML without overwrit
   } finally { await browser.close(); }
 });
 
-test('actual SDK present confirms an alternative write only when a new or changed file was delivered', { timeout: 45000 }, async t => {
+test('actual SDK present confirms an alternative write only when a new or changed file was delivered', {
+  timeout: 45000, skip: process.platform !== 'linux',
+}, async t => {
   const original = '<p>old</p>', updated = '<p>new</p>';
   for (const [label, steps, expected] of [
     ['new file after three writes', ['seed', 'append', 'close', 'present-new'], 'completed'],
@@ -305,13 +308,24 @@ test('actual SDK present confirms an alternative write only when a new or change
     ['empty presentation', ['seed', 'present-empty'], 'max-tokens'],
     ['old file with only a metadata change', ['touch', 'present-old'], 'max-tokens'],
     ['unchanged file presented before a later mutation', ['present-old', 'change'], 'max-tokens'],
+    ['presentation before a mutation in the same assistant batch', ['present-then-change'], 'max-tokens'],
+    ['mutation before presentation in the same assistant batch', ['change-then-present'], 'completed'],
+    ['changed private key', ['key', 'present-key'], 'max-tokens'],
+    ['symlinked project path', ['seed', 'present-linked'], 'max-tokens'],
+    ['cwd changed after delivery', ['seed', 'present-new', 'relocate'], 'max-tokens'],
     ['presented artifact removed before the final answer', ['seed', 'present-new', 'remove'], 'max-tokens'],
+    ['Stop during terminal delivery verification', ['seed', 'present-new'], 'aborted'],
   ]) await t.test(label, async child => {
     const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'homeai-native-present-')));
     child.after(() => fs.rm(root, { recursive: true, force: true }));
     await fs.mkdir(path.join(root, 'out'));
+    await fs.mkdir(path.join(root, 'other'));
+    await fs.symlink('out', path.join(root, 'linked'));
     const fresh = path.join(root, 'out', 'index.html'), existing = path.join(root, 'existing.html');
+    const secret = path.join(root, 'private.key');
     await fs.writeFile(existing, original);
+    await fs.writeFile(secret, 'SYNTHETIC-ORIGINAL');
+    let cwd = root, agent, stopDuringVerification = false;
     const actions = {
       seed: () => fs.writeFile(fresh, '<!doctype html><html><body>'),
       append: () => fs.appendFile(fresh, updated),
@@ -319,6 +333,13 @@ test('actual SDK present confirms an alternative write only when a new or change
       change: () => fs.writeFile(existing, updated),
       touch: () => fs.utimes(existing, new Date(1000), new Date(1000)),
       remove: () => fs.unlink(fresh),
+      key: () => fs.writeFile(secret, 'SYNTHETIC-CHANGED'),
+      relocate: () => { cwd = path.join(root, 'other'); },
+    };
+    const paths = { 'present-new': 'out/index.html', 'present-old': 'existing.html', 'present-key': 'private.key', 'present-linked': 'linked/index.html' };
+    const present = (action, index = 0) => {
+      const files = action === 'present-empty' ? [] : [{ path: paths[action] }];
+      return { type: 'block-end', index, block: { type: 'tool-call', id: action, name: 'present', arguments: JSON.stringify({ files }) } };
     };
     const f = await fixture(child, function* (_request, step) {
       if (step === 1) {
@@ -328,25 +349,50 @@ test('actual SDK present confirms an alternative write only when a new or change
       }
       const action = steps[step - 2];
       if (!action) {
-        if (expected !== 'completed') yield text('I have finished.');
+        if (expected === 'aborted') stopDuringVerification = true;
+        if (expected === 'max-tokens') yield text('I have finished.');
         yield finish('stop');
         return;
       }
-      if (action.startsWith('present-')) {
-        const files = action === 'present-empty' ? [] : [{ path: action === 'present-new' ? 'out/index.html' : 'existing.html' }];
-        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: action, name: 'present', arguments: JSON.stringify({ files }) } };
+      if (action === 'present-then-change') {
+        yield present('present-old');
+        yield call('change', 'change', 1);
+      } else if (action === 'change-then-present') {
+        yield call('change', 'change');
+        yield present('present-old', 1);
+      } else if (action.startsWith('present-')) {
+        yield present(action);
       } else yield call(action, action);
       yield finish('tool-calls');
-    }, { fileRoot: root, fileAction: action => actions[action]?.() });
-    const agent = await f.create('delivery', providers[1]);
+    }, { fileRoot: root, fileAction: action => actions[action]?.(), fileCwd: () => {
+      if (stopDuringVerification) agent.cancel({ kind: 'user' });
+      return cwd;
+    } });
+    agent = await f.create('delivery', providers[1]);
     agent.followup(input);
     await agent.whenIdle();
     assert.deepEqual(terminal(f.events, agent.id), [expected]);
     assert.equal(matching(f.events, agent.id, 'turn/start').length, 1);
     const deliveries = matching(f.events, agent.id, 'deliverables/presented');
-    const presented = steps.find(step => step === 'present-new' || step === 'present-old');
+    const presented = steps.find(step => Object.hasOwn(paths, step)) ??
+      (steps.some(step => step.endsWith('-then-present') || step.endsWith('-then-change')) ? 'present-old' : null);
     assert.equal(deliveries.length, presented ? 1 : 0);
-    if (presented) assert.equal(deliveries[0].files[0].path, presented === 'present-new' ? fresh : existing);
+    if (presented) assert.equal(deliveries[0].files[0].path, await fs.realpath(path.join(root, paths[presented])).catch(() => fresh));
     if (expected === 'completed') assert.match(await fs.readFile(deliveries[0].files[0].path, 'utf8'), /<p>new<\/p>/u);
   });
+});
+
+test('presenting identical bytes again updates the retained version without counting progress twice', () => {
+  const file = '/project/index.html';
+  const first = { version: 'first', hash: 'same-bytes' };
+  const second = { version: 'second', hash: first.hash };
+  const delivery = { pending: new Map(), verified: new Map(), credited: new Set() };
+  const record = (callId, proof) => {
+    delivery.pending.set(callId, new Map([[file, proof]]));
+    return recordFileDelivery(delivery, { callId, files: [{ path: file }] });
+  };
+  assert.equal(record('first', first), true);
+  assert.equal(record('second', second), false);
+  assert.equal(delivery.verified.get(file), second);
+  assert.equal(delivery.credited.size, 1);
 });
