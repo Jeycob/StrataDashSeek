@@ -86,6 +86,61 @@ jobs:
       - name: Execute portable source and literal bundle suites
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.worker-build.outcome == 'success' }}
         run: node development/release-ci.mjs --lane portable --output "$RUNNER_TEMP/release-ci/portable"
+      - name: Annotate Native task-limit Chromium diagnostics
+        if: always() && github.ref == 'refs/heads/codex/native-output-budget-diagnostic-20261124'
+        run: |
+          node --input-type=module - "$RUNNER_TEMP/release-ci/portable/workspace__native-ui__task-budget.test.cjs.log" <<'NODE'
+          import { existsSync, readFileSync, statSync } from 'node:fs';
+          import { stripVTControlCharacters } from 'node:util';
+
+          const log = process.argv[2];
+          const fixture = 'workspace/native-ui/task-budget.test.cjs';
+          if (!existsSync(log) || statSync(log).size > 1024 * 1024) {
+            console.log('::notice file=' + fixture + ',title=Task-limit TAP unavailable::The selected portable log is missing or exceeds 1 MiB.');
+          } else {
+            const lines = readFileSync(log, 'utf8').split(/\r?\n/);
+            const escapeData = text => text.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
+            const escapeTitle = text => escapeData(text).replaceAll(':', '%3A').replaceAll(',', '%2C');
+            function redact(value, limit) {
+              return stripVTControlCharacters(value)
+                .replace(/(?:\b[a-z][a-z\d+.-]*:\/\/|\bwww\.)[^\s"'<>]+/gi, '[redacted URL]')
+                .replace(/\b(?:bearer|basic)\s+[a-z\d._+/=~-]+/gi, '[redacted authorization]')
+                .replace(/\b[a-z\d_-]*(?:authorization|cookie|(?:api|private)[_-]?key|token|secret|password)[a-z\d_-]*\b["']?\s*[:=]\s*["']?[^\s"',;]+/gi, '[redacted field]')
+                .replace(/\b(?:gh[pousr]_|github_pat_|sk-)[a-z\d_-]+/gi, '[redacted credential]')
+                .slice(0, limit);
+            }
+            const counts = lines.map(line => line.match(/^\s*#\s+(tests|pass|fail|skipped|cancelled)\s+(\d{1,6})\s*$/))
+              .filter(Boolean).slice(-5).map(match => match[1] + '=' + match[2]);
+            console.log('::notice file=' + fixture + ',title=Task-limit Chromium TAP::' + (counts.join(', ') || 'The selected log has no TAP count summary.'));
+            const failure = /^\s*not ok\s+\d+\b/;
+            for (const [start, title] of lines.map((line, index) => [index, line]).filter(([, line]) => failure.test(line)).slice(0, 4)) {
+              const details = [];
+              let sourceLine;
+              let valueIndent;
+              for (const line of lines.slice(start + 1, start + 79)) {
+                if (/^\s*(?:\.\.\.|(?:not )?ok\s+\d+\b|# Subtest:)/.test(line) || details.length >= 14) break;
+                const local = line.match(/task-budget\.test\.cjs:(\d{1,5}):(\d{1,5})/);
+                if (local) {
+                  sourceLine = local[1];
+                  details.push('at ' + fixture + ':' + local[1] + ':' + local[2]);
+                }
+                const field = line.match(/^(\s*)(?:failureType|error|expected|actual|operator|code):\s*/);
+                const indent = line.match(/^\s*/)[0].length;
+                if (field) {
+                  valueIndent = indent;
+                  details.push(line);
+                } else if (!local && valueIndent !== undefined && indent > valueIndent && line.trim()) {
+                  details.push(line);
+                } else if (line.trim() && valueIndent !== undefined && indent <= valueIndent) {
+                  valueIndent = undefined;
+                }
+              }
+              const label = '::error file=' + fixture + (sourceLine ? ',line=' + sourceLine : '') + ',title=';
+              const message = details.map(line => redact(line.trim(), 260)).join('\n').slice(0, 1500);
+              console.log(label + escapeTitle(redact(title.trim(), 180)) + '::' + escapeData(message || 'No nested TAP details.'));
+            }
+          }
+          NODE
       - name: Execute privileged synthetic Linux and Python fixtures
         if: ${{ !cancelled() && steps.dependencies.outcome == 'success' && steps.worker-build.outcome == 'success' }}
         run: |
