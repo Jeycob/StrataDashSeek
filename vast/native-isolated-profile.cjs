@@ -25,6 +25,7 @@ const MANAGED=Object.freeze({
  'cloud-homeai-turn-queue-v1':'vast/turn-queue/plugin.mjs',
  'cloud-homeai-request-recovery':'vast/homeai-reliability.mjs',
  'cloud-homeai-completion-guard':'vast/completion-guard.mjs',
+ 'homeai-output-continuation':'runtime/output-continuation/index.mjs',
  'root-runtime-admission':'workspace/runtime-admission-plugin.mjs'
 });
 const fail=code=>Object.assign(Error(code),{code}),digest=value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -110,11 +111,18 @@ function validateSnapshot(value,binding){
  if(!value||value.version!==1||canonical(value.projection)!==canonical(mode.snapshot)||!Array.isArray(value.entries)||value.entriesSha256!==digest(canonical(value.entries))||Object.keys(value).sort().join(',')!=='entries,entriesSha256,projection,version')throw fail('NATIVE_PROFILE_SNAPSHOT_INVALID');
  mode.check();return value;
 }
+function nativeRuntimePatch(sourceCommit, root=ROOT){
+ const release='file://'+root+'/releases/'+sourceCommit+'/';
+ return [{insert:[
+  {id:'root-runtime-admission',name:release+MANAGED['root-runtime-admission']},
+  {id:'homeai-output-continuation',name:release+MANAGED['homeai-output-continuation']},
+ ]}];
+}
 async function prepareNativeIsolatedLaunch({binding,gid,read=boundedRead,runtime=require('./runtime-paths.cjs'),sdkRoot=ROOT+'/runtime/node_modules'}={}){
  const mode=captureBinding(binding),home=ROOT+'/home/.dsh',profile=home+'/profiles/web';
  if(!Number.isInteger(gid)||gid<1)throw fail('NATIVE_PROFILE_GROUP_REQUIRED');
  mode.check();const manifest=JSON.parse(read(profile+'/package.json')),profileText=read(profile+'/cordis.patch.yml'),homeText=read(home+'/cordis.patch.yml',{optional:true})??'';mode.check();
- const admission=[{insert:[{id:'root-runtime-admission',name:'file://'+ROOT+'/releases/'+mode.snapshot.sourceCommit+'/workspace/runtime-admission-plugin.mjs'}]}];
+ const admission=nativeRuntimePatch(mode.snapshot.sourceCommit);
  const projected=await loadReviewedComposition({sdkRoot,binding,manifest,profileText,homeText,admission,telemetryDisabledEnv:process.env.DSH_TELEMETRY_DISABLED,read});mode.check();
  const value=validateSnapshot({version:1,projection:mode.snapshot,entries:projected.entries,entriesSha256:digest(canonical(projected.entries))},binding),bytes=canonical(value);
  if(Buffer.byteLength(bytes)>MAX_BYTES)throw fail('NATIVE_PROFILE_SNAPSHOT_LIMIT');
@@ -124,4 +132,4 @@ async function prepareNativeIsolatedLaunch({binding,gid,read=boundedRead,runtime
  if(read(SNAPSHOT)!==bytes)throw fail('NATIVE_PROFILE_PUBLICATION_CHANGED');mode.check();
  return Object.freeze({script:ROOT+'/releases/'+mode.snapshot.sourceCommit+'/vast/native-isolated-start.mjs',args:Object.freeze([]),counts:Object.freeze(projected.counts)});
 }
-module.exports={ROOT,SNAPSHOT,MAX_BYTES,REVIEWED,captureBinding,projectNativeReaders,boundedRead,loadReviewedComposition,validateSnapshot,prepareNativeIsolatedLaunch};
+module.exports={ROOT,SNAPSHOT,MAX_BYTES,REVIEWED,captureBinding,projectNativeReaders,boundedRead,loadReviewedComposition,validateSnapshot,nativeRuntimePatch,prepareNativeIsolatedLaunch};

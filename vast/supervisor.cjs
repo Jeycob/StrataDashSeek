@@ -11,7 +11,7 @@ const sourceStatus=runtime.adoptSignedStatus(R);
 // identity. Admission epochs change independently and must not be used here.
 const projectExecution=require('./project-execution-mode.cjs').createExecutionModeContract().publishForSupervisor({sourceCommit:sourceStatus.appliedCommit});
 const admissionPatch=R+'/runtime-status/native-admission-patch.json';
-runtime.atomic(admissionPatch,[{insert:[{id:'root-runtime-admission',name:'file://'+R+'/releases/'+sourceStatus.appliedCommit+'/workspace/runtime-admission-plugin.mjs'}]}],0o644);
+runtime.atomic(admissionPatch,require('./native-isolated-profile.cjs').nativeRuntimePatch(sourceStatus.appliedCommit,R),0o644);
 const children=new Map();let closing=false;
 const previousRestarts=runtime.readPrivate(R,'service-restarts.json',{});
 const lifecycle=new ServiceLifecycle({initial:previousRestarts.sourceCommit===sourceStatus.appliedCommit?previousRestarts:{},changed:state=>{const report={...state,sourceCommit:sourceStatus.appliedCommit};runtime.writePrivate(R,'service-restarts.json',report);runtime.publish(R,'service-health.json',report);}});
