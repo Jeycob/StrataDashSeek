@@ -10,7 +10,7 @@ import contract from '../vast/native-isolated-profile.cjs';
 import {executionBindingFixture} from '../workspace/fixtures/execution-binding.mjs';
 import {bootIsolatedSnapshot,createAppLifecycle,readProtectedSnapshot} from '../vast/native-isolated-start.mjs';
 const {canonical}=createRequire(import.meta.url)('../vast/project-execution-mode.cjs');
-const {ROOT,SNAPSHOT,REVIEWED,MAX_BYTES,projectNativeReaders,loadReviewedComposition,prepareNativeIsolatedLaunch,validateSnapshot,boundedRead}=contract;
+const {ROOT,SNAPSHOT,REVIEWED,MAX_BYTES,projectNativeReaders,loadReviewedComposition,nativeRuntimePatch,prepareNativeIsolatedLaunch,validateSnapshot,boundedRead}=contract;
 const SDK=process.env.EFFICIENCY_SDK_ROOT??'/data/harness/runtime/node_modules',load=(name,file='index.js')=>import(pathToFileURL(path.join(SDK,'@deepseek-ai',name,'lib',file)));
 const [bootApi,{Context},{default:SystemPrompt},{default:Tools},{NativeToolExecutor},{LocalFileSystem},{default:Skills},{Session},{createScope,scopeTarget}]=await Promise.all([load('dsh-app-boot'),load('cordis'),load('dsh-system-prompt'),load('dsh-tools'),load('dsh-tool-executor-native'),load('dsh-fs-local'),load('dsh-skill'),load('dsh-session'),load('dsh-scope')]);
 const manifest={dsh:{profile:{bundles:['@deepseek-ai/dsh-base','@deepseek-ai/dsh-web-app']}}},hash=value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -18,6 +18,13 @@ async function composition(source=executionBindingFixture('isolated-guest'),opti
 async function temp(t){const root=await fs.mkdtemp(path.join(os.tmpdir(),'homeai-native-reader-'));t.after(async()=>{const real=await fs.realpath(root);assert.equal(path.dirname(real),await fs.realpath(os.tmpdir()));assert(path.basename(real).startsWith('homeai-native-reader-'));await fs.rm(real,{recursive:true,force:true});});return root;}
 function rows(entries,name){const found=[];function visit(list){for(const row of list){if(row.name===name)found.push(row);if(row.name==='@deepseek-ai/dsh-agent-preset')visit(row.config.plugins);else if(row.group)visit(row.config);}}visit(entries);return found;}
 function snapshot(binding,entries){return{version:1,projection:binding.snapshot,entries,entriesSha256:hash(canonical(entries))};}
+function expectedNativePlugins(root,sourceCommit){
+ const release=new URL('file://'+path.posix.join(root,'releases',sourceCommit)+'/');
+ return [
+  {id:'root-runtime-admission',name:new URL('workspace/runtime-admission-plugin.mjs',release).href},
+  {id:'homeai-output-continuation',name:new URL('runtime/output-continuation/index.mjs',release).href},
+ ];
+}
 
 test('pinned real SDK complete presets are projected before mounting, without changing native executors or unrelated configuration',async()=>{
  const source=executionBindingFixture('isolated-guest'),result=await composition(source);assert.deepEqual(result.counts,{instructions:4,skillProviders:4,skillConsumers:4,presets:4});
@@ -55,7 +62,10 @@ test('private publication is bounded, group-readable only and checked across rea
  const source=executionBindingFixture('isolated-guest'),writes=[],files=new Map([[ROOT+'/home/.dsh/profiles/web/package.json',JSON.stringify(manifest)],[ROOT+'/home/.dsh/profiles/web/cordis.patch.yml','[]']]);
  const read=(file,options={})=>files.has(file)?files.get(file):file.startsWith(path.normalize(SDK))?boundedRead(file):options.optional?undefined:assert.fail('Unexpected fixture read '+file);
  const runtime={ensureDirectory(...args){assert.deepEqual(args,[ROOT+'/runtime-config',0o2750,1234]);},atomic(file,bytes,mode){writes.push({file,bytes,mode});files.set(file,bytes);}};
- const result=await prepareNativeIsolatedLaunch({binding:source.binding,gid:1234,sdkRoot:SDK,read,runtime});assert.equal(result.script,ROOT+'/releases/'+source.binding.snapshot.sourceCommit+'/vast/native-isolated-start.mjs');assert.deepEqual(result.args,[]);assert.equal(writes.length,1);assert.equal(writes[0].file,SNAPSHOT);assert.equal(writes[0].mode,0o640);assert(Buffer.byteLength(writes[0].bytes)<MAX_BYTES);assert.deepEqual(JSON.parse(writes[0].bytes).projection,source.binding.snapshot);
+ const result=await prepareNativeIsolatedLaunch({binding:source.binding,gid:1234,sdkRoot:SDK,read,runtime});assert.equal(result.script,ROOT+'/releases/'+source.binding.snapshot.sourceCommit+'/vast/native-isolated-start.mjs');assert.deepEqual(result.args,[]);assert.equal(writes.length,1);assert.equal(writes[0].file,SNAPSHOT);assert.equal(writes[0].mode,0o640);assert(Buffer.byteLength(writes[0].bytes)<MAX_BYTES);
+ const publishedSnapshot=JSON.parse(writes[0].bytes),expected=expectedNativePlugins(ROOT,source.binding.snapshot.sourceCommit);
+ assert.deepEqual(publishedSnapshot.projection,source.binding.snapshot);
+ for(const plugin of expected)assert.deepEqual(publishedSnapshot.entries.filter(row=>row.id===plugin.id),[plugin]);
  const revoked=executionBindingFixture('isolated-guest');let published=0;await assert.rejects(prepareNativeIsolatedLaunch({binding:revoked.binding,gid:1234,sdkRoot:SDK,read(file,options){const value=read(file,options);if(file.replaceAll('\\','/').endsWith('/dsh-app-boot/lib/index.js'))revoked.fail();return value;},runtime:{...runtime,atomic(){published++;}}}),/BINDING_CHANGED/);assert.equal(published,0);
  const changed=executionBindingFixture('isolated-guest');await assert.rejects(prepareNativeIsolatedLaunch({binding:changed.binding,gid:1234,sdkRoot:SDK,read,runtime:{...runtime,atomic(...args){runtime.atomic(...args);changed.fail();}}}),/BINDING_CHANGED/);
 });
@@ -109,6 +119,15 @@ test('readiness and shutdown coalesce, wait for quiescence and force on repeated
  let release,disposes=0;const pending=new Promise(resolve=>{release=resolve;}),effects=[],life=createAppLifecycle({dispose(){disposes++;return pending;},complete:code=>effects.push(['complete',code]),forceExit:code=>effects.push(['force',code])});let ready=0;life.ready.onReady(()=>ready++);life.commit();life.commit();assert.equal(ready,1);const one=life.shutdown(0),two=life.shutdown(0);assert.equal(one,two);await Promise.resolve();assert.equal(disposes,1);assert.deepEqual(effects,[]);release();await one;assert.deepEqual(effects,[['complete',0]]);
  const stopped=createAppLifecycle({dispose:()=>new Promise(()=>{}),forceExit:code=>effects.push(['force',code]),setTimer:()=>123,clearTimer(){}});stopped.interrupt(130);stopped.interrupt(130);assert.deepEqual(effects.at(-1),['force',130]);let late=0;stopped.ready.onReady(()=>late++);stopped.commit();assert.equal(late,0);
 });
-test('host supervisor source keeps exact original CLI argv and admission patch; isolated preparation precedes services',async()=>{
- const text=await fs.readFile(new URL('../vast/supervisor.cjs',import.meta.url),'utf8');assert(text.includes("runtime.atomic(admissionPatch,[{insert:[{id:'root-runtime-admission',name:'file://'+R+'/releases/'+sourceStatus.appliedCommit+'/workspace/runtime-admission-plugin.mjs'}]}],0o644);"));assert(text.includes("projectExecution.mode==='host-compat'?{script:R+'/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js',args:['web','--patch',admissionPatch]}"));assert(text.indexOf('const nativeLaunch=')<text.indexOf("launch('strata'"));assert(text.includes("'--no-open','--host','127.0.0.1','--port','3090','--public-url','https://'+cfg.publicHost+'/','--trusted-host',cfg.publicHost"));
+test('the shared Native patch registers both plugins from the selected release and the supervisor passes it to the stock CLI',async()=>{
+ const sourceCommit=executionBindingFixture('isolated-guest').binding.snapshot.sourceCommit;
+ assert.deepEqual(bootApi.composeEntries([nativeRuntimePatch(sourceCommit)]),expectedNativePlugins(ROOT,sourceCommit));
+ const alternateRoot='/fixture/harness',alternateCommit='c'.repeat(40);
+ assert.deepEqual(bootApi.composeEntries([nativeRuntimePatch(alternateCommit,alternateRoot)]),expectedNativePlugins(alternateRoot,alternateCommit));
+ const text=await fs.readFile(new URL('../vast/supervisor.cjs',import.meta.url),'utf8');
+ assert.match(text,/runtime\.atomic\(\s*admissionPatch,\s*require\('\.\/native-isolated-profile\.cjs'\)\.nativeRuntimePatch\(\s*sourceStatus\.appliedCommit\s*,\s*R\s*\)\s*,\s*0o644\s*\)/u);
+ assert(text.includes("projectExecution.mode==='host-compat'?{script:R+'/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js',args:['web','--patch',admissionPatch]}"));
+ const launch=text.indexOf('const nativeLaunch='),services=text.indexOf("launch('strata'");
+ assert(launch>=0&&services>launch,'Native launch is prepared before starting services');
+ assert(text.includes("'--no-open','--host','127.0.0.1','--port','3090','--public-url','https://'+cfg.publicHost+'/','--trusted-host',cfg.publicHost"));
 });
