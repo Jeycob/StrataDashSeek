@@ -1,4 +1,4 @@
-name: Output-limit fixture diagnostics
+name: Read prior task-limit fixture diagnostics
 
 on:
   push:
@@ -6,17 +6,24 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  sdk:
-    name: Output-limit SDK TAP diagnostics
+  artifact:
+    name: Read ${{ matrix.source }} task-limit TAP
     if: github.ref == 'refs/heads/diagnostics/output-limit-20261124'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    env:
-      HOMEAI_RUNTIME: ${{ github.workspace }}/runtime
-      EFFICIENCY_SDK_ROOT: ${{ github.workspace }}/runtime/node_modules
-      HARNESS_NATIVE_CLI: ${{ github.workspace }}/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - source: Main
+            run: '45417289860'
+            artifact: release-checks-4e0a6e1d3bdffd44703b1a03879a176e6f3f7548
+          - source: Basalt
+            run: '45418797929'
+            artifact: release-checks-fbbfaf0595bcf1164204551601b51dc9b2bae957
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -25,84 +32,93 @@ jobs:
       - name: Verify diagnostic source
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = 6fc1de83429af312eca97c9cb89b6aa17590d0f8
+          test "$(git rev-parse HEAD^)" = c5757beadaa1cd72bb418c437f3d13dc559a324c
           test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/output-limit-diagnostic.yml
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      - name: Download only the named prior release evidence archive
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          node-version: '24.22.1'
-          cache: npm
-          cache-dependency-path: runtime/package-lock.json
-      - name: Install the pinned SDK
-        run: npm ci --prefix runtime --no-audit --no-fund
-      - name: Capture SDK TAP and annotate exact failures
-        shell: bash
+          name: ${{ matrix.artifact }}
+          run-id: ${{ matrix.run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/output-limit-archive
+          skip-decompress: true
+      - name: Annotate only the selected task-limit TAP log
+        env:
+          RUN_LABEL: ${{ matrix.source }}
+          SOURCE_RUN: ${{ matrix.run }}
         run: |
-          tap="$RUNNER_TEMP/output-limit-sdk.tap"
-          test_exit=0
-          node --test --test-reporter=tap --test-timeout=120000 runtime/output-continuation/continuation.test.mjs >"$tap" 2>&1 || test_exit=$?
-          node --input-type=module - "$tap" "$test_exit" <<'NODE'
+          python3 - "$RUNNER_TEMP/output-limit-archive" > "$RUNNER_TEMP/output-limit-task-budget.tap" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          root = pathlib.Path(sys.argv[1])
+          archives = list(root.iterdir())
+          if len(archives) != 1 or not archives[0].is_file() or archives[0].is_symlink():
+              raise SystemExit("Expected exactly one downloaded archive")
+          selected = "portable/workspace__native-ui__task-budget.test.cjs.log"
+          limit = 1024 * 1024
+          with zipfile.ZipFile(archives[0]) as archive:
+              matches = [entry for entry in archive.infolist() if entry.filename == selected]
+              if len(matches) != 1 or matches[0].file_size > limit:
+                  raise SystemExit("Expected exactly one selected TAP entry under 1 MiB")
+              with archive.open(matches[0]) as stream:
+                  log = stream.read(limit + 1)
+                  if len(log) > limit:
+                      raise SystemExit("Selected TAP entry exceeded 1 MiB")
+                  sys.stdout.buffer.write(log)
+          PY
+          node --input-type=module - "$RUNNER_TEMP/output-limit-task-budget.tap" <<'NODE'
           import { readFileSync } from 'node:fs';
           import { stripVTControlCharacters } from 'node:util';
 
-          const [, , path, exitCode] = process.argv;
-          const lines = readFileSync(path, 'utf8').split(/\r?\n/);
-          const fixture = 'runtime/output-continuation/continuation.test.mjs';
+          const label = process.env.RUN_LABEL;
+          const run = process.env.SOURCE_RUN;
+          const fixture = 'workspace/native-ui/task-budget.test.cjs';
+          const lines = readFileSync(process.argv[2], 'utf8').split(/\r?\n/);
           const escapeData = text => text.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
-          const escapeProperty = text => escapeData(text).replaceAll(':', '%3A').replaceAll(',', '%2C');
+          const escapeTitle = text => escapeData(text).replaceAll(':', '%3A').replaceAll(',', '%2C');
           function redact(value, limit) {
             return stripVTControlCharacters(value)
-              .replace(/\b[a-z][a-z\d+.-]*:\/\/[^\s"'<>]+/gi, '[redacted URL]')
-              .replace(/\bwww\.[a-z\d.-]+(?:\/[^\s"'<>]*)?/gi, '[redacted URL]')
+              .replace(/(?:\b[a-z][a-z\d+.-]*:\/\/|\bwww\.)[^\s"'<>]+/gi, '[redacted URL]')
               .replace(/\b(?:bearer|basic)\s+[a-z\d._+/=~-]+/gi, '[redacted authorization]')
-              .replace(/\b[a-z\d_-]*(?:authorization|(?:api|private)[_-]?key|(?:access|refresh)[_-]?token|secret|password)[a-z\d_-]*\b["']?\s*[:=]\s*["']?[^\s"',;]+/gi, '[redacted field]')
+              .replace(/\b[a-z\d_-]*(?:authorization|cookie|(?:api|private)[_-]?key|token|secret|password)[a-z\d_-]*\b["']?\s*[:=]\s*["']?[^\s"',;]+/gi, '[redacted field]')
               .replace(/\b(?:gh[pousr]_|github_pat_|sk-)[a-z\d_-]+/gi, '[redacted credential]')
               .slice(0, limit);
           }
-          function annotate(title, details) {
-            const message = details.length ? details.map(line => redact(line.trim(), 260)).join('\n') : 'No nested TAP details.';
-            console.log('::error file=' + fixture + ',title=' + escapeProperty(redact(title, 170)) + '::' + escapeData(redact(message, 1400)));
-          }
 
-          const notOk = /^\s*not ok\s+\d+\b/;
-          const field = /^(\s*)(?:failureType|error|code|location|expected|actual|operator):\s*/;
-          const failures = [];
-          for (let index = 0; index < lines.length && failures.length < 8; index++) {
-            if (!notOk.test(lines[index])) continue;
-            const title = lines[index].trim();
+          const counts = lines.map(line => line.match(/^\s*#\s+(tests|pass|fail|skipped|cancelled)\s+(\d{1,6})\s*$/))
+            .filter(Boolean).slice(-5).map(match => match[1] + '=' + match[2]);
+          const pass = lines.find(line => /^\s*ok\s+\d+\s+-\s+/.test(line));
+          console.log('::notice file=' + fixture + ',title=' + label + ' prior run ' + run + ' Chromium TAP::'
+            + escapeData((counts.join(', ') || 'TAP count summary missing') + (pass ? '\n' + redact(pass.trim(), 180) : '')));
+
+          const failure = /^\s*not ok\s+\d+\b/;
+          for (const [start, title] of lines.map((line, index) => [index, line]).filter(([, line]) => failure.test(line)).slice(0, 4)) {
             const details = [];
-            let fieldIndent = null;
-            for (let item = index + 1; item < lines.length && item <= index + 60 && details.length < 13; item++) {
-              const row = lines[item];
-              if (notOk.test(row) || /^\s*(?:\.\.\.|ok\s+\d+\b|# Subtest:)\s*/.test(row)) break;
-              const match = row.match(field);
-              if (match) {
-                fieldIndent = match[1].length;
-                details.push(row);
-              } else if (row.trim()) {
-                const indent = row.match(/^\s*/)[0].length;
-                if (fieldIndent !== null && indent > fieldIndent) details.push(row);
-                else fieldIndent = null;
+            let sourceLine;
+            let valueIndent;
+            for (const line of lines.slice(start + 1, start + 79)) {
+              if (/^\s*(?:\.\.\.|(?:not )?ok\s+\d+\b|# Subtest:)/.test(line) || details.length >= 14) break;
+              const local = line.match(/task-budget\.test\.cjs:(\d{1,5}):(\d{1,5})/);
+              if (local) {
+                sourceLine = local[1];
+                details.push('at ' + fixture + ':' + local[1] + ':' + local[2]);
+              }
+              const field = line.match(/^(\s*)(?:failureType|error|expected|actual|operator|code):\s*/);
+              const indent = line.match(/^\s*/)[0].length;
+              if (field) {
+                valueIndent = indent;
+                details.push(line);
+              } else if (!local && valueIndent !== undefined && indent > valueIndent && line.trim()) {
+                details.push(line);
+              } else if (line.trim() && valueIndent !== undefined && indent <= valueIndent) {
+                valueIndent = undefined;
               }
             }
-            failures.push({ title, details });
+            const location = '::error file=' + fixture + (sourceLine ? ',line=' + sourceLine : '') + ',title=';
+            const message = details.map(line => redact(line.trim(), 260)).join('\n').slice(0, 1500);
+            console.log(location + escapeTitle(label + ' ' + run + ' ' + redact(title.trim(), 150))
+              + '::' + escapeData(message || 'No nested TAP details.'));
           }
-
-          const fatal = [];
-          const crash = /\b(?:uncaught(?:exception)?|unhandled\s*rejection|AssertionError|ERR_ASSERTION|ERR_MODULE_NOT_FOUND|TypeError|ReferenceError|SyntaxError)\b|\bdsh\b.*\bfatal\b/i;
-          for (let index = 0; index < lines.length && fatal.length < 10; index++) {
-            const row = lines[index];
-            if (!/^\s*#\s*/.test(row) || !crash.test(row)) continue;
-            for (const context of lines.slice(index, index + 4)) {
-              if (!/^\s*#\s*/.test(context) || /^\s*# Subtest:/.test(context)) break;
-              if (!fatal.includes(context) && fatal.length < 10) fatal.push(context);
-            }
-          }
-
-          for (const { title, details } of failures) annotate(title, details);
-          if (fatal.length) annotate('SDK stderr and uncaught assertions', fatal);
-          if (exitCode !== '0' && !failures.length && !fatal.length) {
-            annotate('SDK fixture process failed', ['TAP had no matching failure lines. Exit status: ' + exitCode]);
-          }
-          console.log('SDK TAP process exit=' + exitCode + ', failed TAP entries=' + failures.length + ', crash diagnostic lines=' + fatal.length);
           NODE
-          exit "$test_exit"
