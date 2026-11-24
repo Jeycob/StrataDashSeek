@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs/promises'),os=require('node:os'),path=require('node:path'),{spawn,spawnSync}=require('node:child_process');
-async function fixture(t,{preload=false}={}){
+async function fixture(t){
  const {createProjectFileHandlers}=await import('./project-file-executor.mjs');
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'homeai-file-worker-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
  const calls=[];
@@ -11,8 +11,7 @@ async function fixture(t,{preload=false}={}){
   let command=args.command.replace('/opt/code-server/lib/node',"'"+process.execPath+"'").replace("root = '\\''/workspace'\\''",'root = '+JSON.stringify(root));
   if(process.env.HOMEAI_TEST_RG)command=command.replace("'\\''/usr/bin/rg'\\''",JSON.stringify(process.env.HOMEAI_TEST_RG));
   return new Promise((resolve,reject)=>{
-   const env=preload?{...process.env,NODE_OPTIONS:'--require='+JSON.stringify(path.join(root,'before-publish.cjs'))}:process.env;
-   const child=spawn('/bin/sh',['-c',command],{env,stdio:['ignore','pipe','pipe']});let stdout='',stderr='';
+   const child=spawn('/bin/sh',['-c',command],{stdio:['ignore','pipe','pipe']});let stdout='',stderr='';
    child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);child.on('error',reject);child.on('exit',(code,signal)=>resolve({result:{exitCode:code,signal,timedOut:false,aborted:false,stdout:{text:stdout,truncated:false},stderr:{text:stderr,truncated:false}}}));
   });
  };
@@ -28,50 +27,6 @@ test('prepared guest commands preserve UTF8 read windows, writes, exact edits an
  await f.call('edit',{file_path:'src/example.txt',old_string:'last',new_string:'changed'});
  assert((await fs.readFile(path.join(f.root,'src/example.txt'),'utf8')).endsWith('changed\n'));
  assert.equal(f.calls[0].execution,f.execution);
-});
-test('a recovery write creates exclusively in the guest and returns confirmed progress',{skip:process.platform==='win32'},async t=>{
- const f=await fixture(t),{createFileRecovery,guardFileRecovery}=await import('../runtime/output-continuation/file-recovery.mjs');
- const recovery=createFileRecovery();
- const write=(file_path,content)=>{
-  const args={file_path,content},execution={...f.execution,name:'write',arguments:args,token:Symbol('fixture-write')};
-  assert.equal(guardFileRecovery(recovery,execution),undefined);
-  return f.handlers.write({name:'write',arguments:args,project:{ownerId:'owner',root:'/trusted/projects/one'}},execution);
- };
- await fs.writeFile(path.join(f.root,'existing.html'),'<p>Existing</p>');
- await assert.rejects(write('existing.html','<p>Replacement</p>'));
- assert.equal(await fs.readFile(path.join(f.root,'existing.html'),'utf8'),'<p>Existing</p>');
- assert.equal((await write('new.html','<p>Small seed</p>')).changed,true);
- assert.equal((await fs.stat(path.join(f.root,'new.html'))).nlink,1);
- assert.equal(await fs.readFile(path.join(f.root,'new.html'),'utf8'),'<p>Small seed</p>');
-});
-test('guest exclusive publication preserves a raced creator and remains readable after Stop',{skip:process.platform!=='linux'||process.arch!=='x64'},async t=>{
- const f=await fixture(t,{preload:true});
- const {createFileRecovery,guardFileRecovery}=await import('../runtime/output-continuation/file-recovery.mjs');
- await fs.writeFile(path.join(f.root,'before-publish.cjs'),`
-const fs=require('node:fs'), path=require('node:path'), cp=require('node:child_process');
-const original=cp.spawnSync;
-cp.spawnSync=(command,args,options)=>{
- if(command!=='/usr/bin/perl')return original(command,args,options);
- const destination=args.at(-1), name=path.basename(destination);
- if(name==='race.html')fs.writeFileSync(destination,'<p>Racing creator</p>',{flag:'wx'});
- const result=original(command,args,options);
- if(name==='stop.html'&&result.status===0)process.kill(process.pid,'SIGKILL');
- return result;
-};`);
- const write=file_path=>{
-  const args={file_path,content:'<p>Complete seed</p>'};
-  const execution={...f.execution,name:'write',arguments:args,token:Symbol('fixture-write')};
-  assert.equal(guardFileRecovery(createFileRecovery(),execution),undefined);
-  return f.handlers.write({name:'write',arguments:args,project:{ownerId:'owner',root:'/trusted/projects/one'}},execution);
- };
- await assert.rejects(write('race.html'));
- assert.equal(await fs.readFile(path.join(f.root,'race.html'),'utf8'),'<p>Racing creator</p>');
- await assert.rejects(write('stop.html'));
- assert.equal((await fs.stat(path.join(f.root,'stop.html'))).nlink,1);
- assert.deepEqual((await fs.readdir(f.root)).sort(),['before-publish.cjs','race.html','stop.html']);
- assert.match((await f.call('read',{file_path:'stop.html'})).text,/<p>Complete seed<\/p>/u);
- await f.call('edit',{file_path:'stop.html',old_string:'Complete',new_string:'Edited'});
- assert.equal(await fs.readFile(path.join(f.root,'stop.html'),'utf8'),'<p>Edited seed</p>');
 });
 test('outside absolute paths and traversal fail before dispatch; missing operations have no handler',{skip:process.platform==='win32'},async t=>{
  const f=await fixture(t);

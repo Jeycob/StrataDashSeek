@@ -3,6 +3,7 @@
 // guard also rejects old admitted snapshots and missing/late shadow installs.
 // No host fs/subprocess calls or native execute/render callbacks are retained.
 import {bindProjectExecution} from './execution-mode.mjs';
+import {isCreateOnlyRecoveryWrite} from '../runtime/output-continuation/file-recovery.mjs';
 export const projectFileToolNames = Object.freeze(['read', 'read_image', 'write', 'edit', 'apply_patch', 'glob', 'grep', 'str_replace_editor']);
 const names = new Set(projectFileToolNames);
 const MAX_OUTPUT_BYTES = 262144;
@@ -54,6 +55,10 @@ export function createProjectFileTools(ctx, manager, handlers = {}, binding = ma
           const owner = manager.ownerAgent(execution.agent), project = manager.data.sessions[owner?.id];
           if (!project || project.legacy || project.independentRepository !== true || project.nativeWorktree || !candidate(execution.agent)) throw failure('NO_MANAGED_PROJECT');
           if (args.sandbox_permissions !== undefined || args.justification !== undefined) throw failure('PROJECT_FILE_ESCALATION_REFUSED');
+          // Production shares the project over virtio-9p, which has no atomic no-replace rename.
+          if (name === 'write' && isCreateOnlyRecoveryWrite(execution)) {
+            throw Error('This isolated workspace cannot safely create a new file during recovery. Edit an existing file, or report that the missing file was not saved.');
+          }
           const handler = implementations.get(name);
           if (!handler) throw failure('ISOLATED_FILE_OPERATION_UNAVAILABLE');
           let result;
