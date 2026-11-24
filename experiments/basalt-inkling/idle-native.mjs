@@ -28,10 +28,10 @@ export function observeNative(ctx) {
   async function coldInbox(header, cursor) {
     const cached = cold.get(header.id);
     if (cached?.cursor === cursor && cached.createdAt === header.createdAt) return cached.pending;
-    const snapshot = await ctx.sessionQuery.readSession(header.id);
-    if (snapshot.header.id !== header.id || snapshot.header.createdAt !== header.createdAt ||
-        (snapshot.events.at(-1)?.seq ?? -1) !== cursor) throw Error('Cold history changed');
-    const { checkpoint } = ctx.sessionProjections.restore({}, snapshot.events, 0, snapshot.header, snapshot.inheritedEventCount);
+    const { session, events, inheritedEventCount } = await ctx.sessionQuery.readSession(header.id);
+    if (session.id !== header.id || session.createdAt !== header.createdAt ||
+        (events.at(-1)?.seq ?? -1) !== cursor) throw Error('Cold history changed');
+    const { checkpoint } = ctx.sessionProjections.restore({}, events, 0, session, inheritedEventCount);
     const inbox = checkpoint.inbox;
     if (inbox?.ver !== 1 || inbox.seq !== cursor || !Array.isArray(inbox.val?.['next-turn']) || !Array.isArray(inbox.val?.['next-step'])) {
       throw Error('Incomplete Native inbox projection');

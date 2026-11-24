@@ -87,8 +87,8 @@ test('work during drain reopens admission; ambiguous stop stays latched with the
 });
 
 test('passive cold inbox, parked live work, global tools and unowned jobs keep the lab awake', async () => {
-  const cold = { id: 'cold', createdAt: 1 }, live = { id: 'live', createdAt: 2 };
-  let at = 0, pending = 1, pty = false, jobs = [], coldReads = 0;
+  const cold = { id: 'cold', createdAt: 1, cwd: '/lab' }, live = { id: 'live', createdAt: 2, cwd: '/lab' };
+  let at = -1, pending = 0, pty = false, jobs = [], coldReads = 0;
   const agent = { id: live.id, status: 'idle', phase: { kind: 'idle' }, inbox: { nextTurn: [], nextStep: [] } };
   const handlers = new Map();
   const ctx = {
@@ -96,19 +96,31 @@ test('passive cold inbox, parked live work, global tools and unowned jobs keep t
     terminals: { hasOwnerActivity: () => pty },
     jobs: { events: { subscribe(filter) { assert.deepEqual(filter, { owners: 'all' }); } }, list: () => jobs },
     sessionQuery: { listSessions: async () => [cold, live].map(header => ({ header })),
-      async readSession(id) { assert.equal(id, cold.id); coldReads++; return { header: cold, events: [{ seq: at }], inheritedEventCount: 0 }; } },
+      async readSession(id) {
+        assert.equal(id, cold.id);
+        coldReads++;
+        return { session: { ...cold }, events: Array.from({ length: at + 1 }, (_, seq) => ({ seq })), inheritedEventCount: 0 };
+      } },
     sessionController: { async state(request) {
       assert.deepEqual(Object.keys(request), ['sessionId']);
       const active = request.sessionId === live.id;
       return { active, running: false, cursor: at, queue: active ? [] : null, pendingInput: [] };
     } },
-    sessionProjections: { restore: () => ({ checkpoint: { inbox: { seq: at, ver: 1, val: {
-      'next-turn': Array(pending).fill({}), 'next-step': [] } } } }) },
+    sessionProjections: { restore(checkpoint, events, baseSeq, session, inheritedEventCount) {
+      assert.deepEqual(checkpoint, {});
+      assert.deepEqual(session, cold);
+      assert.equal(baseSeq, 0);
+      assert.equal(inheritedEventCount, 0);
+      const seq = events.at(-1)?.seq ?? -1;
+      const inbox = { 'next-turn': Array(pending).fill({}), 'next-step': [] };
+      return { snapshot: { asOfSeq: seq, values: { inbox } }, checkpoint: { inbox: { seq, ver: 1, val: inbox } } };
+    } },
   };
   const activity = observeNative(ctx), read = () => activity.read(AbortSignal.timeout(1000));
-  assert.equal((await read()).busy, true);
+  assert.equal((await read()).busy, false);
+  at++; pending = 1; assert.equal((await read()).busy, true);
   at++; pending = 0; assert.equal((await read()).busy, false);
-  const revision = (await read()).revision; assert.equal(coldReads, 2);
+  const revision = (await read()).revision; assert.equal(coldReads, 3);
   agent.phase.kind = 'maintenance'; assert.equal((await read()).busy, true); agent.phase.kind = 'idle';
   agent.inbox.nextStep.push({}); assert.equal((await read()).busy, true); agent.inbox.nextStep.pop();
   jobs = [{ id: 'job', status: 'stopping' }]; assert.equal((await read()).busy, true); jobs = [];
