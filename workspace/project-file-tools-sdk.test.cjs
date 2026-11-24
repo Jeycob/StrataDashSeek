@@ -54,6 +54,28 @@ test('trusted handler gets immutable arguments and actual child identity; output
  assert.equal(captured.exec.agent,child);assert.equal(captured.request.project.ownerId,'owner');assert.equal(captured.request.project.root,'/managed/owner');assert(Object.isFrozen(captured.request));assert(Object.isFrozen(captured.request.arguments));assert.equal(captured.request.arguments,captured.exec.arguments);
  assert.deepEqual(result.value,{text:'guest saved',truncated:false});assert(!JSON.stringify(result).includes('privateSecret'));
 });
+test('isolated recovery refuses a seed before dispatch and still permits exact edits and normal Add',async t=>{
+ const {createFileRecovery,guardFileRecovery}=await import('../runtime/output-continuation/file-recovery.mjs');
+ const dispatched=[];
+ const handler=async request=>{dispatched.push(request.name);return{text:'guest saved',truncated:false,changed:true};};
+ const f=await fixture(t,{write:handler,edit:handler,apply_patch:handler}),a=f.agent('file-recovery');
+ f.adapter.install(a);
+ const recovery=createFileRecovery();
+ const dispose=f.ctx.tools.guard(exec=>guardFileRecovery(recovery,exec));
+ const denied=await f.call(a,'write');
+ assert.equal(denied.isError,true);
+ assert.match(JSON.stringify(denied),/cannot safely create a new file during recovery/);
+ assert.deepEqual(dispatched,[]);
+ const edited=await f.call(a,'edit');
+ assert.equal(edited.isError,false,JSON.stringify(edited));
+ assert.equal(edited.value.changed,true);
+ dispose();
+ const written=await f.call(a,'write');
+ assert.equal(written.isError,false,JSON.stringify(written));
+ const added=await f.call(a,'apply_patch',{args:{patch:'*** Begin Patch\n*** Add File: extra.txt\n+new\n*** End Patch'}});
+ assert.equal(added.isError,false,JSON.stringify(added));
+ assert.deepEqual(dispatched,['edit','write','apply_patch']);
+});
 test('handler failures, oversized results and independent policy denials cannot fall back',async t=>{
  let called=0;
  const f=await fixture(t,{read:async()=>{called++;throw Error('PRIVATE_BACKEND_PATH');},write:async()=>({text:'x'.repeat(262145),truncated:false})}),a=f.agent('one');f.adapter.install(a);
