@@ -154,8 +154,19 @@ export async function projectFileWorker(input, root = '/workspace') {
     let latest;try{latest=await fs.lstat(full,{bigint:true});}catch(error){if(error.code!=='ENOENT')throw error;}
     if(before ? !latest||fingerprint(latest)!==before.stamp : latest)fail('PROJECT_FILE_CHANGED');
     if(input.expectAbsent){
-      // An atomic exclusive link closes the race with a concurrent create.
-      await fs.link(temp,full);await fs.unlink(temp);
+      // The pinned Linux/amd64 guest includes Perl. Call renameat2 directly:
+      // move the complete staging file exactly once, with no fallback or second link.
+      if(process.platform!=='linux'||process.arch!=='x64')fail('EXCLUSIVE_CREATE_UNAVAILABLE');
+      const publish=[
+        'my ($from,$to)=@ARGV;',
+        'my ($renameat2,$at_fdcwd,$no_replace)=(316,-100,1);',
+        'exit(syscall($renameat2,$at_fdcwd,$from,$at_fdcwd,$to,$no_replace)==0 ? 0 : ($!{EEXIST} ? 2 : 1));',
+      ].join(' ');
+      const result=require('node:child_process').spawnSync('/usr/bin/perl',['-e',publish,'--',temp,full],{
+        env:{},stdio:'ignore',timeout:5000,killSignal:'SIGKILL'
+      });
+      if(result.status===2)fail('PROJECT_FILE_CHANGED');
+      if(result.error||result.signal||result.status!==0)fail('EXCLUSIVE_CREATE_UNAVAILABLE');
     }else await fs.rename(temp,full);
     temp=null;
     return {text:input.name==='edit'?'Edited project file.':'Wrote project file.',truncated:false,changed:before===null||content!==before.text};
