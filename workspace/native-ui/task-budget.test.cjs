@@ -46,7 +46,11 @@ export async function apply(ctx) {
   const page=await browser.newPage({viewport:{width:1440,height:1000}}),values=new Map(),reads=[],mutations=[],errors=[],submissions=[];let mode='host-compat';page.setDefaultTimeout(10000);page.on('pageerror',error=>errors.push(error.message));page.on('request',request=>{if(/\/api\/.*(submit|followup)/i.test(request.url()))submissions.push(request.url());});
   await page.route('**/api/workbench/execution',route=>route.fulfill({json:{version:1,available:true,mode}}));
   await page.route('**/api/workbench',route=>{
-   const body=route.request().postDataJSON();if(body?.op==='task-budget'){
+   const body=route.request().postDataJSON();
+   if(body?.op==='run-activity'){
+    return route.fulfill({json:{version:1,sessionId:body.sessionId,phases:[{phase:'model.waiting'}]}});
+   }
+   if(body?.op==='task-budget'){
     assert.match(body.sessionId,/^[A-Za-z0-9_-]+$/);const value=values.get(body.sessionId)||{version:1,sessionId:body.sessionId,nextTaskLimit:null,current:null};
     if(body.action==='configure'){assert.deepEqual(Object.keys(body).sort(),['action','limit','op','sessionId']);mutations.push(body);value.nextTaskLimit=body.limit;values.set(body.sessionId,value);}
     else {assert.equal(body.action,'status');reads.push(body.sessionId);}
@@ -82,7 +86,8 @@ export async function apply(ctx) {
   await onboarding.waitFor({timeout:3000}).catch(()=>{});if(await onboarding.isVisible())await onboarding.getByRole('button',{name:'Close',exact:true}).click();
   await page.evaluate(()=>HarnessI18n.setLanguage('cs'));
   await commands.waitFor();assert.equal(await control.count(),0);assert.equal(reads.length,readsBeforeReload);
-  await openLimit('Limit úlohy');assert.equal(await control.getByRole('combobox').inputValue(),'tokens');assert.equal(await control.getByRole('spinbutton').inputValue(),'1234');
+  await openLimit('Limit úlohy');assert.equal(await control.getAttribute('data-task-budget-session'),sessionId);
+  assert.equal(await control.getByRole('combobox').inputValue(),'tokens');assert.equal(await control.getByRole('spinbutton').inputValue(),'1234');
   const previous=control.locator('[data-task-budget-previous-turn="1"]');await previous.filter({hasText:'Předchozí úloha'}).waitFor();assert.match(await previous.innerText(),/Předchozí úloha.*Dosažen časový limit/s);assert.equal(await control.locator('[data-task-budget-reason]').count(),0,'An earlier stop must not be presented as the current task stop');
   assert.equal(await control.evaluate(element=>element.scrollWidth<=element.clientWidth),true);
   await control.getByRole('combobox').selectOption('elapsed');await control.getByRole('spinbutton').fill('2');
@@ -101,9 +106,10 @@ export async function apply(ctx) {
    assert.equal(response.status(),200);return response.json();
   }
   const readsBeforeRun=reads.length;
+  // The run indicator follows this session's client running state in the same composer dock.
+  const activity=page.locator('[data-run-session="'+sessionId+'"] [data-phase="model.waiting"]');
   assert.deepEqual(await fixtureTurn('start'),{running:true});
-  const stop=page.getByRole('button',{name:'Stop generating',exact:true});
-  await stop.waitFor();
+  await activity.waitFor();
   await control.waitFor({state:'detached'});
   if(await commands.isVisible() && await commands.isEnabled()){
    await commands.click();await page.getByRole('option').first().waitFor();
@@ -111,9 +117,10 @@ export async function apply(ctx) {
    await page.keyboard.press('Escape');
   }
   assert.deepEqual(await fixtureTurn('finish'),{running:false});
-  await stop.waitFor({state:'hidden'});
+  await activity.waitFor({state:'detached'});
   assert.equal(await control.count(),0);assert.equal(reads.length,readsBeforeRun);
-  await openLimit('Limit úlohy');assert.equal(await control.getByRole('spinbutton').inputValue(),'2');
+  await openLimit('Limit úlohy');assert.equal(await control.getAttribute('data-task-budget-session'),sessionId);
+  assert.equal(await control.getByRole('spinbutton').inputValue(),'2');
   assert.equal(mutations.length,2);assert.deepEqual(errors,[]);
  }finally{
   await browser?.close();child.kill();await new Promise(resolve=>{if(child.exitCode!==null)return resolve();const timer=setTimeout(resolve,5000);child.once('exit',()=>{clearTimeout(timer);resolve();});});
