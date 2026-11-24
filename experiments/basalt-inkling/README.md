@@ -54,6 +54,19 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:8787:127.0.0.1:8787 -p PORT root
 
 Open the private startup URL printed by Harness through that tunnel, keeping its path and any pairing parameters. The browser address uses `127.0.0.1:8787`. Keep the authenticated URL private. To end the run, stop Harness and Basalt with Ctrl+C in their terminals. Stop the rental in Vast when finished. [Vast SSH connections](https://docs.vast.ai/guides/instances/connect/ssh)
 
+## Resume the Andorra lab after a Vast start
+
+The enrolled Andorra instance keeps its Inkling weights, Native projects and Tailscale identity on the rental disk. Its owner opens `/pair/` on the private `basalt-inkling` node. The external wake portal probes `/phone/icon.png`. That route returns a small uncached PNG when Native accepts HTTP and Inkling reports `loaded`. The probe makes no inference request.
+
+On the existing SSH rental, install these files from a verified root-owned release directory as root. The installer preserves the original `/root/onstart.sh`, the two established private Serve routes and the current Native profile. For the first activation, invoke the installed boot script once. Vast invokes it on subsequent starts.
+
+```bash
+python3 -I experiments/basalt-inkling/install-cold-boot.py
+python3 -I /usr/local/libexec/homeai-basalt/cold-boot.py
+```
+
+The boot script starts the enrolled Tailscale daemon, the pairing and readiness endpoints, and the existing unprivileged lab launcher. It reuses the installed model and the persisted chat data. Boot output is available under `/var/log/basalt-lab-control`. The private SSH setup above remains available. [Vast instance lifecycle](https://docs.vast.ai/guides/reference/faq/instances)
+
 ## First acceptance check
 
 In the lab workspace, open a new chat. Ask: **Create `sum.cjs` that prints the sum of its numeric command-line arguments. Run `node sum.cjs 19 23` and show the observed output.** Check the actual file, a tool result of `42`, and the model used for the answer. A response that only prints proposed source code does not verify the integration.
