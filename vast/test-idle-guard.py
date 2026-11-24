@@ -1,21 +1,27 @@
-import importlib.util,pathlib,unittest
+import importlib.util,io,pathlib,unittest,urllib.error
+from unittest.mock import patch
 spec=importlib.util.spec_from_file_location('guard',pathlib.Path(__file__).with_name('idle-guard.py'));guard=importlib.util.module_from_spec(spec);spec.loader.exec_module(guard)
+IDLE_MODEL = {'loaded': True, 'busy': False, 'queued': 0}
+
 class Safety(unittest.TestCase):
     def check(self,expected,**updates):
-        values={'now':1000,'last':600,'lifecycle':{'at':1000000,'active':0,'lastActivity':600000},'model':{'busy':False,'queued':0},'jobs':False,'lease_until':0}
+        values={'now':1000,'last':600,'lifecycle':{'at':1000000,'active':0,'lastActivity':600000},'model':IDLE_MODEL,'jobs':False,'lease_until':0}
         values.update(updates);self.assertEqual(guard.decide(**values)[0],expected)
     def test_idle(self):self.check(True)
     def test_tool_gap_during_turn(self):self.check(False,lifecycle={'at':1000000,'active':1,'lastActivity':600000})
     def test_build_after_model_finishes(self):self.check(False,jobs=True)
-    def test_busy_model(self):self.check(False,model={'busy':True,'queued':0})
-    def test_queued(self):self.check(False,model={'busy':False,'queued':1})
+    def test_busy_model(self):self.check(False,model={**IDLE_MODEL,'busy':True})
+    def test_queued(self):self.check(False,model={**IDLE_MODEL,'queued':1})
     def test_fifo_waiting_holds_even_with_an_idle_model(self):
         self.check(False,queue={'owner':None,'active':[],'waiting':[{}]})
     def test_fifo_owner_or_unknown_snapshot_holds(self):
         self.check(False,queue={'owner':'task','active':[],'waiting':[]})
         self.check(False,queue={'active':[],'waiting':[]})
         self.check(True,queue={'owner':None,'active':[],'waiting':[]})
-    def test_unknown_model(self):self.check(False,model={})
+    def test_unknown_or_unready_model(self):
+        for model in (None, {}, {'busy':False,'queued':0}, {**IDLE_MODEL,'loaded':False},
+                      {'loaded':True,'busy':False}, {**IDLE_MODEL,'queued':False}, {**IDLE_MODEL,'queued':-1}):
+            with self.subTest(model=model):self.check(False,model=model)
     def test_failed_heartbeat(self):self.check(False,lifecycle={'at':900000,'active':0,'lastActivity':600000})
     def test_recent_user_action(self):self.check(False,lifecycle={'at':1000000,'active':0,'lastActivity':950000})
     def test_maintenance(self):self.check(False,lease_until=1100)
@@ -60,6 +66,47 @@ class Safety(unittest.TestCase):
         p[11]={'args':['npm','test'],'cwd':'/data/harness/workspaces/app','ppid':9}
         self.assertEqual(guard.preview_processes(p),{10})
 
+
+class ModelReadiness(unittest.TestCase):
+    class Response(io.BytesIO):
+        status = 200
+
+    def test_passive_model_status_requires_independent_loaded_proof(self):
+        for health, loaded in ((b'{"loaded":true}', True), (b'{"loaded":false}', False), (b'{"loaded":"true"}', False)):
+            with self.subTest(health=health), patch.object(guard.urllib.request, 'urlopen', side_effect=[
+                self.Response(b'{"busy":false,"queued":0,"loaded":true}'), self.Response(health),
+            ]) as request:
+                self.assertEqual(guard.read_model_status(), {**IDLE_MODEL, 'loaded':loaded})
+                self.assertEqual([call.args[0] for call in request.call_args_list], [
+                    'http://127.0.0.1:8080/status', 'http://127.0.0.1:8080/health',
+                ])
+
+    def test_failed_or_invalid_model_read_is_unknown(self):
+        unavailable = urllib.error.URLError(ConnectionRefusedError())
+        incomplete = self.Response(b'{"loaded":true}')
+        incomplete.status = 202
+        for responses in ([unavailable], [self.Response(b'{}'), unavailable],
+                          [self.Response(b'{"busy":false,"queued":0}'), self.Response(b'loading')],
+                          [self.Response(b'{"busy":false,"queued":0}'), incomplete]):
+            with self.subTest(responses=responses), patch.object(guard.urllib.request, 'urlopen', side_effect=responses):
+                self.assertIsNone(guard.read_model_status())
+
+    def test_cold_start_and_outage_each_require_a_fresh_idle_interval(self):
+        last = None
+        for now, model, can_stop in (
+            (10, None, False), (295, None, False), (360, {**IDLE_MODEL,'loaded':False}, False),
+            (510, IDLE_MODEL, False), (809, IDLE_MODEL, False), (810, IDLE_MODEL, True),
+            (900, None, False), (1300, IDLE_MODEL, False), (1599, IDLE_MODEL, False), (1600, IDLE_MODEL, True),
+        ):
+            with self.subTest(now=now):
+                inputs = dict(now=now, model=model, jobs=False, lease_until=0, applications=None, queue=None,
+                              lifecycle={'at':now * 1000,'active':0,'lastActivity':1000})
+                last = guard.observe_idle_clock(last, inputs)
+                self.assertEqual(guard.decide(last=last, **inputs)[0], can_stop)
+                if now in (10, 295, 360, 510, 900, 1300):
+                    self.assertEqual(guard.idle_elapsed_seconds(now, last, inputs['lifecycle'], None), 0)
+
+
 class SleepOperation(unittest.TestCase):
     def sample(self, settings=None, pid=27, **app_updates):
         settings = {'enabled': False} if settings is None else settings
@@ -68,7 +115,7 @@ class SleepOperation(unittest.TestCase):
         apps.update(app_updates)
         mode = guard.apps_sleep_mode(1000, settings, apps, pid)
         inputs = {'now':1000, 'lifecycle':{'at':1000000,'active':0,'lastActivity':600000},
-                  'model':{'busy':False,'queued':0}, 'jobs':False, 'lease_until':0, 'applications':apps,
+                  'model':IDLE_MODEL, 'jobs':False, 'lease_until':0, 'applications':apps,
                   'queue':{'owner':None,'active':[],'waiting':[]}}
         return ((mode, settings, pid) if mode else None), inputs
 
@@ -120,7 +167,8 @@ class SleepOperation(unittest.TestCase):
     def test_turn_job_fifo_or_lease_appearing_before_stop_vetoes_it(self):
         state = self.sample()
         for fields in ({'lifecycle':{'at':1000000,'active':1}}, {'jobs':True}, {'lease_until':1001},
-                       {'model':{'busy':True,'queued':0}}, {'queue':{'owner':None,'active':[],'waiting':[{}]}}):
+                       {'model':{**IDLE_MODEL,'busy':True}}, {'model':None},
+                       {'queue':{'owner':None,'active':[],'waiting':[{}]}}):
             with self.subTest(fields=fields):
                 operations = []
                 changed = (state[0], {**state[1], **fields})
@@ -146,6 +194,14 @@ class SleepOperation(unittest.TestCase):
         leased = (draining[0], {**draining[1], 'lease_until':1001})
         operations = []
         self.assertFalse(self.attempt(state[0], [state,draining,leased], operations))
+        self.assertEqual(operations, ['prepare-sleep','confirm-sleep','cancel-sleep'])
+
+    def test_model_unavailable_after_confirm_cancels_own_drain(self):
+        state = self.sample({'enabled':True}, enabled=True)
+        draining = self.sample({'enabled':True}, enabled=True, draining=True)
+        unavailable = (draining[0], {**draining[1], 'model':None})
+        operations = []
+        self.assertFalse(self.attempt(state[0], [state,draining,unavailable], operations))
         self.assertEqual(operations, ['prepare-sleep','confirm-sleep','cancel-sleep'])
 
     def test_new_activity_can_cancel_the_drain_after_confirm(self):

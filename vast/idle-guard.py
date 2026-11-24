@@ -1,5 +1,5 @@
 """Root watchdog: never stop across a live turn, build, unknown model state or stale heartbeat."""
-import json, pathlib, time, urllib.request, os, pwd, subprocess, datetime
+import json, pathlib, time, urllib.request, os, pwd, subprocess, datetime, http.client
 from preview_settings import PreviewSettings
 from runtime_paths import RuntimePaths
 ROOT=pathlib.Path('/data/harness')
@@ -12,7 +12,7 @@ def load(path): return json.loads(path.read_text())
 def idle_elapsed_seconds(now, last, lifecycle, applications):
     last_turn = lifecycle.get('lastActivity', now * 1000) / 1000
     last_app = (applications or {}).get('lastActivity', 0) / 1000
-    return now - max(last, last_turn, last_app)
+    return now - max(now if last is None else last, last_turn, last_app)
 
 
 def fifo_has_work(queue):
@@ -20,6 +20,20 @@ def fifo_has_work(queue):
         return False  # Older profiles without the whole-task scheduler.
     return (not isinstance(queue, dict) or 'owner' not in queue or queue['owner'] is not None
             or any(not isinstance(queue.get(key), list) or queue[key] for key in ('active', 'waiting')))
+
+
+def model_idle(model):
+    return (isinstance(model, dict) and model.get('loaded') is True and model.get('busy') is False
+            and type(model.get('queued')) is int and model['queued'] == 0)
+
+
+def observe_idle_clock(last, inputs):
+    if not model_idle(inputs['model']):
+        return None
+    if (last is None or inputs['lifecycle'].get('active') or inputs['jobs'] or fifo_has_work(inputs['queue'])
+            or (inputs['applications'] or {}).get('active')):
+        return inputs['now']
+    return last
 
 
 def decide(now, last, lifecycle, model, jobs, lease_until, idle_seconds=DEFAULT_IDLE_SECONDS, applications=None, queue=None):
@@ -31,7 +45,7 @@ def decide(now, last, lifecycle, model, jobs, lease_until, idle_seconds=DEFAULT_
         return False, 'agent turn active'
     if fifo_has_work(queue):
         return False, 'turn queue active or unknown'
-    if model.get('busy') is not False or model.get('queued', 0):
+    if not model_idle(model):
         return False, 'model busy or unknown'
 
     if applications is not None:
@@ -153,13 +167,29 @@ def apps_sleep_mode(now, settings, applications, service_pid):
     return None
 
 
+def read_model_status():
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:8080/status', timeout=4) as response:
+            if response.status != 200:
+                return None
+            status = json.load(response)
+        with urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4) as response:
+            if response.status != 200:
+                return None
+            health = json.load(response)
+    except (OSError, ValueError, http.client.HTTPException):
+        return None
+    if not isinstance(status, dict) or not isinstance(health, dict):
+        return None
+    return {**status, 'loaded': health.get('loaded') is True}
+
+
 def read_idle_inputs(cfg):
     settings = load(ROOT/'apps-config.json')
     applications = RUNTIME.read_agent('applications/activity.json')
     # A disabled controller never exempts an old guest from live process checks.
     jobs = jobs_running(cfg.get('ignoreDetachedPreviews', False), applications if settings.get('enabled') is True else None)
-    with urllib.request.urlopen('http://127.0.0.1:8080/status', timeout=4) as response:
-        model = json.load(response)
+    model = read_model_status()
     life = RUNTIME.read_agent('lifecycle.json')
     queue = RUNTIME.read_agent('turn-queue.json')
     lease = (RUNTIME.read_agent('maintenance.json', 4096) or {}).get('until', 0)
@@ -224,23 +254,25 @@ def stop_vast_instance(cfg, docker_saved, idle_seconds):
 def main():
     global RUNTIME
     RUNTIME=RuntimePaths(ROOT)
-    started=time.time();last=started;preview_settings=PreviewSettings()
-    # Preserve the idle clock when only this watchdog is restarted for maintenance.
-    try:
-        prior=RUNTIME.read_private('idle-status.json',{})
-        last=min(started,prior['at']-prior['idleSeconds'])
-    except (OSError,ValueError,KeyError,TypeError):pass
+    last=None;preview_settings=PreviewSettings()
+
+    def observe_inputs(cfg):
+        nonlocal last
+        try:
+            authority, inputs = read_idle_inputs(cfg)
+            last = observe_idle_clock(last, inputs)
+            return authority, inputs
+        except Exception:
+            last = None
+            raise
+
     while True:
         try:
             try:preview_settings.tick()
             except Exception as e:audit('preview_settings_error',error=type(e).__name__)
             cfg=load(ROOT/'root-secrets/guard.json')
-            authority, inputs = read_idle_inputs(cfg)
-            now, life, model, applications = (inputs[key] for key in ('now', 'lifecycle', 'model', 'applications'))
-            if (life.get('active') or model.get('busy') or model.get('queued')
-                    or inputs['jobs'] or fifo_has_work(inputs['queue'])
-                    or (applications and applications.get('active'))):
-                last = now
+            authority, inputs = observe_inputs(cfg)
+            now, life, applications = (inputs[key] for key in ('now', 'lifecycle', 'applications'))
             stop, reason = decide(last=last, **inputs)
             if stop and (authority is None or applications['draining']):
                 stop, reason = False, 'application sleep state unavailable or draining'
@@ -254,7 +286,7 @@ def main():
             RUNTIME.publish('idle-status.json',state)
             if stop and cfg.get('enabled',False):
                 time.sleep(2)
-                if stop_if_idle(authority, last, lambda: read_idle_inputs(cfg), application_call,
+                if stop_if_idle(authority, last, lambda: observe_inputs(cfg), application_call,
                                 lambda saved, idle: stop_vast_instance(cfg, saved, idle)):
                     time.sleep(30)
         except Exception as error:audit('idle_guard_holding',error=type(error).__name__)
