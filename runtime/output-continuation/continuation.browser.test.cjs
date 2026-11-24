@@ -79,13 +79,13 @@ test('Native replaces the historical limit banner and shows a recovered turn wit
   const open=id=>page.waitForFunction(id=>window.openOutputFixture?.(id),id);
   await open(Historical);
   const notice=page.locator('[data-homeai-output-limit]:visible');
-  await notice.getByText('Partial result saved',{exact:true}).waitFor();
+  await notice.getByText('Reply incomplete',{exact:true}).waitFor();
   await page.getByText('Historical saved fragment',{exact:true}).waitFor();
   assert.equal(await page.getByText('Output token limit reached',{exact:true}).count(),0);
   assert.equal(await page.getByText(/send "continue" to let the model resume/i).count(),0);
   await page.reload();
   await open(Historical);
-  await notice.getByText('Partial result saved',{exact:true}).waitFor();
+  await notice.getByText('Reply incomplete',{exact:true}).waitFor();
   await open(Recovered);
   await page.getByText('Recovered final answer',{exact:true}).waitFor();
   await notice.waitFor({state:'hidden'});

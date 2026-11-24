@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import runtime from '../require.cjs';
+import { bindFileRecoveryTarget, createFileRecovery, cutFileTool, fileRecoverySection, fileRecoveryTools,
+  firstStepFileTools, guardFileRecovery, isCreateOnlyRecoveryWrite, observeFileRecovery } from './file-recovery.mjs';
 
 export const name = 'homeai-output-continuation';
 export const inject = ['agents', 'sessions', 'tools'];
@@ -55,32 +57,48 @@ export function apply(ctx) {
       const phase = this.phase;
       if (phase?.kind !== 'running' || phase.turn === skipTurn) return original.call(this, decision);
       const { turn, abort: { signal } } = phase;
-      if (entry.state?.turn !== turn) {
+      const firstStep = entry.state?.turn !== turn;
+      if (firstStep) {
         entry.state = { turn, attempts: 0, stalled: 0, pending: false, inStep: false, calls: new Set(), toolHistoryFull: false };
       }
       const state = entry.state;
       // Keep the recovery section on the SDK's durable system-prompt surface,
       // even for complete preset prompts. The SDK logs and replays it normally.
-      const next = state.pending ? {
+      const recoverySections = state.file ? [fileRecoverySection(state.file)] : state.pending ? [resumeSection] : [];
+      const tools = state.file ? fileRecoveryTools(decision.assembly.tools, state.file) :
+        firstStep ? firstStepFileTools(decision.assembly.tools) : decision.assembly.tools;
+      const next = recoverySections.length || tools !== decision.assembly.tools ? {
         ...decision,
-        assembly: { ...decision.assembly, sections: [...decision.assembly.sections, resumeSection] },
+        assembly: { ...decision.assembly, sections: [...decision.assembly.sections, ...recoverySections],
+          tools },
       } : decision;
       state.recovering = state.pending;
       state.pending = false;
       state.inStep = true;
       state.output = null;
+      state.fileToolCut = false;
       state.toolConcluded = false;
       let outcome;
       try { outcome = await original.call(this, next); }
       finally { state.inStep = false; }
       // Some providers terminate with reasoning or no answer at all after a
       // cut. A clean finish chunk alone is insufficient to clear that cut.
-      if (state.attempts && outcome?.kind === 'completed' &&
-          (!state.output || state.output === state.priorCut) && !state.toolConcluded) {
-        return { kind: 'max-tokens' };
+      if (outcome?.kind === 'completed') {
+        if (state.file && !state.file.confirmed) {
+          outcome = { kind: 'max-tokens' };
+          // A genuine explanation of a blocker is terminal. An empty stop can
+          // spend the same remaining recovery allowance as another length cut.
+          if (state.output || state.toolConcluded) return outcome;
+        } else if (state.attempts && (!state.output || state.output === state.priorCut) && !state.toolConcluded) {
+          return { kind: 'max-tokens' };
+        }
       }
       if (outcome?.kind !== 'max-tokens' || signal.aborted || attached.get(agent) !== entry) return outcome;
-      if (state.output && state.output !== state.priorCut) {
+      if (state.fileToolCut) {
+        if (!state.file) state.file = createFileRecovery();
+        else state.file.repeatedCut = true;
+      }
+      if (!state.file && state.output && state.output !== state.priorCut) {
         state.stalled = 0;
         state.priorCut = state.output;
       } else if (state.recovering) state.stalled++;
@@ -110,6 +128,7 @@ export function apply(ctx) {
     if (!state || state.turn !== event.data?.turn) return;
     if (event.type === 'turn/end') entry.state = null;
     if (event.type === 'assistant/message' && state.inStep) {
+      state.fileToolCut = cutFileTool(event.data.stream);
       const visible = event.data.message.content.flatMap(block => {
         if (block.type === 'text' && block.text.trim()) return [block.text.trim()];
         return block.type === 'image' || block.type === 'file' ? [block.type] : [];
@@ -121,20 +140,31 @@ export function apply(ctx) {
     const state = attached.get(exec.agent)?.state;
     if (!state?.inStep) return;
     remember(state, exec.callId);
-    if (result.isError === false) state.stalled = 0;
+    if (state.file ? observeFileRecovery(state.file, exec, result) : result.isError === false) state.stalled = 0;
     if (result.concludesTurn === true) state.toolConcluded = true;
   }, { global: true });
   ctx.tools.guard(exec => {
     const state = attached.get(exec.agent)?.state;
-    if (!state?.inStep || !state.recovering) return;
-    // An identical opaque ID is the same SDK call. A newly issued call with
-    // the same arguments can legitimately verify a changed workspace.
-    if (state.calls.has(exec.callId)) return 'This tool call was already attempted. Use its recorded result.';
-    if (state.toolHistoryFull || state.calls.size >= maxToolIds) {
-      return 'Output-limit recovery has reached its tool tracking limit. Report the remaining work.';
+    if (!state?.inStep) return;
+    if (state.recovering) {
+      // A new call can legitimately verify a changed workspace.
+      if (state.calls.has(exec.callId)) return 'This tool call was already attempted. Use its recorded result.';
+      if (state.toolHistoryFull || state.calls.size >= maxToolIds) {
+        return 'Output-limit recovery has reached its tool tracking limit. Report the remaining work.';
+      }
+      remember(state, exec.callId);
     }
-    // Reserve before executing so duplicate calls in one batch cannot race.
-    remember(state, exec.callId);
+    if (state.file) return guardFileRecovery(state.file, exec);
   });
+  ctx.on('fs/write-intent', async (target, exec, next) => {
+    const intent = await next();
+    bindFileRecoveryTarget(exec, target.targetKey);
+    return isCreateOnlyRecoveryWrite(exec) ? { kind: 'createIfAbsent' } : intent;
+  }, { prepend: true, global: true });
+  ctx.on('fs/edit-intent', async (target, exec, next) => {
+    const intent = await next();
+    bindFileRecoveryTarget(exec, target.targetKey);
+    return intent;
+  }, { prepend: true, global: true });
   ctx.effect(() => () => { for (const entry of attached.values()) entry.detach(); });
 }

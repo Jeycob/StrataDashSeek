@@ -213,6 +213,7 @@ if (args[1] === 'web') {
   });
   assert.equal(await fs.readFile(proof, 'utf8'), 'same-turn recovery and served web client\n');
   assert.deepEqual(requests.slice(2).map(row => row.body.model), [modelId, modelId]);
-  await fs.rename(path.join(releaseRuntime, 'output-continuation'), path.join(releaseRuntime, 'removed-plugin'));
+  const fileRecovery = path.join(releaseRuntime, 'output-continuation', 'file-recovery.mjs');
+  await fs.rename(fileRecovery, fileRecovery + '.missing');
   await assert.rejects(dump(), error => error.code === 1 && /must include runtime\/output-continuation/.test(error.stderr));
 });
