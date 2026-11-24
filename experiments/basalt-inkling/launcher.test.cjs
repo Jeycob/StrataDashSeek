@@ -213,7 +213,10 @@ if (args[1] === 'web') {
   });
   assert.equal(await fs.readFile(proof, 'utf8'), 'same-turn recovery and served web client\n');
   assert.deepEqual(requests.slice(2).map(row => row.body.model), [modelId, modelId]);
-  const fileRecovery = path.join(releaseRuntime, 'output-continuation', 'file-recovery.mjs');
-  await fs.rename(fileRecovery, fileRecovery + '.missing');
-  await assert.rejects(dump(), error => error.code === 1 && /must include runtime\/output-continuation/.test(error.stderr));
+  for (const name of ['file-recovery.mjs', 'file-delivery.mjs']) {
+    const required = path.join(releaseRuntime, 'output-continuation', name);
+    await fs.rename(required, required + '.missing');
+    await assert.rejects(dump(), error => error.code === 1 && /must include runtime\/output-continuation/.test(error.stderr));
+    await fs.rename(required + '.missing', required);
+  }
 });

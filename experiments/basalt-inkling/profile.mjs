@@ -4,7 +4,7 @@ import { access } from 'node:fs/promises';
 
 const continuation = new URL('../../runtime/output-continuation/index.mjs', import.meta.url);
 try {
-  await Promise.all(['index.mjs', 'file-recovery.mjs', 'package.json', 'client.js', '../require.cjs']
+  await Promise.all(['index.mjs', 'file-recovery.mjs', 'file-delivery.mjs', 'package.json', 'client.js', '../require.cjs']
     .map(file => access(new URL(file, continuation))));
 } catch (cause) {
   throw new Error('The lab release must include runtime/output-continuation and runtime/require.cjs from the same revision as this launcher', { cause });
