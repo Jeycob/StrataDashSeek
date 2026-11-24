@@ -75,16 +75,27 @@ for(const legacyAbort of [false,true])test((legacyAbort?'Missing abort helpers: 
   await page.evaluate(id=>window.HarnessNativeUI.openDocker(id),sid);await page.waitForTimeout(300);await page.screenshot({path:path.join(evidence,'native-docker-desktop-en.png'),fullPage:true});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.deepEqual(errors,[]);
   const activityRequests = [];
+  const admitted = [{phase:'model.admitted',elapsedSeconds:320},{phase:'heavyTools.admitted',elapsedSeconds:10}];
+  let phases = [
+   {phase:'model.waiting',elapsedSeconds:17},{phase:'heavyTools.waiting',elapsedSeconds:42},
+   {phase:'verifying',elapsedSeconds:9},{phase:'preview',elapsedSeconds:2}
+  ];
   await page.route('**/api/workbench', async route => {
    const data = route.request().postDataJSON();
    if (data?.op !== 'run-activity') return route.fallback();
    activityRequests.push(data.sessionId);
-   await route.fulfill({json:{version:1,sessionId:data.sessionId,phases:[{phase:'heavyTools.waiting',elapsedSeconds:42}]}});
+   await route.fulfill({json:{version:1,sessionId:data.sessionId,phases}});
   });
   await page.evaluate(id => NativeFixture.setRunning(id, true), sid);
   const activity = page.locator('.harness-run-activity:visible');
+  await activity.getByText('Waiting for model capacity · 17 s', {exact:true}).waitFor();
   await activity.getByText('Waiting for tool capacity · 42 s', {exact:true}).waitFor();
+  await activity.getByText('Verifying the result · 9 s', {exact:true}).waitFor();
+  await activity.getByText('Preparing the preview link · 2 s', {exact:true}).waitFor();
   assert.equal(await activity.getAttribute('data-run-session'), sid);
+  phases = admitted;
+  await activity.waitFor({state:'detached'});
+  assert.ok(activityRequests.length >= 2, 'The admitted-only snapshot clears the row while the session is running');
   await page.evaluate(id => NativeFixture.setRunning(id, false), sid);
   await activity.waitFor({state:'hidden'});
   assert.ok(activityRequests.length && activityRequests.every(id => id === sid));

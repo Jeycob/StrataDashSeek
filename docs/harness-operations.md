@@ -84,7 +84,9 @@ Stopping the instance preserves its disk and releases the live processes, model 
 
 ## Task budgets and recovery
 
-**Set a limit for one request.** Expand **Task budget** next to the composer before sending. Elapsed time starts with the SDK acceptance receipt, or with the first runtime step if its timestamp is missing. Reported token usage is checked after each model response and can overshoot the limit. If exact usage becomes unavailable, a token-limited task stops with its recorded reason. Delivered previews leave the finished task's timer inactive.
+**Set a limit for one request.** While the chat is idle, open **+ → Task limit** in the composer. Choose elapsed minutes or reported tokens, enter the amount and select **Save**. You can reopen the same menu to change or clear the limit before sending your draft.
+
+Elapsed time starts with the SDK acceptance receipt, or with the first runtime step if its timestamp is missing. Reported token usage is checked after each model response and can overshoot the limit. If exact usage becomes unavailable, a token-limited task stops with its recorded reason. Delivered previews leave the finished task's timer inactive.
 
 When a limit is reached, the task keeps its files and checks. Internal continuations retain the allowance. Unfinished background work retains its original deadline and appears as **Earlier task** if a new request is already active. Its settlement leaves the newer request and allowance intact. An accepted human follow-up stays in the SDK inbox. Managed project/Bash jobs collect terminal results quietly. Other SDK producers such as terminal or workflow jobs can still emit their normal completion notifications after cancellation.
 

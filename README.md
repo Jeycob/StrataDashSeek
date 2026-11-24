@@ -5,7 +5,7 @@ HomeAI runs DeepSeek Harness and a Strata-hosted Qwen model on one stoppable Vas
 ## Open HomeAI and run a task
 
 1. Connect to Tailscale. Open the installed HomeAI app or your private wake link. On a new phone, [pair the device](docs/harness-operations.md#pair-a-phone) first.
-2. Open a workspace and send a task. For example, ask for a temperature converter that displays 32 °F at 0 °C and 212 °F at 100 °C. To limit a run, expand **Task budget** before sending.
+2. Open a workspace and send a task. For example, ask for a temperature converter that displays 32 °F at 0 °C and 212 °F at 100 °C. To limit a request's time or tokens, choose **+ → Task limit** in the composer before sending.
 3. Open **Code – OSS** in the right sidebar to edit the current chat’s project. **Changes** shows saved changes as tools work. Use **Workspace files → Download** for a lasting copy of an output. A preview URL can expire while its source files remain on disk.
 4. To return later, reopen the chat. For an archived chat, use **View options → Archived only → … → Archived files**. **More → Monitor serveru** shows the running server’s GPU, memory, disk and recent model requests.
 

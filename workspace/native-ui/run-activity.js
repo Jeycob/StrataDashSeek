@@ -1,7 +1,7 @@
 // Included inside the Native plugin factory, beside source.js.
 const runActivityLabels = {
- en: {'model.waiting':'Waiting for model capacity','model.admitted':'Using a model slot','heavyTools.waiting':'Waiting for tool capacity','heavyTools.admitted':'Using a tool slot',verifying:'Verifying the result',preview:'Preparing the preview link'},
- cs: {'model.waiting':'Čeká na volný model','model.admitted':'Využívá slot modelu','heavyTools.waiting':'Čeká na volný nástroj','heavyTools.admitted':'Využívá slot nástroje',verifying:'Ověřuje výsledek',preview:'Připravuje odkaz na náhled'}
+ en: {'model.waiting':'Waiting for model capacity','heavyTools.waiting':'Waiting for tool capacity',verifying:'Verifying the result',preview:'Preparing the preview link'},
+ cs: {'model.waiting':'Čeká na volný model','heavyTools.waiting':'Čeká na volný nástroj',verifying:'Ověřuje výsledek',preview:'Připravuje odkaz na náhled'}
 };
 
 function ActiveRunStatus({sessionId, useSession, usePanelInfo, useChat}) {
@@ -46,7 +46,7 @@ function ActiveRunStatus({sessionId, useSession, usePanelInfo, useChat}) {
  for (const call of calls) {
   if (call.phase !== 'start') continue;
   if (call.name === 'verify_project') { if (!phases.has('verifying')) phases.set('verifying', null); }
-  if (call.name === 'project_preview' && typeof call.argsRaw === 'string' && call.argsRaw.length <= 2048) {
+  if (call.name === 'project_preview' && !phases.has('preview') && typeof call.argsRaw === 'string' && call.argsRaw.length <= 2048) {
    try { if (JSON.parse(call.argsRaw)?.operation === 'open') phases.set('preview', null); } catch { /* No confirmed preview operation yet. */ }
   }
  }

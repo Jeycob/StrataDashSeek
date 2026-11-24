@@ -1,4 +1,10 @@
 /* Native-only surfaces: inherit the active Harness palette, font and scale. */
+.harness-task-limit { font: inherit; padding: 6px 0; }
+.harness-task-limit form { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.harness-task-limit label { display: inline-flex; align-items: center; gap: 5px; }
+.harness-task-limit :is(button, select, input) { font: inherit; }
+.harness-task-limit input { width: 7em; max-width: 100%; }
+.harness-task-limit p { margin: 4px 0 0; font-size: 12px; }
 .harness-native-surface {
   box-sizing: border-box;
   min-width: 0;

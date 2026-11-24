@@ -164,7 +164,7 @@ export function apply(ctx){
   try{await mobile.locator('[data-composer-input]').fill(prompt);}
   catch(error){throw Error('Native phone composer unavailable: '+(await mobile.locator('body').innerText()).slice(-3000),{cause:error});}
   await mobile.getByRole('button',{name:'Send message',exact:true}).click();
-  await mobile.locator('[data-run-session="'+sid+'"]').waitFor();
+  await mobile.getByRole('button',{name:'Stop generating',exact:true}).waitFor();
   await mobile.getByText(prompt,{exact:true}).first().waitFor();
   await mobile.waitForFunction(async endpoint=>(await (await fetch(endpoint)).json()).fileWritten,fixturePath);
   await readFile(mobile);assertOne(await proof(mobile),true);
@@ -173,15 +173,15 @@ export function apply(ctx){
   const desktop=await desktopContext.newPage();
   await desktop.goto(url);await ready(desktop);
   await desktop.getByText(title,{exact:true}).first().click();
-  const status=desktop.locator('[data-run-session="'+sid+'"] [data-phase="model.admitted"]');
-  await status.waitFor();
+  const stop=desktop.getByRole('button',{name:'Stop generating',exact:true});
+  await stop.waitFor();
   await desktop.getByText(prompt,{exact:true}).first().waitFor();
   await readFile(desktop);assertOne(await proof(desktop),true);
   assert.equal(await desktop.getByText(marker,{exact:true}).count(),0);
   const completed=await proof(desktop,'finish');
   assertOne(completed,false);
   await desktop.getByText(marker,{exact:true}).waitFor();
-  await status.waitFor({state:'detached'});
+  await stop.waitFor({state:'hidden'});
 
   async function restored(surface){
    await surface.getByText(marker,{exact:true}).waitFor();
