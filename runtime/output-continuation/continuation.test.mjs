@@ -312,6 +312,7 @@ test('actual SDK present confirms an alternative write only when a new or change
     ['mutation before presentation in the same assistant batch', ['change-then-present'], 'completed'],
     ['changed private key', ['key', 'present-key'], 'max-tokens'],
     ['symlinked project path', ['seed', 'present-linked'], 'max-tokens'],
+    ['directory temporarily replaced during baseline listing', ['present-new'], 'max-tokens'],
     ['cwd changed after delivery', ['seed', 'present-new', 'relocate'], 'max-tokens'],
     ['presented artifact removed before the final answer', ['seed', 'present-new', 'remove'], 'max-tokens'],
     ['Stop during terminal delivery verification', ['seed', 'present-new'], 'aborted'],
@@ -325,6 +326,25 @@ test('actual SDK present confirms an alternative write only when a new or change
     const secret = path.join(root, 'private.key');
     await fs.writeFile(existing, original);
     await fs.writeFile(secret, 'SYNTHETIC-ORIGINAL');
+    let inspectedPinnedDirectory = false;
+    if (label.startsWith('directory temporarily')) {
+      await fs.writeFile(fresh, updated);
+      const openDirectory = fs.opendir, out = path.dirname(fresh), staged = path.join(root, 'original');
+      child.mock.method(fs, 'opendir', async (directory, options) => {
+        if (await fs.realpath(directory) !== out) return openDirectory(directory, options);
+        assert.match(directory, /^\/proc\/self\/fd\/\d+$/u);
+        await fs.rename(out, staged);
+        await fs.symlink('other', out);
+        try {
+          assert.equal(await fs.realpath(directory), staged);
+          inspectedPinnedDirectory = true;
+          return await openDirectory(directory, options);
+        } finally {
+          await fs.unlink(out);
+          await fs.rename(staged, out);
+        }
+      });
+    }
     let cwd = root, agent, stopDuringVerification = false;
     const actions = {
       seed: () => fs.writeFile(fresh, '<!doctype html><html><body>'),
@@ -372,6 +392,7 @@ test('actual SDK present confirms an alternative write only when a new or change
     agent.followup(input);
     await agent.whenIdle();
     assert.deepEqual(terminal(f.events, agent.id), [expected]);
+    if (label.startsWith('directory temporarily')) assert.equal(inspectedPinnedDirectory, true);
     assert.equal(matching(f.events, agent.id, 'turn/start').length, 1);
     const deliveries = matching(f.events, agent.id, 'deliverables/presented');
     const presented = steps.find(step => Object.hasOwn(paths, step)) ??

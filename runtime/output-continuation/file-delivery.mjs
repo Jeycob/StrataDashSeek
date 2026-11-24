@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import { lstat, open, opendir, realpath } from 'node:fs/promises';
+import localFs, { lstat, open, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { relativeFile } from '../../workspace/policy.mjs';
 import privateSource from '../../workspace/source-private.cjs';
@@ -22,15 +22,26 @@ const excluded = name => name.startsWith('.') || name === 'node_modules' || priv
 
 async function boundedEntries(rootPath, directory, probe) {
   if (directory !== rootPath) await canonicalInside(rootPath, path.relative(rootPath, directory));
-  const handle = await opendir(directory, { bufferSize: 16 });
-  const entries = [];
+  if (probe.aborted) return;
+  const pin = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
   try {
-    while (!probe.aborted && entries.length <= maxDirectoryEntries) {
-      const item = await handle.read();
-      if (!item) return entries;
-      entries.push(item);
-    }
-  } finally { await handle.close(); }
+    const fdPath = '/proc/self/fd/' + pin.fd;
+    const before = await pin.stat({ bigint: true });
+    if (!before.isDirectory() || await realpath(fdPath) !== directory || probe.aborted) return;
+    const handle = await localFs.opendir(fdPath, { bufferSize: 16 });
+    try {
+      const entries = [];
+      while (!probe.aborted && entries.length <= maxDirectoryEntries) {
+        const item = await handle.read();
+        if (item) { entries.push(item); continue; }
+        const after = await lstat(directory, { bigint: true });
+        if (!probe.aborted && after.isDirectory() && before.dev === after.dev && before.ino === after.ino &&
+            before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs &&
+            await realpath(fdPath) === directory && !probe.aborted) return entries;
+        return;
+      }
+    } finally { await handle.close(); }
+  } finally { await pin.close(); }
 }
 
 async function fingerprint(rootPath, file, probe, limit = maxFileBytes) {
