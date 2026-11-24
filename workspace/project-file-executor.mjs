@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { projectFileWorker } from './project-file-worker.mjs';
 import {bindProjectExecution} from './execution-mode.mjs';
+import {isCreateOnlyRecoveryWrite} from '../runtime/output-continuation/file-recovery.mjs';
 const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
 const names = Object.freeze(['read','write','edit','glob','grep','apply_patch']);
 const fields={read:new Set(['file_path','offset','limit']),write:new Set(['file_path','content']),edit:new Set(['file_path','old_string','new_string','replace_all']),glob:new Set(['pattern','path']),grep:new Set(['pattern','path','include']),apply_patch:new Set(['patch'])};
@@ -26,7 +27,8 @@ export function createProjectFileHandlers(execute,{executionBinding,beforeMutati
     if(typeof root!=='string'||!path.posix.isAbsolute(root)||path.posix.normalize(root)!==root||root==='/'||typeof p!=='string'||!p||p.includes('\\')||p.includes('\0')||p.length>4096)fail('INVALID_PROJECT_PATH');
     const relative=projectRelativePath(root,p,{allowRoot:search||patch});
     let proof={};if(['write','edit','apply_patch'].includes(name)){if(typeof beforeMutation!=='function')fail('REWRITE_ADMISSION_UNAVAILABLE');proof=await beforeMutation(request,execution);mode.assertUnchanged();}
-    const payload=Buffer.from(JSON.stringify({name,arguments:patch?request.arguments:{...request.arguments,[key]:relative},...proof}),'utf8');
+    const expectAbsent=name==='write'&&isCreateOnlyRecoveryWrite(execution);
+    const payload=Buffer.from(JSON.stringify({name,arguments:patch?request.arguments:{...request.arguments,[key]:relative},...proof,...(expectAbsent?{expectAbsent:true}:{})}),'utf8');
     // Keep generated argv below the runner's 64KiB command limit and Linux's
     // single-argument limit. Larger writes need a future bounded stdin RPC.
     if(payload.length>32768)fail('FILE_REQUEST_LIMIT');
@@ -39,6 +41,6 @@ export function createProjectFileHandlers(execute,{executionBinding,beforeMutati
     if(!result||result.exitCode!==0||result.signal||result.aborted||result.timedOut||result.stdout?.truncated||typeof result.stdout?.text!=='string'||Buffer.byteLength(result.stdout.text)>262144)fail('ISOLATED_FILE_EXECUTION_FAILED');
     let parsed;try{parsed=JSON.parse(result.stdout.text);}catch{fail('ISOLATED_FILE_RESULT_INVALID');}
     if(!parsed||typeof parsed.text!=='string'||typeof parsed.truncated!=='boolean')fail('ISOLATED_FILE_RESULT_INVALID');
-    return {text:parsed.text,truncated:parsed.truncated};
+    return {text:parsed.text,truncated:parsed.truncated,...(typeof parsed.changed==='boolean'?{changed:parsed.changed}:{})};
   }]));
 }

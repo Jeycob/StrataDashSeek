@@ -28,6 +28,21 @@ test('prepared guest commands preserve UTF8 read windows, writes, exact edits an
  assert((await fs.readFile(path.join(f.root,'src/example.txt'),'utf8')).endsWith('changed\n'));
  assert.equal(f.calls[0].execution,f.execution);
 });
+test('a recovery write creates exclusively in the guest and returns confirmed progress',{skip:process.platform==='win32'},async t=>{
+ const f=await fixture(t),{createFileRecovery,guardFileRecovery}=await import('../runtime/output-continuation/file-recovery.mjs');
+ const recovery=createFileRecovery();
+ const write=(file_path,content)=>{
+  const args={file_path,content},execution={...f.execution,name:'write',arguments:args,token:Symbol('fixture-write')};
+  assert.equal(guardFileRecovery(recovery,execution),undefined);
+  return f.handlers.write({name:'write',arguments:args,project:{ownerId:'owner',root:'/trusted/projects/one'}},execution);
+ };
+ await fs.writeFile(path.join(f.root,'existing.html'),'<p>Existing</p>');
+ await assert.rejects(write('existing.html','<p>Replacement</p>'));
+ assert.equal(await fs.readFile(path.join(f.root,'existing.html'),'utf8'),'<p>Existing</p>');
+ assert.equal((await write('new.html','<p>Small seed</p>')).changed,true);
+ assert.equal((await fs.stat(path.join(f.root,'new.html'))).nlink,1);
+ assert.equal(await fs.readFile(path.join(f.root,'new.html'),'utf8'),'<p>Small seed</p>');
+});
 test('outside absolute paths and traversal fail before dispatch; missing operations have no handler',{skip:process.platform==='win32'},async t=>{
  const f=await fixture(t);
  for(const file_path of ['/etc/passwd','/trusted/projects/other/a','/workspace/../secret','../other','a/../../x'])await assert.rejects(f.call('read',{file_path}));
