@@ -8,22 +8,15 @@ permissions:
   contents: read
 
 jobs:
-  linux:
-    name: Output-limit diagnostics (${{ matrix.group }})
+  sdk:
+    name: Output-limit SDK TAP diagnostics
     if: github.ref == 'refs/heads/diagnostics/output-limit-20261124'
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
-    strategy:
-      fail-fast: false
-      matrix:
-        group: [sdk, chromium]
+    timeout-minutes: 8
     env:
       HOMEAI_RUNTIME: ${{ github.workspace }}/runtime
       EFFICIENCY_SDK_ROOT: ${{ github.workspace }}/runtime/node_modules
       HARNESS_NATIVE_CLI: ${{ github.workspace }}/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js
-      HARNESS_PLAYWRIGHT_MODULE: ${{ github.workspace }}/development/ci/node_modules/playwright
-      PLAYWRIGHT_BROWSERS_PATH: /opt/stratadashseek-ci-browsers
-      DIAGNOSTIC_GROUP: ${{ matrix.group }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -32,109 +25,84 @@ jobs:
       - name: Verify diagnostic source
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = 39b632e18afc0b9c5044fdc8bb3bbde94fa59e5f
+          test "$(git rev-parse HEAD^)" = 6fc1de83429af312eca97c9cb89b6aa17590d0f8
           test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/output-limit-diagnostic.yml
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: '24.22.1'
           cache: npm
-          cache-dependency-path: |
-            runtime/package-lock.json
-            development/ci/package-lock.json
+          cache-dependency-path: runtime/package-lock.json
       - name: Install the pinned SDK
         run: npm ci --prefix runtime --no-audit --no-fund
-      - name: Install pinned Chromium and prepare its existing sandbox policy
-        if: matrix.group == 'chromium'
+      - name: Capture SDK TAP and annotate exact failures
+        shell: bash
         run: |
-          npm ci --prefix development/ci --no-audit --no-fund
-          sudo -n install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$PLAYWRIGHT_BROWSERS_PATH"
-          node development/ci/node_modules/playwright/cli.js install --with-deps chromium
-          sudo -n chown -R root:root "$PLAYWRIGHT_BROWSERS_PATH"
-          sudo -n chmod -R go-w "$PLAYWRIGHT_BROWSERS_PATH"
-          if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] &&
-             [[ "$(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns)" == 1 ]]; then
-            sudo -n apt-get install --no-install-recommends -y apparmor
-            revision=$(node -p 'require("./development/ci/node_modules/playwright-core/browsers.json").browsers.find(browser => browser.name === "chromium-headless-shell").revision')
-            [[ "$revision" =~ ^[0-9]+$ ]]
-            shell="$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-$revision/chrome-headless-shell-linux64/chrome-headless-shell"
-            test -x "$shell"
-            test "$(realpath -- "$shell")" = "$shell"
-            sudo -n apparmor_parser --replace --skip-read-cache <<EOF
-          abi <abi/4.0>,
-          include <tunables/global>
-          profile stratadashseek-ci-preview "$shell" flags=(unconfined) {
-            userns,
-          }
-          EOF
-          fi
-      - name: Run fixtures and annotate exact failures
-        run: |
-          node --input-type=module <<'NODE'
-          import { relative } from 'node:path';
-          import { run } from 'node:test';
+          tap="$RUNNER_TEMP/output-limit-sdk.tap"
+          test_exit=0
+          node --test --test-reporter=tap --test-timeout=120000 runtime/output-continuation/continuation.test.mjs >"$tap" 2>&1 || test_exit=$?
+          node --input-type=module - "$tap" "$test_exit" <<'NODE'
+          import { readFileSync } from 'node:fs';
           import { stripVTControlCharacters } from 'node:util';
 
-          const suites = {
-            sdk: [
-              'runtime/output-continuation/continuation.test.mjs',
-              'experiments/basalt-inkling/launcher.test.cjs',
-            ],
-            chromium: ['workspace/native-ui/task-budget.test.cjs'],
-          };
-          const files = suites[process.env.DIAGNOSTIC_GROUP];
-          if (!files) throw Error('Unknown diagnostic fixture group');
-
+          const [, , path, exitCode] = process.argv;
+          const lines = readFileSync(path, 'utf8').split(/\r?\n/);
+          const fixture = 'runtime/output-continuation/continuation.test.mjs';
           const escapeData = text => text.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
           const escapeProperty = text => escapeData(text).replaceAll(':', '%3A').replaceAll(',', '%2C');
-          function bounded(value, limit) {
-            return stripVTControlCharacters(String(value))
-              .replace(/https?:\/\/[^\s<>"']+/gi, '[URL omitted]')
-              .replace(/\b(?:bearer|basic)\s+[a-z0-9._+/=~-]+/gi, '[redacted authorization]')
-              .replace(/\b(?:authorization|(?:api|private)[_-]?key|(?:access|refresh)[_-]?token|secret|password)\b["']?\s*[:=]\s*["']?[^\s"',;]+/gi, '[redacted field]')
+          function redact(value, limit) {
+            return stripVTControlCharacters(value)
+              .replace(/\b[a-z][a-z\d+.-]*:\/\/[^\s"'<>]+/gi, '[redacted URL]')
+              .replace(/\bwww\.[a-z\d.-]+(?:\/[^\s"'<>]*)?/gi, '[redacted URL]')
+              .replace(/\b(?:bearer|basic)\s+[a-z\d._+/=~-]+/gi, '[redacted authorization]')
+              .replace(/\b[a-z\d_-]*(?:authorization|(?:api|private)[_-]?key|(?:access|refresh)[_-]?token|secret|password)[a-z\d_-]*\b["']?\s*[:=]\s*["']?[^\s"',;]+/gi, '[redacted field]')
+              .replace(/\b(?:gh[pousr]_|github_pat_|sk-)[a-z\d_-]+/gi, '[redacted credential]')
               .slice(0, limit);
           }
-          const scalar = value => value === null || ['boolean', 'number', 'string'].includes(typeof value);
-          function shortValue(value) {
-            if (scalar(value)) return bounded(JSON.stringify(value), 150);
-            if (Array.isArray(value) && value.length <= 8 && value.every(scalar)) {
-              return bounded(JSON.stringify(value), 150);
-            }
-            return undefined;
-          }
-          function annotate({ name, file, line, details }) {
-            const error = details?.error;
-            const cause = error?.cause ?? error;
-            const location = typeof file === 'string' ? relative(process.cwd(), file) : '';
-            const properties = ['title=' + escapeProperty(bounded(name, 170))];
-            if (files.includes(location)) {
-              properties.push('file=' + location);
-              if (Number.isInteger(line) && line > 0) properties.push('line=' + line);
-            }
-            const kind = [cause?.name, cause?.code ?? error?.code].filter(Boolean).join(' ');
-            const message = [kind, cause?.message ?? error?.message ?? 'No error message returned'];
-            for (const key of ['actual', 'expected']) {
-              const value = shortValue(cause?.[key]);
-              if (value !== undefined) message.push(key + '=' + value);
-            }
-            console.log('::error ' + properties.join(',') + '::' + escapeData(bounded(message.join('\n'), 1200)));
+          function annotate(title, details) {
+            const message = details.length ? details.map(line => redact(line.trim(), 260)).join('\n') : 'No nested TAP details.';
+            console.log('::error file=' + fixture + ',title=' + escapeProperty(redact(title, 170)) + '::' + escapeData(redact(message, 1400)));
           }
 
-          let passed = 0;
-          let failed = 0;
-          for await (const event of run({ files, concurrency: 1, timeout: 120000 })) {
-            if (event.type === 'test:fail') {
-              failed++;
-              annotate(event.data);
-            } else if (event.type === 'test:pass') {
-              const { skip, todo, name } = event.data;
-              if (skip || todo) {
-                failed++;
-                annotate({ ...event.data, name, details: { error: { message: 'Diagnostic fixture was skipped or marked todo' } } });
-              } else {
-                passed++;
+          const notOk = /^\s*not ok\s+\d+\b/;
+          const field = /^(\s*)(?:failureType|error|code|location|expected|actual|operator):\s*/;
+          const failures = [];
+          for (let index = 0; index < lines.length && failures.length < 8; index++) {
+            if (!notOk.test(lines[index])) continue;
+            const title = lines[index].trim();
+            const details = [];
+            let fieldIndent = null;
+            for (let item = index + 1; item < lines.length && item <= index + 60 && details.length < 13; item++) {
+              const row = lines[item];
+              if (notOk.test(row) || /^\s*(?:\.\.\.|ok\s+\d+\b|# Subtest:)\s*/.test(row)) break;
+              const match = row.match(field);
+              if (match) {
+                fieldIndent = match[1].length;
+                details.push(row);
+              } else if (row.trim()) {
+                const indent = row.match(/^\s*/)[0].length;
+                if (fieldIndent !== null && indent > fieldIndent) details.push(row);
+                else fieldIndent = null;
               }
             }
+            failures.push({ title, details });
           }
-          console.log('Diagnostic results: ' + passed + ' passed, ' + failed + ' failed');
-          if (failed || passed === 0) process.exitCode = 1;
+
+          const fatal = [];
+          const crash = /\b(?:uncaught(?:exception)?|unhandled\s*rejection|AssertionError|ERR_ASSERTION|ERR_MODULE_NOT_FOUND|TypeError|ReferenceError|SyntaxError)\b|\bdsh\b.*\bfatal\b/i;
+          for (let index = 0; index < lines.length && fatal.length < 10; index++) {
+            const row = lines[index];
+            if (!/^\s*#\s*/.test(row) || !crash.test(row)) continue;
+            for (const context of lines.slice(index, index + 4)) {
+              if (!/^\s*#\s*/.test(context) || /^\s*# Subtest:/.test(context)) break;
+              if (!fatal.includes(context) && fatal.length < 10) fatal.push(context);
+            }
+          }
+
+          for (const { title, details } of failures) annotate(title, details);
+          if (fatal.length) annotate('SDK stderr and uncaught assertions', fatal);
+          if (exitCode !== '0' && !failures.length && !fatal.length) {
+            annotate('SDK fixture process failed', ['TAP had no matching failure lines. Exit status: ' + exitCode]);
+          }
+          console.log('SDK TAP process exit=' + exitCode + ', failed TAP entries=' + failures.length + ', crash diagnostic lines=' + fatal.length);
           NODE
+          exit "$test_exit"
