@@ -153,7 +153,11 @@ export async function projectFileWorker(input, root = '/workspace') {
     await fd.writeFile(content);await fd.sync();await fd.close();fd=null;
     let latest;try{latest=await fs.lstat(full,{bigint:true});}catch(error){if(error.code!=='ENOENT')throw error;}
     if(before ? !latest||fingerprint(latest)!==before.stamp : latest)fail('PROJECT_FILE_CHANGED');
-    await fs.rename(temp,full);temp=null;
-    return {text:input.name==='edit'?'Edited project file.':'Wrote project file.',truncated:false};
+    if(input.expectAbsent){
+      // An atomic exclusive link closes the race with a concurrent create.
+      await fs.link(temp,full);await fs.unlink(temp);
+    }else await fs.rename(temp,full);
+    temp=null;
+    return {text:input.name==='edit'?'Edited project file.':'Wrote project file.',truncated:false,changed:before===null||content!==before.text};
   } finally {if(fd)await fd.close();if(temp)await fs.unlink(temp).catch(()=>{});}
 }

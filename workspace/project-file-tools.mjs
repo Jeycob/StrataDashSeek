@@ -45,7 +45,7 @@ export function createProjectFileTools(ctx, manager, handlers = {}, binding = ma
         description: (original?.description??'Operate on the current isolated project.') + ' Managed project: this operation requires the isolated file backend. Unsupported operations fail closed. No host filesystem fallback or permission escalation.' + (name === 'apply_patch' ? ' Isolated patch subset: one relative file per call; Add, Delete, or Update with literal @@ hunks and unique exact context. Move, multi-file, anchor text and files without a final newline are unsupported; use write/edit instead.' : ''),
         isConcurrencySafe: () => false,
         output: {
-          schema: { type: 'object', properties: { text: { type: 'string' }, truncated: { type: 'boolean' } }, required: ['text', 'truncated'], additionalProperties: false },
+          schema: { type: 'object', properties: { text: { type: 'string' }, truncated: { type: 'boolean' }, changed: { type: 'boolean' } }, required: ['text', 'truncated'], additionalProperties: false },
           render: (_args, result) => [{ type: 'text', text: result.text + (result.truncated ? '\n[isolated file output truncated]' : '') }],
         },
         async execute(args, execution) {
@@ -68,7 +68,7 @@ export function createProjectFileTools(ctx, manager, handlers = {}, binding = ma
           execution.signal.throwIfAborted();
           mode.assertUnchanged();
           if (!result || typeof result.text !== 'string' || typeof result.truncated !== 'boolean' || Buffer.byteLength(result.text, 'utf8') > MAX_OUTPUT_BYTES) throw failure('ISOLATED_FILE_RESULT_INVALID');
-          return { text: result.text, truncated: result.truncated };
+          return { text: result.text, truncated: result.truncated, ...(typeof result.changed === 'boolean' ? { changed: result.changed } : {}) };
         },
       };
       const dispose = agent.ctx.tools.register(definition);
