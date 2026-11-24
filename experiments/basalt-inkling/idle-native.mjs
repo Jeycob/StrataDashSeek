@@ -3,8 +3,9 @@ import { randomUUID } from 'node:crypto';
 import { attachBridge } from './idle-native-control.mjs';
 
 export const name = 'basalt-idle-activity';
-export const inject = ['agents', 'jobs', 'tools', 'sessionController', 'sessionQuery', 'sessionProjections', 'sessionPersistence', 'terminals', 'typertGateway'];
+export const inject = ['agents', 'agentPresets', 'jobs', 'tools', 'sessionController', 'sessionQuery', 'sessionProjections', 'sessionPersistence', 'terminalController', 'typertGateway'];
 const jobStates = new Set(['running', 'stopping', 'completed', 'killed', 'failed']);
+const terminalStates = new Set(['running', 'exited', 'failed']);
 
 export function observeNative(ctx) {
   const epoch = randomUUID();
@@ -52,6 +53,12 @@ export function observeNative(ctx) {
       const id = row.header?.id;
       if (!id || owners.has(id) || row.formatStatus === 'migration-required') throw Error('Unverified Native session');
       owners.add(id);
+      const webTerminals = ctx.terminalController.list(id);
+      if (!Array.isArray(webTerminals)) throw Error('Unverified web terminal list');
+      for (const terminal of webTerminals) {
+        if (!terminalStates.has(terminal?.state)) throw Error('Unverified web terminal state');
+        if (terminal.state === 'running') terminals++;
+      }
       // state() is passive in rc.2. No follow(), prompt(), resume() or activating open().
       const state = await ctx.sessionController.state({ sessionId: id }, signal);
       if (typeof state?.running !== 'boolean' || typeof state.active !== 'boolean' || !Number.isSafeInteger(state.cursor) ||
@@ -72,9 +79,14 @@ export function observeNative(ctx) {
       // An SDK between-turn maintenance task can keep the public status idle.
       if (agent.phase.kind !== 'idle' || agent.status === 'running') turns++;
       queued += agent.inbox.nextTurn.length + agent.inbox.nextStep.length;
-      const hasTerminal = ctx.terminals.hasOwnerActivity(agent);
-      if (typeof hasTerminal !== 'boolean') throw Error('Unverified terminal owner');
-      if (hasTerminal) terminals++;
+      // The minimal preset keeps its PTY registry inside an isolated Cordis group.
+      const registries = new Set([ctx.get('terminals'), ctx.agentPresets.serviceFor(agent, 'terminals')]);
+      registries.delete(undefined);
+      for (const registry of registries) {
+        const hasTerminal = registry.hasOwnerActivity(agent);
+        if (typeof hasTerminal !== 'boolean') throw Error('Unverified terminal owner');
+        if (hasTerminal) terminals++;
+      }
     }
     // list() alone sees unowned jobs only. Each owner-specific list also includes them.
     const activeJobs = new Set();

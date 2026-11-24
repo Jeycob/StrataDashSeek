@@ -72,8 +72,8 @@ test('actual web profile binds only verified Inkling and round-trips a streamed 
     OPENAI_BASE_URL: 'http://127.0.0.1:1', OPENAI_API_KEY: 'synthetic-unrelated-key',
     DEEPSEEK_API_KEY: 'synthetic-unrelated-key', BASALT_LOOPBACK_KEY: 'synthetic-unrelated-key',
   };
-  const dump = () => run('bash', [path.join(launchers, 'harness.sh'), 'config'], {
-    env, timeout: 15000, maxBuffer: 2 * 1024 * 1024,
+  const dump = (extraEnv = {}) => run('bash', [path.join(launchers, 'harness.sh'), 'config'], {
+    env: { ...env, ...extraEnv }, timeout: 15000, maxBuffer: 2 * 1024 * 1024,
   });
   let listing = [model];
   const requests = [];
@@ -200,6 +200,7 @@ if (args[1] === 'web') {
   }
   assert.equal(requests.length, 2, 'No inference request during discovery');
   listing = [model];
+  await dump({ BASALT_IDLE_BRIDGE: '1' });
   const proof = path.join(lab, 'output-continuation.proof');
   await run(process.execPath, [path.join(__dirname, 'fixtures/output-continuation.mjs'), runtime, releaseRuntime,
     path.join(lab, 'basalt.patch.yml'), proof], {

@@ -18,6 +18,11 @@ const { ctx, shutdown } = await runProfile({
 });
 let exitCode = 1;
 try {
+  // Use the generated idle overlay with the real web composition. This child
+  // leaves bridge attachment off and exercises the physical gateway below.
+  const activity = ctx.get('basaltIdleActivity');
+  assert.ok(activity, 'The idle observer must start in the stock web profile');
+  assert.equal((await activity.read(AbortSignal.timeout(5000))).busy, false);
   assert.equal(await realpath(ctx.get('profileContext').installAnchor),
     await realpath(sdk.resolve('@deepseek-ai/dsh/package.json')));
   const client = ctx.clientModules.graph().entries.find(entry => entry.id === '@stratadashseek/output-continuation');

@@ -88,12 +88,14 @@ test('work during drain reopens admission; ambiguous stop stays latched with the
 
 test('passive cold inbox, parked live work, global tools and unowned jobs keep the lab awake', async () => {
   const cold = { id: 'cold', createdAt: 1, cwd: '/lab' }, live = { id: 'live', createdAt: 2, cwd: '/lab' };
-  let at = -1, pending = 0, pty = false, jobs = [], coldReads = 0;
+  let at = -1, pending = 0, rootPty, presetPty, webPtys = [], jobs = [], coldReads = 0;
   const agent = { id: live.id, status: 'idle', phase: { kind: 'idle' }, inbox: { nextTurn: [], nextStep: [] } };
   const handlers = new Map();
   const ctx = {
     on: (key, fn) => handlers.set(key, fn), agents: { list: () => [agent] },
-    terminals: { hasOwnerActivity: () => pty },
+    get(key) { assert.equal(key, 'terminals'); return rootPty; },
+    agentPresets: { serviceFor(owner, key) { assert.equal(owner, agent); assert.equal(key, 'terminals'); return presetPty; } },
+    terminalController: { list(id) { return id === cold.id ? webPtys : []; } },
     jobs: { events: { subscribe(filter) { assert.deepEqual(filter, { owners: 'all' }); } }, list: () => jobs },
     sessionQuery: { listSessions: async () => [cold, live].map(header => ({ header })),
       async readSession(id) {
@@ -124,7 +126,11 @@ test('passive cold inbox, parked live work, global tools and unowned jobs keep t
   agent.phase.kind = 'maintenance'; assert.equal((await read()).busy, true); agent.phase.kind = 'idle';
   agent.inbox.nextStep.push({}); assert.equal((await read()).busy, true); agent.inbox.nextStep.pop();
   jobs = [{ id: 'job', status: 'stopping' }]; assert.equal((await read()).busy, true); jobs = [];
-  pty = true; assert.equal((await read()).busy, true); pty = false;
+  webPtys = [{ state: 'running' }]; assert.equal((await read()).busy, true);
+  webPtys = [{ state: 'exited' }, { state: 'failed' }]; assert.equal((await read()).busy, false);
+  webPtys = [{ state: 'unknown' }]; await assert.rejects(read, /Unverified web terminal state/); webPtys = [];
+  rootPty = { hasOwnerActivity: owner => owner === agent }; assert.equal((await read()).busy, true);
+  presetPty = rootPty; rootPty = undefined; assert.equal((await read()).busy, true); presetPty = undefined;
   let release;
   const tool = handlers.get('tools/execute')({}, () => new Promise(resolve => { release = resolve; }));
   assert.equal((await read()).busy, true); release(); await tool;

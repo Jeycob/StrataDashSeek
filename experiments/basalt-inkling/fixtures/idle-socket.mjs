@@ -21,16 +21,17 @@ export async function verifyIdleSocket(ctx, sdk, sessionId) {
     const resolve = outstanding.get(frame.streamId);
     if (resolve) { outstanding.delete(frame.streamId); resolve(frame); }
   });
-  async function follow(activate) {
+  function openStream(endpoint, args) {
     const streamId = randomUUID();
     const reply = new Promise(resolve => outstanding.set(streamId, resolve));
-    ws.send(JSON.stringify({ type: 'open', streamId, endpoint: 'session/follow',
-      payload: { args: { request: { address: { kind: 'session', sessionId }, activate, maxMessages: 1 } } } }));
+    ws.send(JSON.stringify({ type: 'open', streamId, endpoint, payload: { args } }));
     return reply;
   }
+  const follow = activate => openStream('session/follow', { request: { address: { kind: 'session', sessionId }, activate, maxMessages: 1 } });
   try {
     await once(ws, 'open', { signal: AbortSignal.timeout(5000) });
     assert.equal((await follow(false)).type, 'item', 'first passive snapshot');
+    assert.equal((await openStream('terminal/watch', { sessionId })).type, 'item', 'passive terminal roster');
     assert.equal(gate.close(), true, 'passive stream may stay connected');
     assert.equal((await follow(true)).type, 'error', 'existing socket cannot submit activating open during drain');
     gate.reopen();

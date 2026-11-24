@@ -1,9 +1,9 @@
 // The rc.2 transport calls dispatchRpc/openWireStream dynamically for every frame,
 // including frames arriving on sockets which predate the drain.
 const reads = new Set(['session/list', 'session/state', 'session/projections', 'session/page',
-  'session/modelCatalog', 'workspace/list']);
+  'session/modelCatalog', 'workspace/list', 'terminal/list']);
 const streams = new Set(['session/follow', 'session/control', 'session/observeEvent', 'session/observeState',
-  'session/observeProjections', '$events']);
+  'session/observeProjections', 'terminal/watch', '$events']);
 
 export function passiveHttp(method, url) {
   const pathname = (url ?? '').split('?', 1)[0];
