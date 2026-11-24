@@ -1,16 +1,59 @@
 import copy
 import importlib.util
 import json
+import stat
 import tempfile
 import unittest
 import uuid
 from contextlib import ExitStack
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("supervisor", Path(__file__).with_name("idle-supervisor-host.py"))
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
+
+
+class SupervisorAttestation(unittest.TestCase):
+    account = SimpleNamespace(pw_uid=1011, pw_gid=1012)
+
+    def test_service_proof_is_bound_to_role_owner_and_both_start_tick_reads(self):
+        for service in ('native', 'engine'):
+            with self.subTest(service=service), ExitStack() as stack:
+                proc = SimpleNamespace(st_mode=stat.S_IFDIR | 0o555, st_uid=self.account.pw_uid)
+                stack.enter_context(patch.object(mod.os, 'stat', return_value=proc))
+                denied = stack.enter_context(patch.object(mod.os, 'readlink', side_effect=PermissionError))
+                ticks = stack.enter_context(patch.object(mod, 'procstat', return_value=('S', '290')))
+                attest = stack.enter_context(patch.object(mod._bridge, 'attest_listener', return_value=True))
+                mod.verify_listener(service, 99, '290', self.account)
+                attest.assert_called_once_with(service, 99, '290', 1011, 1012)
+                denied.assert_not_called()
+                attest.return_value = False
+                with self.assertRaises(ValueError):
+                    mod.verify_listener(service, 99, '290', self.account)
+                attest.return_value = True
+                ticks.side_effect = [('S', '290'), ('S', '291')]
+                with self.assertRaises(ValueError):
+                    mod.verify_listener(service, 99, '290', self.account)
+
+    def test_model_readback_rechecks_both_processes_and_fails_if_the_last_listener_changed(self):
+        native = {'pid': 48, 'startTicks': '220', 'frozen': False, 'lease': None}
+        engine = {'pid': 49, 'startTicks': '240', 'drained': False, 'lease': None}
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(mod, 'enabled', return_value=True))
+            stack.enter_context(patch.object(mod, 'incarnation', return_value='fixed'))
+            stack.enter_context(patch.object(mod, 'control', side_effect=[native, engine]))
+            stack.enter_context(patch.object(mod.pwd, 'getpwnam', return_value=self.account))
+            conn = stack.enter_context(patch.object(mod.http.client, 'HTTPConnection')).return_value
+            response = conn.getresponse.return_value
+            response.status = 200
+            response.read.return_value = b'{"data":[{"id":"inkling-2-mini","status":{"value":"loaded"}}]}'
+            attest = stack.enter_context(patch.object(mod, 'verify_listener', side_effect=[None, ValueError('changed')]))
+            with self.assertRaises(ValueError):
+                mod.snapshot()
+            self.assertEqual([c.args for c in attest.call_args_list],
+                             [('native', 48, '220', self.account), ('engine', 49, '240', self.account)])
 
 
 class StopProtocol(unittest.TestCase):

@@ -2,6 +2,7 @@
 import fcntl
 import hashlib
 import http.client
+import importlib.util
 import json
 import os
 import pwd
@@ -23,8 +24,13 @@ BASE = Path('/workspace/homeai-basalt')
 ENGINE = BASE / 'state/engine/basalt-v0.5.7-linux-x64'
 NATIVE = Path('/run/basalt-lab-control/native-idle.sock')
 GATE = Path('/run/basalt-pairing/idle-engine.sock')
-NODE = '/opt/basalt-node-v24.22.3/bin/node'
 CLI = str(BASE / 'state/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js')
+
+# The installed bridge is a root-owned sibling. Python isolated mode omits its
+# directory from sys.path; load the shared, role-limited proof by exact path.
+_spec = importlib.util.spec_from_file_location('basalt_native_idle_bridge', Path(__file__).with_name('native-idle-bridge.py'))
+_bridge = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_bridge)
 
 
 def need(condition):
@@ -68,26 +74,19 @@ def incarnation():
     return str(uuid.UUID(Path('/proc/sys/kernel/random/boot_id').read_text().strip())) + '_' + procstat(1)[1]
 
 
-def listener(pid, port):
-    proc = Path('/proc', str(pid))
-    address = '0100007F:' + format(port, '04X')
-    inodes = {row[9] for line in (proc / 'net/tcp').read_text().splitlines()[1:]
-              if (row := line.split())[1] == address and row[3] == '0A'}
-    for fd in (proc / 'fd').iterdir():
-        try:
-            if os.readlink(fd) in {'socket:[' + inode + ']' for inode in inodes}:
-                return True
-        except FileNotFoundError:
-            continue
-    return False
+def verify_listener(service, pid, ticks, account):
+    need(service in ('native','engine') and type(pid) is int and pid > 1)
+    identity = os.stat(f'/proc/{pid}')
+    need(stat.S_ISDIR(identity.st_mode) and identity.st_uid == account.pw_uid and procstat(pid)[1] == ticks)
+    need(_bridge.attest_listener(service, pid, ticks, account.pw_uid, account.pw_gid))
+    need(procstat(pid)[1] == ticks)
 
 
-def verify_engine(pid, uid):
+def verify_engine(pid, ticks, account):
     proc = Path('/proc', str(pid))
-    need(proc.stat().st_uid == uid and listener(pid, 8080))
+    verify_listener('engine', pid, ticks, account)
     args = (proc / 'cmdline').read_bytes().decode().rstrip('\0').split('\0')
-    need(os.readlink(proc / 'exe') == os.path.realpath(ENGINE / '.venv/bin/python') and
-         args[:5] == [str(ENGINE / '.venv/bin/python'), '-I', '-B', '-X', 'pycache_prefix=/dev/null'])
+    need(args[:5] == [str(ENGINE / '.venv/bin/python'), '-I', '-B', '-X', 'pycache_prefix=/dev/null'])
     script = Path(args[5]).resolve(strict=True)
     releases = BASE / 'releases'
     rel = script.relative_to(releases).parts
@@ -103,10 +102,11 @@ def verify_engine(pid, uid):
 
 
 def control(which, req):
+    need(which in ('native','engine'))
     is_engine = which == 'engine'
     endpoint = GATE if is_engine else NATIVE
-    lab_uid = pwd.getpwnam('basaltlab').pw_uid
-    uid = lab_uid if is_engine else 0
+    account = pwd.getpwnam('basaltlab')
+    uid = account.pw_uid if is_engine else 0
     directory(endpoint.parent, uid)
     s = endpoint.lstat()
     need(stat.S_ISSOCK(s.st_mode) and s.st_uid == uid and stat.S_IMODE(s.st_mode) == 0o600)
@@ -117,7 +117,7 @@ def control(which, req):
         need(peer == uid)
         ticks = procstat(pid)[1]
         if is_engine:
-            verify_engine(pid, uid)
+            verify_engine(pid, ticks, account)
         else:
             argv = Path('/proc',str(pid),'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
             need(os.readlink(f'/proc/{pid}/exe') == os.path.realpath('/usr/bin/python3') and
@@ -134,9 +134,8 @@ def control(which, req):
             value.update(pid=pid, startTicks=ticks)
         else:
             who = value['pid']
-            need(type(who) is int and who > 1 and value['bootId'] == incarnation().split('_')[0] and
-                 procstat(who)[1] == value['startTicks'] and stat.S_ISDIR(os.stat(f'/proc/{who}').st_mode) and
-                 os.stat(f'/proc/{who}').st_uid == lab_uid and os.readlink(f'/proc/{who}/exe') == os.path.realpath(NODE) and listener(who,8787))
+            need(value['bootId'] == incarnation().split('_')[0])
+            verify_listener('native', who, value['startTicks'], account)
             argv = Path('/proc',str(who),'cmdline').read_bytes().rstrip(b'\0').split(b'\0')
             need(any(argv[i:i+2] == [os.fsencode(CLI), b'web'] for i in range(len(argv)-1)))
             need(type(value['busy']) is bool and type(value['frozen']) is bool and (procstat(who)[0] == 'T') == value['frozen'])
@@ -160,8 +159,10 @@ def snapshot(lease=None):
         need(len(models) == 1 and models[0]['id'] == 'inkling-2-mini' and models[0]['status']['value'] == 'loaded')
     finally:
         conn.close()
-    for row, port in [(native,8787),(engine,8080)]:
-        need(procstat(row['pid'])[1] == row['startTicks'] and listener(row['pid'], port))
+    account = pwd.getpwnam('basaltlab')
+    for name, row in [('native',native),('engine',engine)]:
+        verify_listener(name, row['pid'], row['startTicks'], account)
+    need(incarnation() == host)
     return {'host':host, 'native':native, 'engine':engine}
 
 

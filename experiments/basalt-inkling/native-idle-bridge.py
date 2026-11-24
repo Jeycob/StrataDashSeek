@@ -10,6 +10,8 @@ import signal
 import socket
 import stat
 import struct
+import subprocess
+import sys
 import uuid
 
 CONTROL = Path('/run/basalt-lab-control')
@@ -19,6 +21,10 @@ BOOT = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
 LIMIT = 1024
 NODE = '/opt/basalt-node-v24.22.3/bin/node'
 CLI = '/workspace/homeai-basalt/state/runtime/node_modules/@deepseek-ai/dsh/lib/bin.js'
+LISTENERS = {
+    'native': (NODE, 8787),
+    'engine': ('/workspace/homeai-basalt/state/engine/basalt-v0.5.7-linux-x64/.venv/bin/python', 8080),
+}
 
 
 class Declined(Exception):
@@ -47,20 +53,48 @@ def init_ticks():
     return process_stat(Path('/proc/1/stat'))[1]
 
 
-def listener(pid):
-    inodes = set()
-    proc = Path('/proc') / str(pid)
+def owned_listener(service, pid, ticks):
+    """The unprivileged child only inspects public process and socket metadata."""
+    uid, gid = os.geteuid(), os.getegid()
+    require(uid > 0 and gid > 0 and os.getresuid() == (uid,) * 3 and os.getresgid() == (gid,) * 3 and not os.getgroups())
+    require(pid > 1)
+    proc = Path('/proc', str(pid))
+    exe, port = LISTENERS[service]
+    require(proc.stat().st_uid == uid and process_stat(proc / 'stat')[1] == ticks)
+    require(os.readlink(proc / 'exe') == os.path.realpath(exe, strict=True))
+    require((proc / 'ns/net').samefile('/proc/self/ns/net'))
+    address = f'0100007F:{port:04X}'
+    inodes = []
     for line in (proc / 'net/tcp').read_text().splitlines()[1:]:
         row = line.split()
-        if row[1] == '0100007F:2253' and row[3] == '0A':
-            inodes.add('socket:[' + row[9] + ']')
+        if row[1] == address and row[3] == '0A':
+            inodes.append(int(row[9]))
+    require(len(inodes) == 1 and inodes[0] > 0)
     for entry in (proc / 'fd').iterdir():
         try:
-            if os.readlink(entry) in inodes:
-                return True
+            metadata = entry.stat()
         except FileNotFoundError:
             continue
+        if stat.S_ISSOCK(metadata.st_mode) and metadata.st_ino == inodes[0]:
+            return process_stat(proc / 'stat')[1] == ticks
     return False
+
+
+def attest_listener(service, pid, start_ticks, uid, gid):
+    if service not in LISTENERS or type(pid) is not int or pid <= 1 or uid <= 0 or gid <= 0:
+        return False
+    ticks = str(start_ticks)
+    if not ticks.isascii() or not ticks.isdecimal():
+        return False
+    try:
+        proof = subprocess.run(['/usr/bin/python3', '-I', '-B', '-S', os.path.abspath(__file__),
+                                '--attest-listener', service, str(pid), ticks],
+                               user=uid, group=gid, extra_groups=(), close_fds=True, cwd='/', env={},
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=1.5)
+        return proof.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
 
 
 def all_stopped(pid):
@@ -96,8 +130,8 @@ async def read(reader, timeout=5):
 
 
 class Broker:
-    def __init__(self, uid):
-        self.uid = uid
+    def __init__(self, uid, gid):
+        self.uid, self.gid = uid, gid
         self.lock = asyncio.Lock()
         self.native = None
         try:
@@ -111,10 +145,12 @@ class Broker:
     def check_identity(self, record):
         pid = record['pid']
         require(record['bootId'] == BOOT and record.get('initTicks') == init_ticks() and os.stat(f'/proc/{pid}').st_uid == self.uid)
-        require(process_stat(Path(f'/proc/{pid}/stat'))[1] == record['startTicks'] and listener(pid))
-        require(os.readlink(f'/proc/{pid}/exe') == os.path.realpath(NODE))
+        ticks = record['startTicks']
+        require(process_stat(Path(f'/proc/{pid}/stat'))[1] == ticks)
         argv = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
         require(any(argv[i:i + 2] == [os.fsencode(CLI), b'web'] for i in range(len(argv) - 1)))
+        require(attest_listener('native', pid, ticks, self.uid, self.gid))
+        require(process_stat(Path(f'/proc/{pid}/stat'))[1] == ticks)
 
     def connect(self, reader, writer, hello):
         pid, uid, _ = peer(writer)
@@ -242,7 +278,7 @@ async def serve():
     user = pwd.getpwnam('basaltlab')
     lock = (CONTROL / 'native-idle-bridge.lock').open('a')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    broker = Broker(user.pw_uid)
+    broker = Broker(user.pw_uid, user.pw_gid)
 
     async def native(reader, writer):
         try:
@@ -288,5 +324,17 @@ async def serve():
         await asyncio.gather(native_server.serve_forever(), root_server.serve_forever())
 
 
+def main():
+    if len(sys.argv) == 1:
+        asyncio.run(serve())
+        return 0
+    if len(sys.argv) == 5 and sys.argv[1] == '--attest-listener':
+        try:
+            return 0 if owned_listener(sys.argv[2], int(sys.argv[3]), sys.argv[4]) else 1
+        except (OSError, ValueError, KeyError, IndexError):
+            pass
+    return 1
+
+
 if __name__ == '__main__':
-    asyncio.run(serve())
+    sys.exit(main())
