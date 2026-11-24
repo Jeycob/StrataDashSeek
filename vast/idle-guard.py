@@ -15,13 +15,22 @@ def idle_elapsed_seconds(now, last, lifecycle, applications):
     return now - max(last, last_turn, last_app)
 
 
-def decide(now, last, lifecycle, model, jobs, lease_until, idle_seconds=DEFAULT_IDLE_SECONDS, applications=None):
+def fifo_has_work(queue):
+    if queue is None:
+        return False  # Older profiles without the whole-task scheduler.
+    return (not isinstance(queue, dict) or 'owner' not in queue or queue['owner'] is not None
+            or any(not isinstance(queue.get(key), list) or queue[key] for key in ('active', 'waiting')))
+
+
+def decide(now, last, lifecycle, model, jobs, lease_until, idle_seconds=DEFAULT_IDLE_SECONDS, applications=None, queue=None):
     if now < lease_until:
         return False, 'maintenance lease'
     if now - lifecycle.get('at', 0) / 1000 > 20:
         return False, 'lifecycle heartbeat unavailable'
     if lifecycle.get('active', 0):
         return False, 'agent turn active'
+    if fifo_has_work(queue):
+        return False, 'turn queue active or unknown'
     if model.get('busy') is not False or model.get('queued', 0):
         return False, 'model busy or unknown'
 
@@ -108,6 +117,109 @@ def application_call(route, payload=None, timeout=110):
 
 def audit(event, **fields):
     print(json.dumps({'at':datetime.datetime.now(datetime.timezone.utc).isoformat(),'event':event,**fields}),flush=True)
+
+
+def apps_sleep_mode(now, settings, applications, service_pid):
+    if not isinstance(settings, dict) or type(settings.get('enabled')) is not bool:
+        return None
+    if not isinstance(applications, dict) or type(service_pid) is not int or service_pid <= 1:
+        return None
+    at = applications.get('at')
+    if (type(at) is not int or not 0 <= now * 1000 - at <= 20000
+            or applications.get('servicePid') != service_pid
+            or applications.get('enabled') is not settings['enabled']
+            or type(applications.get('draining')) is not bool):
+        return None
+    if settings['enabled']:
+        return 'drain'
+    if (any(type(applications.get(key)) is not int or applications[key] != 0
+            for key in ('active', 'previewRequests'))
+            or type(applications.get('holdUntil')) is not int
+            or not 0 <= applications['holdUntil'] <= now * 1000
+            or type(applications.get('lastActivity')) is not int
+            or not 0 <= applications['lastActivity'] <= now * 1000
+            or applications['draining'] or 'worker' not in applications):
+        return None
+    vm = settings.get('vm', {})
+    if not isinstance(vm, dict) or type(vm.get('enabled', False)) is not bool:
+        return None
+    worker = applications['worker']
+    if not vm.get('enabled', False):
+        return 'off' if worker is None else None
+    if (isinstance(worker, dict) and worker.get('phase') in ('disabled', 'asleep')
+            and 'pid' in worker and worker['pid'] is None
+            and 'error' in worker and worker['error'] is None):
+        return 'off'
+    return None
+
+
+def read_idle_inputs(cfg):
+    settings = load(ROOT/'apps-config.json')
+    applications = RUNTIME.read_agent('applications/activity.json')
+    roles = RUNTIME.read_private('services.json', {}).get('names', {})
+    # A disabled controller never exempts an old guest from live process checks.
+    jobs = jobs_running(cfg.get('ignoreDetachedPreviews', False), applications if settings.get('enabled') is True else None)
+    with urllib.request.urlopen('http://127.0.0.1:8080/status', timeout=4) as response:
+        model = json.load(response)
+    life = RUNTIME.read_agent('lifecycle.json')
+    queue = RUNTIME.read_agent('turn-queue.json')
+    lease = (RUNTIME.read_agent('maintenance.json', 4096) or {}).get('until', 0)
+    now = time.time()
+    mode = apps_sleep_mode(now, settings, applications, roles.get('applications'))
+    authority = (mode, settings, roles.get('applications')) if mode and load(ROOT/'root-secrets/guard.json') == cfg else None
+    inputs = dict(now=now, lifecycle=life, model=model, jobs=jobs, lease_until=lease,
+                  idle_seconds=cfg.get('idleSeconds', DEFAULT_IDLE_SECONDS), applications=applications, queue=queue)
+    return authority, inputs
+
+
+def still_idle(authority, last, read_inputs, owns_drain=False):
+    observed, inputs = read_inputs()
+    if observed != authority or (inputs['applications']['draining'] and not owns_drain):
+        return None
+    return inputs if decide(last=last, **inputs)[0] else None
+
+
+def stop_if_idle(authority, last, read_inputs, call_apps, request_stop):
+    if authority is None or not still_idle(authority, last, read_inputs):
+        return False
+    token = None
+    try:
+        if authority[0] == 'drain':
+            prepared = call_apps('prepare-sleep')
+            if prepared.get('ready') is not True or not prepared.get('token'):
+                raise RuntimeError('Application sleep was not confirmed')
+            token = prepared['token']
+        final = still_idle(authority, last, read_inputs, owns_drain=token is not None)
+        if token and final:
+            if call_apps('confirm-sleep', {'token':token}, 10).get('ready') is not True:
+                raise RuntimeError('Application sleep token changed')
+            final = still_idle(authority, last, read_inputs, owns_drain=True)
+        if not final:
+            audit('sleep_cancelled', reason='runtime activity or application authority changed')
+            return False
+        request_stop(token is not None, max(0, int(idle_elapsed_seconds(
+            final['now'], last, final['lifecycle'], final['applications']))))
+        token = None
+        return True
+    finally:
+        if token:
+            try:
+                call_apps('cancel-sleep', {'token':token}, 10)
+            except Exception:
+                pass
+
+
+def stop_vast_instance(cfg, docker_saved, idle_seconds):
+    key = pathlib.Path(cfg.get('vastApiKeyFile', str(ROOT/'root-secrets/vast-api.key'))).read_text().strip()
+    req = urllib.request.Request('https://console.vast.ai/api/v0/instances/'+str(cfg['instanceId'])+'/',
+        data=b'{"state":"stopped"}', headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'}, method='PUT')
+    with urllib.request.urlopen(req,timeout=15) as response:
+        result = json.load(response)
+        if not 200 <= response.status < 300 or result.get('success') is not True:
+            raise RuntimeError('Stop rejected')
+    audit('instance_stop_requested', instanceId=cfg['instanceId'], idleSeconds=idle_seconds, dockerSaved=docker_saved)
+
+
 def main():
     global RUNTIME
     RUNTIME=RuntimePaths(ROOT)
@@ -122,67 +234,28 @@ def main():
             try:preview_settings.tick()
             except Exception as e:audit('preview_settings_error',error=type(e).__name__)
             cfg=load(ROOT/'root-secrets/guard.json')
-            idle_timeout = cfg.get('idleSeconds', DEFAULT_IDLE_SECONDS)
-            ignore_previews = cfg.get('ignoreDetachedPreviews', False)
-            now=time.time();life=RUNTIME.read_agent('lifecycle.json')
-            with urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=4) as r:model=json.load(r)
-            app_path=ROOT/'state/applications/activity.json'
-            applications=RUNTIME.read_agent('applications/activity.json')
-            app_cfg=ROOT/'apps-config.json'
-            if app_cfg.exists() and load(app_cfg).get('enabled') and applications is None:raise RuntimeError('Enabled application service has no heartbeat')
-            jobs = jobs_running(ignore_previews, applications)
-            lease = (RUNTIME.read_agent('maintenance.json', 4096) or {}).get('until', 0)
+            authority, inputs = read_idle_inputs(cfg)
+            now, life, model, applications = (inputs[key] for key in ('now', 'lifecycle', 'model', 'applications'))
             if (life.get('active') or model.get('busy') or model.get('queued')
-                    or jobs or (applications and applications.get('active'))):
+                    or inputs['jobs'] or fifo_has_work(inputs['queue'])
+                    or (applications and applications.get('active'))):
                 last = now
-            stop, reason = decide(now, last, life, model, jobs, lease, idle_timeout, applications)
+            stop, reason = decide(last=last, **inputs)
+            if stop and (authority is None or applications['draining']):
+                stop, reason = False, 'application sleep state unavailable or draining'
             state = {
                 'at': now,
                 'canStop': stop,
                 'reason': reason,
-                'idleTimeoutSeconds': idle_timeout,
+                'idleTimeoutSeconds': inputs['idle_seconds'],
                 'idleSeconds': max(0, int(idle_elapsed_seconds(now, last, life, applications))),
             }
             RUNTIME.publish('idle-status.json',state)
             if stop and cfg.get('enabled',False):
-                # Second read prevents stopping across an observed new turn.
                 time.sleep(2)
-                life2=RUNTIME.read_agent('lifecycle.json')
-                with urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=4) as r:model2=json.load(r)
-                apps2=RUNTIME.read_agent('applications/activity.json')
-                stop, _ = decide(
-                    time.time(), last, life2, model2, jobs_running(ignore_previews, apps2),
-                    lease, idle_timeout, apps2,
-                )
-                if not stop:
-                    continue
-                token=None
-                try:
-                    if apps2 is not None:
-                        prepared=application_call('prepare-sleep')
-                        if prepared.get('ready') is not True or not prepared.get('token'):raise RuntimeError('Application sleep was not confirmed')
-                        token=prepared['token']
-                    life3=RUNTIME.read_agent('lifecycle.json');apps3=RUNTIME.read_agent('applications/activity.json')
-                    with urllib.request.urlopen('http://127.0.0.1:8080/status',timeout=4) as r:model3=json.load(r)
-                    lease3=(RUNTIME.read_agent('maintenance.json',4096) or {}).get('until',0)
-                    stop, _ = decide(
-                        time.time(), last, life3, model3, jobs_running(ignore_previews, apps3),
-                        lease3, idle_timeout, apps3,
-                    )
-                    if not stop:
-                        audit('sleep_cancelled',reason='new activity after Docker save');continue
-                    if token and application_call('confirm-sleep',{'token':token},10).get('ready') is not True:raise RuntimeError('Application sleep token changed')
-                    key=pathlib.Path(cfg.get('vastApiKeyFile',str(ROOT/'root-secrets/vast-api.key'))).read_text().strip()
-                    req=urllib.request.Request('https://console.vast.ai/api/v0/instances/'+str(cfg['instanceId'])+'/',data=b'{"state":"stopped"}',headers={'Authorization':'Bearer '+key,'Content-Type':'application/json'},method='PUT')
-                    with urllib.request.urlopen(req,timeout=15) as r:
-                        result=json.load(r)
-                        if not 200<=r.status<300 or result.get('success') is not True:raise RuntimeError('Stop rejected')
-                    audit('instance_stop_requested',instanceId=cfg['instanceId'],idleSeconds=state['idleSeconds'],dockerSaved=token is not None)
-                    token=None;time.sleep(30)
-                finally:
-                    if token:
-                        try:application_call('cancel-sleep',{'token':token},10)
-                        except Exception:pass
+                if stop_if_idle(authority, last, lambda: read_idle_inputs(cfg), application_call,
+                                lambda saved, idle: stop_vast_instance(cfg, saved, idle)):
+                    time.sleep(30)
         except Exception as error:audit('idle_guard_holding',error=type(error).__name__)
         time.sleep(5)
 if __name__=='__main__':main()

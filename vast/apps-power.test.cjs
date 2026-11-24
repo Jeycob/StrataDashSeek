@@ -6,6 +6,10 @@ const {DockerVM,bootstrap}=require('./apps-vm.cjs');
 const {fixture:ownedFixture}=require('./fixtures/vm-ownership.cjs');
 const {LABEL}=require('./apps-engine.cjs');
 
+test('Apps rejects a truthy non-boolean setting before it can report an OFF heartbeat',()=>{
+ assert.throws(()=>new AppsManager({enabled:'false'},null,null,hostExecutionBinding()),{code:'APPS_ENABLED_INVALID'});
+});
+
 test('offline user stop durably cancels only its owned published resume intent without waking',async t=>{
  const{manager:m,worker:w,engine:e}=await fixture(t),p=await m.register('demo'),other='b'.repeat(64);Object.assign(m.project(p.id),{containerId:id,releaseId:'c'.repeat(16)});m.save();
  w.saved={initialized:true,resumeIds:[id,other],containers:[{Id:id,State:'running',Labels:{[LABEL]:'managed',[LABEL+'.project']:p.id}},{Id:other,State:'running',Labels:{}}]};

@@ -17,6 +17,7 @@ class AppsManager {
  constructor(cfg={},engine,worker,executionBinding){
   Object.defineProperty(this,'execution',{value:bindAppsExecution(executionBinding),enumerable:true});
   this.cfg={enabled:false,workspaceRoot:'/data/harness/workspaces',stateDir:'/data/harness/state/applications',applicationHost:'127.0.0.1',checkHost:'127.0.0.1',publishAddress:'127.0.0.1',firstPort:18080,portCount:8,minFreeBytes:2*1024**3,...cfg};
+  if(typeof this.cfg.enabled!=='boolean')throw Object.assign(Error('Apps enabled must be a boolean'),{code:'APPS_ENABLED_INVALID'});
   for(const key of ['applicationHost','checkHost','publishAddress'])if(!/^[a-zA-Z0-9.:-]+$/.test(this.cfg[key]))throw Error('Invalid application address');
   if(!Number.isInteger(this.cfg.firstPort)||this.cfg.firstPort<1024||!Number.isInteger(this.cfg.portCount)||this.cfg.portCount<1||this.cfg.portCount>32||this.cfg.firstPort+this.cfg.portCount>65536)throw Error('Invalid application port pool');
   this.engine=engine||new DockerEngine(cfg.docker);this.busy=null;this.lastActivity=Date.now();this.previewRequests=0;this.drain=null;this.ticking=false;
