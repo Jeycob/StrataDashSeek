@@ -39,7 +39,11 @@ try {
   agent.followup({ role: 'user', id: 'single-input', source: { kind: 'user' },
     content: [{ type: 'text', text: 'Finish the synthetic lab fixture.' }] });
   await agent.whenIdle();
-  assert.equal(events.filter(e => e.type === 'user/message').length, 1);
+  const humanMessages = events.filter(e => e.type === 'user/message' && e.data.source?.kind === 'user');
+  assert.deepEqual(humanMessages.map(e => e.data.id), ['single-input']);
+  const queued = events.filter(e => e.type === 'agent/inbox/spliced').flatMap(e => e.data.inserted);
+  assert.equal(queued.some(message => message.source?.kind === 'homeai-output-continuation'), false);
+  assert.equal(events.filter(e => e.type === 'turn/start').length, 1);
   assert.deepEqual(events.filter(e => e.type === 'turn/end').map(e => e.data.reason.kind), ['completed']);
   const output = events.filter(e => e.type === 'assistant/message')
     .flatMap(e => e.data.message.content).filter(block => block.type === 'text').map(block => block.text);

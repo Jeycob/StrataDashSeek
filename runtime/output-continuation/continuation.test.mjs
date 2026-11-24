@@ -47,8 +47,8 @@ async function fixture(t, script, { queued = false, gate } = {}) {
   ctx.tools.register({
     name: 'fixture_change', description: 'Inert local workspace fixture',
     parameters: { type: 'object', properties: { action: { type: 'string' } }, required: ['action'], additionalProperties: false },
-    output: { schema: { type: 'object' }, render: (_context, value) => [{ type: 'text', text: value.status }] },
-    execute({ arguments: { action } }) {
+    output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: value.status }] },
+    execute({ action }) {
       operations.push(action);
       if (action === 'fix') fixed = true;
       return { status: action === 'test' && !fixed ? 'test is red' : action === 'test' ? 'test is green' : 'committed' };
@@ -103,7 +103,12 @@ for (const provider of providers) test('length preserves the answer, usage, and 
 test('recovery drops replayed call IDs but permits a fresh verification after a committed change', { timeout: 12000 }, async t => {
   const f = await fixture(t, function* (request, step) {
     if (step === 1) yield call('initial-test', 'test');
-    if (step === 2) { yield text('The test is red.'); yield finish('max-tokens'); return; }
+    if (step === 2) {
+      assert(request.messages.some(message => message.role === 'tool' && message.content.some(block => block.text === 'test is red')));
+      yield text('The test is red.');
+      yield finish('max-tokens');
+      return;
+    }
     if (step === 3) {
       assert(hasRecovery(request));
       yield call('initial-test', 'test');
@@ -144,7 +149,9 @@ test('thinking-only truncations are bounded and a thinking-only stop stays incom
 
 test('productive steps reset the stall counter and the entire turn still has a ceiling', { timeout: 12000 }, async t => {
   const f = await fixture(t, function* (_request, step) {
-    if (step % 2 === 0) {
+    // One stalled recovery before each tool step must be cleared by that
+    // step. Otherwise the second cycle would reach the consecutive cap.
+    if (step % 3 === 0) {
       yield call('progress-' + step, 'fix');
       yield finish('tool-calls');
     } else {
@@ -155,8 +162,8 @@ test('productive steps reset the stall counter and the entire turn still has a c
   const agent = await f.create('long');
   agent.followup(input);
   await agent.whenIdle();
-  assert.equal(f.requests.length, 17);
-  assert.equal(f.operations.length, 8);
+  assert.equal(f.requests.length, 13);
+  assert.deepEqual(f.operations, ['fix', 'fix', 'fix', 'fix']);
   assert.deepEqual(terminal(f.events, agent.id), ['max-tokens']);
 });
 
