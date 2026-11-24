@@ -1,5 +1,14 @@
 // The SDK accepts JSON patch lists in --patch YAML files. Resolve the same ID that
 // Basalt requires on /v1/chat/completions, before creating a Native session.
+import { access } from 'node:fs/promises';
+
+const continuation = new URL('../../runtime/output-continuation/index.mjs', import.meta.url);
+try {
+  await Promise.all(['index.mjs', 'package.json', 'client.js', '../require.cjs']
+    .map(file => access(new URL(file, continuation))));
+} catch (cause) {
+  throw new Error('The lab release must include runtime/output-continuation and runtime/require.cjs from the same revision as this launcher', { cause });
+}
 const origin = 'http://127.0.0.1:8080/v1';
 const response = await fetch(`${origin}/models`, {
   redirect: 'error',
@@ -60,5 +69,9 @@ const patches = [
   { id: 'workspace-controller', config: { documentsDirectory: process.argv[2] } },
   { id: 'llm-pi-ai', config: { providers: { [provider]: route } } },
   { id: 'agent-default-model', config: { provider, model: model.id, reasoningEffort: 'low' } },
+  { insert: [{
+    id: 'homeai-output-continuation',
+    name: continuation.href,
+  }] },
 ];
 process.stdout.write(JSON.stringify(patches, null, 2) + '\n');

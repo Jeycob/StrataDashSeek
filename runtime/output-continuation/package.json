@@ -1,0 +1,8 @@
+{
+  "name": "@stratadashseek/output-continuation",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {".": "./index.mjs", "./client": "./client.js", "./package.json": "./package.json"},
+  "dsh": {"client": {"platform": "web", "inject": ["@deepseek-ai/dsh-client-ui-chat", "@deepseek-ai/dsh-client-locale"]}}
+}

@@ -39,8 +39,9 @@ function completion(response, index) {
     response.write('data: ' + JSON.stringify(chunk) + '\n\n');
   };
   response.writeHead(200, { 'Content-Type': 'text/event-stream' });
-  send(index === 0 ? { role: 'assistant', tool_calls: [toolCall] } : { role: 'assistant', content: 'Read ink.' }, null);
-  send({}, index === 0 ? 'tool_calls' : 'stop');
+  const output = ['Read ink.', 'Partial fixture.', 'Finished fixture.'];
+  send(index === 0 ? { role: 'assistant', tool_calls: [toolCall] } : { role: 'assistant', content: output[index - 1] }, null);
+  send({}, index === 0 ? 'tool_calls' : index === 2 ? 'length' : 'stop');
   response.end('data: [DONE]\n\n');
 }
 
@@ -49,9 +50,22 @@ test('actual web profile binds only verified Inkling and round-trips a streamed 
   t.after(() => fs.rm(lab, { recursive: true, force: true }));
   const runtime = path.join(lab, 'runtime');
   const sourceRuntime = path.resolve(__dirname, '../../runtime');
+  // Exercise the minimal release archive layout, with the SDK installed separately.
+  const release = path.join(lab, 'extracted lab release');
+  const releaseRuntime = path.join(release, 'runtime');
+  const launchers = path.join(release, 'experiments', 'basalt-inkling');
+  await fs.mkdir(releaseRuntime, { recursive: true });
+  await fs.mkdir(launchers, { recursive: true });
+  for (const file of ['harness.sh', 'profile.mjs']) {
+    await fs.copyFile(path.join(__dirname, file), path.join(launchers, file));
+  }
+  await fs.copyFile(path.join(sourceRuntime, 'require.cjs'), path.join(releaseRuntime, 'require.cjs'));
+  await fs.cp(path.join(sourceRuntime, 'output-continuation'),
+    path.join(releaseRuntime, 'output-continuation'), { recursive: true });
   await fs.mkdir(runtime);
   for (const manifest of ['package.json', 'package-lock.json']) {
     await fs.copyFile(path.join(sourceRuntime, manifest), path.join(runtime, manifest));
+    await fs.copyFile(path.join(sourceRuntime, manifest), path.join(releaseRuntime, manifest));
   }
   await fs.symlink(path.join(sourceRuntime, 'node_modules'), path.join(runtime, 'node_modules'), 'dir');
   const sdk = createRequire(path.join(sourceRuntime, 'package.json'));
@@ -62,7 +76,7 @@ test('actual web profile binds only verified Inkling and round-trips a streamed 
     OPENAI_BASE_URL: 'http://127.0.0.1:1', OPENAI_API_KEY: 'synthetic-unrelated-key',
     DEEPSEEK_API_KEY: 'synthetic-unrelated-key', BASALT_LOOPBACK_KEY: 'synthetic-unrelated-key',
   };
-  const dump = () => run('bash', [path.join(__dirname, 'harness.sh'), 'config'], {
+  const dump = () => run('bash', [path.join(launchers, 'harness.sh'), 'config'], {
     env, timeout: 15000, maxBuffer: 2 * 1024 * 1024,
   });
   let listing = [model];
@@ -107,6 +121,9 @@ test('actual web profile binds only verified Inkling and round-trips a streamed 
   assert.equal(route.baseURL, baseURL);
   assert.equal(route.apiKeyEnv, 'BASALT_LOOPBACK_KEY');
   assert.equal(row('workspace-controller').config.documentsDirectory, path.join(lab, 'projects'));
+  const continuation = row('homeai-output-continuation');
+  assert.equal(continuation.name, pathToFileURL(path.join(releaseRuntime, 'output-continuation', 'index.mjs')).href);
+  assert.notEqual(continuation.disabled, true);
 
   // Capture the final web exec without opening a server or running an agent.
   // Delegate the Node version check and profile generation to the real binary.
@@ -121,7 +138,7 @@ if (args[1] === 'web') {
   process.exit(require('node:child_process').spawnSync(process.execPath, args, { stdio: 'inherit' }).status ?? 1);
 }
 `, { mode: 0o700 });
-  const start = await run('bash', [path.join(__dirname, 'harness.sh')], {
+  const start = await run('bash', [path.join(launchers, 'harness.sh')], {
     env: { ...env, PATH: shim + path.delimiter + env.PATH }, timeout: 15000,
   });
   const handoff = JSON.parse(start.stdout);
@@ -186,4 +203,16 @@ if (args[1] === 'web') {
     await assert.rejects(dump(), error => error.code === 1 && error.stdout === '' && /Basalt|Inkling|inkling/.test(error.stderr));
   }
   assert.equal(requests.length, 2, 'No inference request during discovery');
+  listing = [model];
+  const proof = path.join(lab, 'output-continuation.proof');
+  await run(process.execPath, [path.join(__dirname, 'fixtures/output-continuation.mjs'), runtime, releaseRuntime,
+    path.join(lab, 'basalt.patch.yml'), proof], {
+    cwd: path.join(lab, 'projects/deepseek-harness/default-workspace'), timeout: 35_000,
+    env: { PATH: process.env.PATH, HOME: handoff.HOME, DSH_HOME: handoff.DSH_HOME,
+      BASALT_LOOPBACK_KEY: 'local-only', DSH_TELEMETRY_DISABLED: '1' },
+  });
+  assert.equal(await fs.readFile(proof, 'utf8'), 'same-turn recovery and served web client\n');
+  assert.deepEqual(requests.slice(2).map(row => row.body.model), [modelId, modelId]);
+  await fs.rename(path.join(releaseRuntime, 'output-continuation'), path.join(releaseRuntime, 'removed-plugin'));
+  await assert.rejects(dump(), error => error.code === 1 && /must include runtime\/output-continuation/.test(error.stderr));
 });

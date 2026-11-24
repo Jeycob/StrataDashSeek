@@ -39,6 +39,13 @@ bash experiments/basalt-inkling/harness.sh
 
 Wait for `inkling-2-mini` to be loaded before starting Harness. The launcher checks this ID, support for image input and the context actually served. The profile defaults to low reasoning effort and allows up to 8,192 output tokens per model response. To inspect the composed SDK profile before starting the web app, run `bash experiments/basalt-inkling/harness.sh config`. The lab keeps its Native sessions in a separate home and opens projects under `$BASALT_LAB_HOME/projects`. Remote access uses the SSH tunnel below.
 
+For a transfer from a verified lab commit, the following archive retains the launcher, the SDK dependency lock and the shared output-continuation plugin. Extract it into a fresh directory on the instance and run the same setup and launch commands from that directory. Keep the extracted files in place while Harness runs.
+
+```bash
+git archive --format=tar -o basalt-lab.tar "$LAB_COMMIT" \
+  experiments/basalt-inkling runtime/package.json runtime/package-lock.json runtime/require.cjs runtime/output-continuation
+```
+
 On your computer, add a port forward to the SSH connection shown by Vast. For example, replace the two placeholders with the SSH port and host for the test instance:
 
 ```bash
