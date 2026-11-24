@@ -1,4 +1,4 @@
-name: Read prior task-limit fixture diagnostics
+name: Verify prior output continuation TAP counts
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   artifact:
-    name: Read ${{ matrix.source }} task-limit TAP
+    name: Verify ${{ matrix.source }} output continuation TAP counts
     if: github.ref == 'refs/heads/diagnostics/output-limit-20261124'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -19,10 +19,10 @@ jobs:
       matrix:
         include:
           - source: Main
-            run: '45417289860'
+            run: '45420044268'
             artifact: release-checks-4e0a6e1d3bdffd44703b1a03879a176e6f3f7548
           - source: Basalt
-            run: '45418797929'
+            run: '45417588777'
             artifact: release-checks-fbbfaf0595bcf1164204551601b51dc9b2bae957
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -32,7 +32,7 @@ jobs:
       - name: Verify diagnostic source
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-parse HEAD^)" = c5757beadaa1cd72bb418c437f3d13dc559a324c
+          test "$(git rev-parse HEAD^)" = d7e9293e9e428c694fe527027823803ab9e590a3
           test "$(git diff --name-only HEAD^ HEAD)" = .github/workflows/output-limit-diagnostic.yml
       - name: Download only the named prior release evidence archive
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -42,83 +42,71 @@ jobs:
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/output-limit-archive
           skip-decompress: true
-      - name: Annotate only the selected task-limit TAP log
+      - name: Verify allowlisted TAP counts
         env:
           RUN_LABEL: ${{ matrix.source }}
           SOURCE_RUN: ${{ matrix.run }}
         run: |
-          python3 - "$RUNNER_TEMP/output-limit-archive" > "$RUNNER_TEMP/output-limit-task-budget.tap" <<'PY'
+          python3 - "$RUNNER_TEMP/output-limit-archive" <<'PY'
+          import os
           import pathlib
+          import re
           import sys
           import zipfile
 
-          root = pathlib.Path(sys.argv[1])
-          archives = list(root.iterdir())
-          if len(archives) != 1 or not archives[0].is_file() or archives[0].is_symlink():
-              raise SystemExit("Expected exactly one downloaded archive")
-          selected = "portable/workspace__native-ui__task-budget.test.cjs.log"
+          source = os.environ["RUN_LABEL"]
+          run = os.environ["SOURCE_RUN"]
+          if {"Main": "45420044268", "Basalt": "45417588777"}.get(source) != run:
+              raise SystemExit("Unexpected source run")
+          suites = [
+              ("SDK continuation", "runtime/output-continuation/continuation.test.mjs", 7),
+              ("Chromium continuation", "runtime/output-continuation/continuation.browser.test.cjs", 1),
+          ]
+          if source == "Basalt":
+              suites.append(("Basalt launcher", "experiments/basalt-inkling/launcher.test.cjs", 2))
+
+          fields = ("tests", "pass", "fail", "cancelled", "skipped", "todo")
+          summary = re.compile(rb"^#[ \t]+(tests|pass|fail|cancelled|skipped|todo)[ \t]+([0-9]{1,6})[ \t]*\r?$", re.MULTILINE)
           limit = 1024 * 1024
-          with zipfile.ZipFile(archives[0]) as archive:
-              matches = [entry for entry in archive.infolist() if entry.filename == selected]
-              if len(matches) != 1 or matches[0].file_size > limit:
-                  raise SystemExit("Expected exactly one selected TAP entry under 1 MiB")
-              with archive.open(matches[0]) as stream:
-                  log = stream.read(limit + 1)
-                  if len(log) > limit:
-                      raise SystemExit("Selected TAP entry exceeded 1 MiB")
-                  sys.stdout.buffer.write(log)
+
+          def counts_for(archive, fixture):
+              if archive is None:
+                  return {}
+              member = "portable/" + fixture.replace("/", "__") + ".log"
+              matches = [entry for entry in archive.infolist() if entry.filename == member]
+              if len(matches) != 1 or not 0 < matches[0].file_size <= limit:
+                  return {}
+              try:
+                  with archive.open(matches[0]) as stream:
+                      log = stream.read(limit + 1)
+              except (OSError, RuntimeError, zipfile.BadZipFile):
+                  return {}
+              if len(log) > limit:
+                  return {}
+              pairs = summary.findall(log)
+              counts = {key.decode("ascii"): int(value) for key, value in pairs}
+              return counts if len(pairs) == len(counts) == len(fields) else {}
+
+          def report(archive):
+              success = True
+              for name, fixture, expected in suites:
+                  counts = counts_for(archive, fixture)
+                  valid = counts == {"tests": expected, "pass": expected, "fail": 0, "cancelled": 0, "skipped": 0, "todo": 0}
+                  level = "notice" if valid else "error"
+                  values = ", ".join(field + "=" + str(counts.get(field, "unavailable")) for field in fields)
+                  print(f"::{level} file={fixture},title={source} {run} {name} TAP::{values}")
+                  success = success and valid
+              return success
+
+          root = pathlib.Path(sys.argv[1])
+          try:
+              archives = list(root.iterdir())
+              if len(archives) != 1 or not archives[0].is_file() or archives[0].is_symlink():
+                  raise ValueError
+              archive = zipfile.ZipFile(archives[0])
+          except (OSError, ValueError, zipfile.BadZipFile):
+              report(None)
+              raise SystemExit(1)
+          with archive:
+              raise SystemExit(0 if report(archive) else 1)
           PY
-          node --input-type=module - "$RUNNER_TEMP/output-limit-task-budget.tap" <<'NODE'
-          import { readFileSync } from 'node:fs';
-          import { stripVTControlCharacters } from 'node:util';
-
-          const label = process.env.RUN_LABEL;
-          const run = process.env.SOURCE_RUN;
-          const fixture = 'workspace/native-ui/task-budget.test.cjs';
-          const lines = readFileSync(process.argv[2], 'utf8').split(/\r?\n/);
-          const escapeData = text => text.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A');
-          const escapeTitle = text => escapeData(text).replaceAll(':', '%3A').replaceAll(',', '%2C');
-          function redact(value, limit) {
-            return stripVTControlCharacters(value)
-              .replace(/(?:\b[a-z][a-z\d+.-]*:\/\/|\bwww\.)[^\s"'<>]+/gi, '[redacted URL]')
-              .replace(/\b(?:bearer|basic)\s+[a-z\d._+/=~-]+/gi, '[redacted authorization]')
-              .replace(/\b[a-z\d_-]*(?:authorization|cookie|(?:api|private)[_-]?key|token|secret|password)[a-z\d_-]*\b["']?\s*[:=]\s*["']?[^\s"',;]+/gi, '[redacted field]')
-              .replace(/\b(?:gh[pousr]_|github_pat_|sk-)[a-z\d_-]+/gi, '[redacted credential]')
-              .slice(0, limit);
-          }
-
-          const counts = lines.map(line => line.match(/^\s*#\s+(tests|pass|fail|skipped|cancelled)\s+(\d{1,6})\s*$/))
-            .filter(Boolean).slice(-5).map(match => match[1] + '=' + match[2]);
-          const pass = lines.find(line => /^\s*ok\s+\d+\s+-\s+/.test(line));
-          console.log('::notice file=' + fixture + ',title=' + label + ' prior run ' + run + ' Chromium TAP::'
-            + escapeData((counts.join(', ') || 'TAP count summary missing') + (pass ? '\n' + redact(pass.trim(), 180) : '')));
-
-          const failure = /^\s*not ok\s+\d+\b/;
-          for (const [start, title] of lines.map((line, index) => [index, line]).filter(([, line]) => failure.test(line)).slice(0, 4)) {
-            const details = [];
-            let sourceLine;
-            let valueIndent;
-            for (const line of lines.slice(start + 1, start + 79)) {
-              if (/^\s*(?:\.\.\.|(?:not )?ok\s+\d+\b|# Subtest:)/.test(line) || details.length >= 14) break;
-              const local = line.match(/task-budget\.test\.cjs:(\d{1,5}):(\d{1,5})/);
-              if (local) {
-                sourceLine = local[1];
-                details.push('at ' + fixture + ':' + local[1] + ':' + local[2]);
-              }
-              const field = line.match(/^(\s*)(?:failureType|error|expected|actual|operator|code):\s*/);
-              const indent = line.match(/^\s*/)[0].length;
-              if (field) {
-                valueIndent = indent;
-                details.push(line);
-              } else if (!local && valueIndent !== undefined && indent > valueIndent && line.trim()) {
-                details.push(line);
-              } else if (line.trim() && valueIndent !== undefined && indent <= valueIndent) {
-                valueIndent = undefined;
-              }
-            }
-            const location = '::error file=' + fixture + (sourceLine ? ',line=' + sourceLine : '') + ',title=';
-            const message = details.map(line => redact(line.trim(), 260)).join('\n').slice(0, 1500);
-            console.log(location + escapeTitle(label + ' ' + run + ' ' + redact(title.trim(), 150))
-              + '::' + escapeData(message || 'No nested TAP details.'));
-          }
-          NODE
