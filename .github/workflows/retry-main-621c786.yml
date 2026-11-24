@@ -1,0 +1,62 @@
+name: Retry exact failed main checks
+on:
+  push:
+    branches:
+      - codex/retry-main-621c786-20261124
+    paths:
+      - .github/workflows/retry-main-621c786.yml
+
+permissions: {}
+
+jobs:
+  retry:
+    if: github.repository == 'Jeycob/StrataDashSeek' && github.ref == 'refs/heads/codex/retry-main-621c786-20261124'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_RETRY_TOKEN: ${{ github.token }}
+    steps:
+      - name: Retry the failed job of the exact main push once
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          const sha = '621c786c602ae8fc619cfa3114e42244604aea4f';
+          const runId = 45498377943;
+          const repo = 'Jeycob/StrataDashSeek';
+          const base = 'https://api.github.com/repos/' + repo;
+          const headers = {
+            Accept: 'application/vnd.github+json',
+            Authorization: 'Bearer ' + process.env.GH_RETRY_TOKEN,
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': 'HomeAI-exact-main-ci-retry',
+          };
+
+          async function request(path, method = 'GET') {
+            return fetch(base + path, {
+              method, headers, redirect: 'error', signal: AbortSignal.timeout(10000),
+            });
+          }
+
+          async function read(path) {
+            const response = await request(path);
+            if (!response.ok) throw Error('GitHub read returned ' + response.status);
+            return response.json();
+          }
+
+          const runPath = '/actions/runs/' + runId;
+          const [run, ref] = await Promise.all([read(runPath), read('/git/ref/heads/main')]);
+          const exact = run.id === runId && run.head_sha === sha &&
+            run.head_branch === 'main' && run.event === 'push' &&
+            run.path === '.github/workflows/release-checks.yml' &&
+            run.head_repository?.full_name === repo && ref.object?.sha === sha;
+          if (!exact) throw Error('Exact main run or its current ref changed');
+          if (run.run_attempt !== 1 || run.status !== 'completed' || run.conclusion !== 'failure') {
+            throw Error('Expected first completed failed attempt');
+          }
+          const retry = await request(runPath + '/rerun-failed-jobs', 'POST');
+          if (retry.status !== 201) throw Error('GitHub retry returned ' + retry.status);
+          console.log(JSON.stringify({ runId, sha, accepted: true }));
+          JS
