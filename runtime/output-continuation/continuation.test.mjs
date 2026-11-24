@@ -35,7 +35,7 @@ async function active(fibers) {
     await new Promise(resolve => setImmediate(resolve));
   }
 }
-async function fixture(t, script, { queued = false, gate, fileRoot } = {}) {
+async function fixture(t, script, { queued = false, gate, fileRoot, fileAction } = {}) {
   const ctx = new Context(), events = [], requests = [], operations = [];
   let fixed = false;
   t.after(async () => {
@@ -52,13 +52,15 @@ async function fixture(t, script, { queued = false, gate, fileRoot } = {}) {
     ctx.provide('workingDirectory', { ensure: async () => fileRoot });
     new LocalFileSystem(ctx, { cwd: fileRoot, diffBasisMaxBytes: 1024 * 1024 });
     await active([ctx.plugin(toolFs, { readImage: false })]);
+    if (fileAction) await active([ctx.plugin(await load('dsh-tool-present'), {})]);
   }
   ctx.tools.register({
     name: 'fixture_change', description: 'Inert local workspace fixture',
     parameters: { type: 'object', properties: { action: { type: 'string' } }, required: ['action'], additionalProperties: false },
     output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: value.status }] },
-    execute({ action }) {
+    async execute({ action }) {
       operations.push(action);
+      await fileAction?.(action);
       if (action === 'fix') fixed = true;
       return { status: action === 'test' && !fixed ? 'test is red' : action === 'test' ? 'test is green' : 'committed' };
     },
@@ -291,4 +293,60 @@ test('cut-off content-first write recovers to real working HTML without overwrit
     await page.getByRole('button', { name: 'Increment' }).click();
     assert.equal(await page.locator('output').innerText(), '2');
   } finally { await browser.close(); }
+});
+
+test('actual SDK present confirms an alternative write only when a new or changed file was delivered', { timeout: 45000 }, async t => {
+  const original = '<p>old</p>', updated = '<p>new</p>';
+  for (const [label, steps, expected] of [
+    ['new file after three writes', ['seed', 'append', 'close', 'present-new'], 'completed'],
+    ['changed file with the same size', ['change', 'present-old'], 'completed'],
+    ['ordinary successful tool', ['noop'], 'max-tokens'],
+    ['new file without presentation', ['seed'], 'max-tokens'],
+    ['empty presentation', ['seed', 'present-empty'], 'max-tokens'],
+    ['old file with only a metadata change', ['touch', 'present-old'], 'max-tokens'],
+    ['unchanged file presented before a later mutation', ['present-old', 'change'], 'max-tokens'],
+    ['presented artifact removed before the final answer', ['seed', 'present-new', 'remove'], 'max-tokens'],
+  ]) await t.test(label, async child => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'homeai-native-present-')));
+    child.after(() => fs.rm(root, { recursive: true, force: true }));
+    await fs.mkdir(path.join(root, 'out'));
+    const fresh = path.join(root, 'out', 'index.html'), existing = path.join(root, 'existing.html');
+    await fs.writeFile(existing, original);
+    const actions = {
+      seed: () => fs.writeFile(fresh, '<!doctype html><html><body>'),
+      append: () => fs.appendFile(fresh, updated),
+      close: () => fs.appendFile(fresh, '</body></html>'),
+      change: () => fs.writeFile(existing, updated),
+      touch: () => fs.utimes(existing, new Date(1000), new Date(1000)),
+      remove: () => fs.unlink(fresh),
+    };
+    const f = await fixture(child, function* (_request, step) {
+      if (step === 1) {
+        yield { type: 'tool-call-delta', index: 0, id: 'cut-write', name: 'write', argumentsDelta: '{"content":"' };
+        yield finish('max-tokens');
+        return;
+      }
+      const action = steps[step - 2];
+      if (!action) {
+        if (expected !== 'completed') yield text('I have finished.');
+        yield finish('stop');
+        return;
+      }
+      if (action.startsWith('present-')) {
+        const files = action === 'present-empty' ? [] : [{ path: action === 'present-new' ? 'out/index.html' : 'existing.html' }];
+        yield { type: 'block-end', index: 0, block: { type: 'tool-call', id: action, name: 'present', arguments: JSON.stringify({ files }) } };
+      } else yield call(action, action);
+      yield finish('tool-calls');
+    }, { fileRoot: root, fileAction: action => actions[action]?.() });
+    const agent = await f.create('delivery', providers[1]);
+    agent.followup(input);
+    await agent.whenIdle();
+    assert.deepEqual(terminal(f.events, agent.id), [expected]);
+    assert.equal(matching(f.events, agent.id, 'turn/start').length, 1);
+    const deliveries = matching(f.events, agent.id, 'deliverables/presented');
+    const presented = steps.find(step => step === 'present-new' || step === 'present-old');
+    assert.equal(deliveries.length, presented ? 1 : 0);
+    if (presented) assert.equal(deliveries[0].files[0].path, presented === 'present-new' ? fresh : existing);
+    if (expected === 'completed') assert.match(await fs.readFile(deliveries[0].files[0].path, 'utf8'), /<p>new<\/p>/u);
+  });
 });
