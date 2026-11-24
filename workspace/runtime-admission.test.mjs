@@ -50,3 +50,42 @@ if(process.env.HARNESS_RUNTIME_ADMISSION_ROOT_TEST==='1')test('Linux public trus
  const code="const{readAdmissionTrust}=await import(process.argv[1]);const result=await readAdmissionTrust({publicKeyFile:process.argv[2],statusFile:process.argv[3],signal:new AbortController().signal});if(result.key.asymmetricKeyType!=='ed25519')process.exitCode=2;";const child=spawnSync('setpriv',['--reuid=65534','--regid=65534','--clear-groups','--bounding-set=-all',process.execPath,'--input-type=module','-e',code,new URL('./runtime-admission.mjs',import.meta.url).href,publicKeyFile,statusFile],{encoding:'utf8',timeout:5000});assert.equal(child.status,0,child.stderr);
  await fs.chmod(publicKeyFile,0o666);await assert.rejects(readAdmissionTrust(options),{code:'RUNTIME_ADMISSION_TRUST_UNSAFE'});await fs.chmod(publicKeyFile,0o644);const link=path.join(directory,'link');await fs.link(publicKeyFile,link);await assert.rejects(readAdmissionTrust(options),{code:'RUNTIME_ADMISSION_TRUST_UNSAFE'});await fs.unlink(link);await fs.rename(publicKeyFile,link);await fs.symlink(link,publicKeyFile);await assert.rejects(readAdmissionTrust(options),{code:'RUNTIME_ADMISSION_TRUST_UNSAFE'});
 });
+
+if(process.env.HARNESS_RUNTIME_ADMISSION_ROOT_TEST==='1')test('Linux admission retries a verified status rotation before sending exactly one broker request',async t=>{
+ assert.equal(process.platform,'linux');assert.equal(process.getuid(),0);
+ const directory=await fs.mkdtemp(path.join(os.tmpdir(),'sdsh-admission-rotation-'));
+ t.after(async()=>{const real=await fs.realpath(directory);assert.equal(path.dirname(real),await fs.realpath(os.tmpdir()));assert(path.basename(real).startsWith('sdsh-admission-rotation-'));await fs.rm(real,{recursive:true,force:true});});
+ const publicKeyFile=path.join(directory,'admission-public.pem'),statusFile=path.join(directory,'runtime-admission.json'),staging=path.join(directory,'next');
+ const pem=pair.publicKey.export({type:'spki',format:'pem'});
+ const fresh=fixture().status;
+ const old={...fresh,observedAt:1};
+ const realOpen=fs.open.bind(fs);
+ await fs.writeFile(publicKeyFile,pem,{mode:0o644});
+ for(const scenario of ['before-open','after-open','unsafe-replacement','unstable','public-key']){
+  await t.test(scenario,async sub=>{
+   await fs.writeFile(statusFile,JSON.stringify(old),{mode:0o644});
+   const target=scenario==='public-key'?publicKeyFile:statusFile;
+   let opens=0;
+   sub.mock.method(fs,'open',async(file,...args)=>{
+    if(file!==target||(++opens!==1&&scenario!=='unstable'))return realOpen(file,...args);
+    const handle=scenario==='after-open'?await realOpen(file,...args):null;
+    await fs.writeFile(staging,scenario==='public-key'?pem:JSON.stringify(fresh),{mode:0o644});
+    if(scenario==='unsafe-replacement')await fs.chmod(staging,0o666);
+    await fs.rename(staging,target);
+    return handle??realOpen(file,...args);
+   });
+   const f=fixture();
+   const client=createRuntimeAdmission({production:true,expectedCommit:commit,publicKeyFile,statusFile},{now:f.dependencies.now,transport:f.dependencies.transport});
+   if(scenario==='before-open'||scenario==='after-open'){
+    assert.equal((await client.admit('tool_dispatch')).admitted,true);
+    assert.equal(opens,2);
+    assert.equal(f.calls(),1);
+   }else{
+    await assert.rejects(client.admit('tool_dispatch'),{code:'RUNTIME_ADMISSION_TRUST_UNSAFE'});
+    assert.equal(opens,scenario==='unstable'?3:1);
+    assert.equal(f.calls(),0);
+   }
+   if(scenario==='unsafe-replacement')await fs.chmod(statusFile,0o644);
+  });
+ }
+});

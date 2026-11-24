@@ -15,17 +15,37 @@ const fingerprint=key=>crypto.createHash('sha256').update(key.export({type:'spki
 // serialization or caller-selected fields may enter the signature envelope.
 export function admissionPayload(value){return Buffer.from(JSON.stringify({version:value.version,sourceCommit:value.sourceCommit,epoch:value.epoch,challenge:value.challenge,admitted:value.admitted,issuedAt:value.issuedAt,expiresAt:value.expiresAt,reasonCode:value.reasonCode}),'utf8');}
 
-async function protectedBytes(file,maxBytes,signal){
+async function protectedBytes(file,maxBytes,signal,{replaceable=false}={}){
  if(process.platform!=='linux'||!path.isAbsolute(file))throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');
- const absolute=path.resolve(file),parent=path.dirname(absolute);let cursor=path.parse(parent).root;
- for(const part of ['',...parent.slice(cursor.length).split(path.sep).filter(Boolean)]){signal.throwIfAborted();if(part)cursor=path.join(cursor,part);const stat=await fs.lstat(cursor);if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==0||stat.mode&0o022&&!(stat.mode&0o1000))throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');}
- const before=await fs.lstat(absolute),safe=stat=>stat.isFile()&&!stat.isSymbolicLink()&&stat.uid===0&&stat.nlink===1&&!(stat.mode&0o022)&&stat.size>0&&stat.size<=maxBytes;
- if(!safe(before))throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');
- const handle=await fs.open(absolute,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
- try{const stat=await handle.stat();if(!safe(stat)||stat.dev!==before.dev||stat.ino!==before.ino)throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');const buffer=Buffer.alloc(maxBytes+1);let used=0;while(used<buffer.length){signal.throwIfAborted();const read=await handle.read(buffer,used,buffer.length-used,used);if(!read.bytesRead)break;used+=read.bytesRead;}if(used>maxBytes)throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');return buffer.subarray(0,used);}finally{await handle.close();}
+ const absolute=path.resolve(file),parent=path.dirname(absolute);
+ const safeMetadata=stat=>stat.isFile()&&!stat.isSymbolicLink()&&stat.uid===0&&!(stat.mode&0o022)&&stat.size>0&&stat.size<=maxBytes;
+ const sameInode=(a,b)=>a.dev===b.dev&&a.ino===b.ino;
+ for(let attempt=0;attempt<3;attempt++){
+  let cursor=path.parse(parent).root;
+  for(const part of ['',...parent.slice(cursor.length).split(path.sep).filter(Boolean)]){signal.throwIfAborted();if(part)cursor=path.join(cursor,part);const stat=await fs.lstat(cursor);if(!stat.isDirectory()||stat.isSymbolicLink()||stat.uid!==0||stat.mode&0o022&&!(stat.mode&0o1000))throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');}
+  const before=await fs.lstat(absolute);
+  if(!safeMetadata(before)||before.nlink!==1)throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');
+  const handle=await fs.open(absolute,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+  try{
+   const stat=await handle.stat();
+   if(!safeMetadata(stat))throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');
+   if(stat.nlink===1&&sameInode(stat,before)){
+    const buffer=Buffer.alloc(maxBytes+1);let used=0;
+    while(used<buffer.length){signal.throwIfAborted();const read=await handle.read(buffer,used,buffer.length-used,used);if(!read.bytesRead)break;used+=read.bytesRead;}
+    if(used>maxBytes)throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');
+    return buffer.subarray(0,used);
+   }
+   // The root broker publishes status by rename. Discard a descriptor that raced
+   // with a verified replacement and check a fresh generation from the start.
+   if(!replaceable||attempt===2||stat.nlink>1)throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');
+   signal.throwIfAborted();
+   const current=await fs.lstat(absolute);
+   if(!safeMetadata(current)||current.nlink!==1||sameInode(current,before))throw fail('RUNTIME_ADMISSION_TRUST_UNSAFE');
+  }finally{await handle.close();}
+ }
 }
 export async function readAdmissionTrust({publicKeyFile,statusFile,signal}){
- const [pem,raw]=await Promise.all([protectedBytes(publicKeyFile,8192,signal),protectedBytes(statusFile,4096,signal)]);
+ const [pem,raw]=await Promise.all([protectedBytes(publicKeyFile,8192,signal),protectedBytes(statusFile,4096,signal,{replaceable:true})]);
  let key,status;try{key=crypto.createPublicKey(pem);status=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw));}catch{throw fail('RUNTIME_ADMISSION_TRUST_INVALID');}
  if(key.asymmetricKeyType!=='ed25519'||!status||status.publicKeyFingerprint!==fingerprint(key))throw fail('RUNTIME_ADMISSION_TRUST_INVALID');return{key,status};
 }
