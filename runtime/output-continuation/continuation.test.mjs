@@ -224,13 +224,18 @@ test('cut-off content-first write recovers to real working HTML without overwrit
   const anchor = '<!-- script anchor -->';
   const seed = '<!doctype html><html lang="en"><title>Counter</title><main><button>Increment</button><output>0</output></main>' + anchor + '</html>';
   const script = '<script>let count=0;document.querySelector("button").onclick=()=>{document.querySelector("output").textContent=++count;};</script>';
-  const fileCall = (id, name, args) => ({
-    type: 'block-end', index: 0, block: { type: 'tool-call', id, name, arguments: JSON.stringify(args) },
+  const fileCall = (id, name, args, index = 0) => ({
+    type: 'block-end', index, block: { type: 'tool-call', id, name, arguments: JSON.stringify(args) },
   });
   const patch = { file_path: 'index.html', old_string: anchor, new_string: anchor + script };
   let gates = 0;
   const f = await fixture(t, async function* (request, step) {
     if (step === 1) {
+      const write = request.tools.find(tool => tool.name === 'write');
+      assert.match(write.description, /Send file_path first.*small complete usable file.*extend it with edit/u);
+      assert.equal(write.parameters.properties.content.maxLength, undefined);
+      assert(!request.messages.some(message => message.role === 'system' && message.content.some(block =>
+        block.type === 'text' && block.text.includes('[File write recovery]'))));
       yield { type: 'tool-call-delta', index: 0, id: 'cut-content', name: 'write', argumentsDelta: '{"content":"<!doctype html>' + 'x'.repeat(16000) };
       yield { type: 'usage', usage: { inputTokens: 500, outputTokens: 8192, totalTokens: 8692 } };
       yield finish('max-tokens');
@@ -251,7 +256,11 @@ test('cut-off content-first write recovers to real working HTML without overwrit
     }
     if (step === 7) {
       assert((await fs.readFile(path.join(directory, 'index.html'), 'utf8')).includes(script));
+      await fs.symlink('index.html', path.join(directory, 'linked.html'));
       yield fileCall('duplicate-handler', 'edit', patch);
+      yield fileCall('absolute-handler', 'edit', { ...patch, file_path: path.join(directory, 'index.html') }, 1);
+      yield fileCall('guest-alias-handler', 'edit', { ...patch, file_path: '/workspace/index.html' }, 2);
+      yield fileCall('symlink-handler', 'edit', { ...patch, file_path: 'linked.html' }, 3);
     }
     if (step === 8) yield fileCall('set-title', 'edit', { file_path: 'index.html', old_string: '<title>Counter</title>', new_string: '<title>Working counter</title>' });
     if (step === 9) { yield text('Saved the working counter in index.html.'); yield finish('stop'); return; }
@@ -267,9 +276,9 @@ test('cut-off content-first write recovers to real working HTML without overwrit
   assert.equal(matching(f.events, agent.id, 'turn/start').length, 1);
   assert.deepEqual(matching(f.events, agent.id, 'user/message').filter(row => row.source.kind === 'user').map(row => row.id), ['original']);
   assert.equal(await fs.readFile(path.join(directory, 'kept.html'), 'utf8'), '<p>Keep this existing file</p>');
-  assert.deepEqual((await fs.readdir(directory)).sort(), ['index.html', 'kept.html']);
+  assert.deepEqual((await fs.readdir(directory)).sort(), ['index.html', 'kept.html', 'linked.html']);
   const toolResults = matching(f.events, agent.id, 'tool/result').map(row => row.message.isError);
-  assert.deepEqual(toolResults, [true, true, false, false, true, false]);
+  assert.deepEqual(toolResults, [true, true, false, false, true, true, true, true, false]);
   const html = path.join(directory, 'index.html');
   assert.equal((await fs.readFile(html, 'utf8')).split(script).length, 2, 'the edit was applied once');
   const { chromium } = createRequire(import.meta.url)(process.env.HARNESS_PLAYWRIGHT_MODULE || 'playwright');

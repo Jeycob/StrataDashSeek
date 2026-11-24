@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import runtime from '../require.cjs';
-import { createFileRecovery, cutFileTool, fileRecoverySection, fileRecoveryTools, guardFileRecovery,
-  isCreateOnlyRecoveryWrite, observeFileRecovery } from './file-recovery.mjs';
+import { bindFileRecoveryTarget, createFileRecovery, cutFileTool, fileRecoverySection, fileRecoveryTools,
+  firstStepFileTools, guardFileRecovery, isCreateOnlyRecoveryWrite, observeFileRecovery } from './file-recovery.mjs';
 
 export const name = 'homeai-output-continuation';
 export const inject = ['agents', 'sessions', 'tools'];
@@ -57,17 +57,20 @@ export function apply(ctx) {
       const phase = this.phase;
       if (phase?.kind !== 'running' || phase.turn === skipTurn) return original.call(this, decision);
       const { turn, abort: { signal } } = phase;
-      if (entry.state?.turn !== turn) {
+      const firstStep = entry.state?.turn !== turn;
+      if (firstStep) {
         entry.state = { turn, attempts: 0, stalled: 0, pending: false, inStep: false, calls: new Set(), toolHistoryFull: false };
       }
       const state = entry.state;
       // Keep the recovery section on the SDK's durable system-prompt surface,
       // even for complete preset prompts. The SDK logs and replays it normally.
       const recoverySections = state.file ? [fileRecoverySection(state.file)] : state.pending ? [resumeSection] : [];
-      const next = recoverySections.length ? {
+      const tools = state.file ? fileRecoveryTools(decision.assembly.tools, state.file) :
+        firstStep ? firstStepFileTools(decision.assembly.tools) : decision.assembly.tools;
+      const next = recoverySections.length || tools !== decision.assembly.tools ? {
         ...decision,
         assembly: { ...decision.assembly, sections: [...decision.assembly.sections, ...recoverySections],
-          tools: state.file ? fileRecoveryTools(decision.assembly.tools, state.file) : decision.assembly.tools },
+          tools },
       } : decision;
       state.recovering = state.pending;
       state.pending = false;
@@ -153,9 +156,15 @@ export function apply(ctx) {
     }
     if (state.file) return guardFileRecovery(state.file, exec);
   });
-  ctx.on('fs/write-intent', async (_target, exec, next) => {
+  ctx.on('fs/write-intent', async (target, exec, next) => {
     const intent = await next();
+    bindFileRecoveryTarget(exec, target.targetKey);
     return isCreateOnlyRecoveryWrite(exec) ? { kind: 'createIfAbsent' } : intent;
+  }, { prepend: true, global: true });
+  ctx.on('fs/edit-intent', async (target, exec, next) => {
+    const intent = await next();
+    bindFileRecoveryTarget(exec, target.targetKey);
+    return intent;
   }, { prepend: true, global: true });
   ctx.effect(() => () => { for (const entry of attached.values()) entry.detach(); });
 }
